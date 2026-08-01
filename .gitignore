@@ -9,6 +9,10 @@ __pycache__/
 *.egg-info/
 .venv/
 
+# 비밀/환경변수 (OPENAI_API_KEY 등) — 커밋 금지
+.env
+**/resource/.env
+
 # 대용량 — LFS나 DVC로 별도 관리
 *.pt
 *.pth
