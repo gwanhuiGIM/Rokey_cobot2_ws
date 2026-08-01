@@ -1,0 +1,22 @@
+{
+    // 절대경로였던 것을 ${workspaceFolder}로 — GPU PC는 홈 디렉토리 경로가 다르다
+    "cmake.sourceDirectory": "${workspaceFolder}/src/od_msg",
+
+    // isaac_ros-dev(136MB·수천 파일)와 colcon 산출물을 파일 감시·검색에서 제외한다.
+    // 제외하지 않으면 VS Code가 파일 워처 한도(inotify)를 넘겨 Source Control 패널이 느려지거나 멈춘다.
+    "files.watcherExclude": {
+        "**/isaac_ros-dev/**": true,
+        "**/build/**": true,
+        "**/install/**": true,
+        "**/log/**": true,
+        "**/__pycache__/**": true
+    },
+    "search.exclude": {
+        "**/isaac_ros-dev/**": true,
+        "**/build/**": true,
+        "**/install/**": true,
+        "**/log/**": true
+    },
+
+    "git.autofetch": true
+}

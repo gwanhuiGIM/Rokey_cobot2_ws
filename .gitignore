@@ -29,7 +29,11 @@ datasets/
 runs/
 
 # 에디터·OS
-.vscode/
+# 워크스페이스 루트의 .vscode/settings.json만 커밋한다 — GPU PC에서도 같은 제외 설정이 적용되게.
+# 하위 패키지(src/**)의 .vscode/는 개인 설정이므로 계속 무시한다.
+/.vscode/*
+!/.vscode/settings.json
+**/src/**/.vscode/
 .idea/
 .DS_Store
 Thumbs.db
@@ -48,3 +52,9 @@ cobot1_edu/
 **/.git/
 
 docs/
+
+# NVIDIA Isaac ROS 원본 저장소 — 커밋하지 않고 scripts/setup_isaac_ros.sh로 재현한다.
+# (136MB + 수천 파일이라 VS Code Source Control 패널이 마비되고,
+#  **/.git/ 규칙 때문에 pull한 쪽에서는 태그·히스토리를 알 수 없게 된다)
+isaac_ros-dev/
+isaas_ros-dev/
