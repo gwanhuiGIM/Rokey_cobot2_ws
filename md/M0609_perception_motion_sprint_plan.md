@@ -40,6 +40,8 @@
 
 > ⚠️ **버전 고정 필수:** 최신 `release-4.4`는 Docker dev container 기능이 Isaac ROS CLI로 이전되었고 사실상 Jazzy 중심으로 재편되어 `run_dev.sh`가 없다. Humble 환경을 유지하려면 `run_dev.sh`가 살아있는 **`release-3.2`** 태그로 관련 저장소를 모두 통일해서 클론한다.
 
+> 아래 블록은 `scripts/setup_isaac_ros.sh`로 스크립트화되어 있다. 실제 실행은 스크립트를 쓰고, 이 블록은 설명용으로만 본다 (둘이 어긋나면 스크립트가 기준).
+
 ```bash
 mkdir -p ~/workspaces/isaac_ros-dev/src
 cd ~/workspaces/isaac_ros-dev/src
@@ -48,7 +50,7 @@ export ISAAC_ROS_WS=~/workspaces/isaac_ros-dev
 # 버전 고정: isaac_ros_common, isaac_ros_nvblox 모두 release-3.2로 통일
 git clone -b release-3.2 https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common.git isaac_ros_common
 git clone -b release-3.2 --recursive https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git isaac_ros_nvblox
-git clone https://github.com/IntelRealSense/realsense-ros.git -b ros2-master
+# realsense-ros는 클론하지 않는다 — apt ros-humble-realsense2-camera 4.58.2 설치 확인됨 (2026-08-01)
 
 # RealSense 지원 이미지 키 설정
 cd ${ISAAC_ROS_WS}/src/isaac_ros_common/scripts
@@ -134,20 +136,23 @@ ros2 run tf2_ros tf2_echo flange camera_link_webcam   # 고정 오프셋 확인
 ```bash
 sudo apt install ros-humble-depth-image-proc ros-humble-octomap-server ros-humble-moveit-msgs
 
-# D435i 정렬된 depth 이미지 → 3D 포인트클라우드 변환
+# D435i depth 이미지 → 3D 포인트클라우드 변환
+# 네임스페이스는 /camera/camera/... (2026-08-01 ros2 topic list 실측. 이전 초안의 /d435i/...는 오기)
 ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
-  -r image_rect:=/d435i/depth/image_rect_raw \
-  -r camera_info:=/d435i/depth/camera_info \
-  -r points:=/d435i/depth/points_xyz
+  -r image_rect:=/camera/camera/depth/image_rect_raw \
+  -r camera_info:=/camera/camera/depth/camera_info \
+  -r points:=/camera/camera/depth/points_xyz
 
 # 포인트클라우드를 octomap_server에 연결해 3D occupancy map 생성
 ros2 run octomap_server octomap_server_node --ros-args \
-  -r cloud_in:=/d435i/depth/points_xyz \
+  -r cloud_in:=/camera/camera/depth/points_xyz \
   -p frame_id:=base_0 \
   -p resolution:=0.02
 
 # MoveIt2 move_group 설정(sensors_3d.yaml)에 PointCloudOctomapUpdater 플러그인 등록
-#   point_cloud_topic: /d435i/depth/points_xyz  (octomap_server 없이 MoveIt이 직접 구독하는 방식도 가능)
+#   point_cloud_topic: /camera/camera/depth/points_xyz  (octomap_server 없이 MoveIt이 직접 구독하는 방식도 가능)
+# 참고: RealSense 노드의 pointcloud.enable:=true로도 /depth/color/points가 나오지만,
+#       그건 컬러 정렬본이라 대역폭이 크다. 충돌 회피만 필요하면 위 depth_image_proc 경로가 가볍다.
 ros2 launch <m0609_moveit_config> move_group.launch.py
 
 rviz2   # MoveIt 플러그인에서 Octomap 충돌 지오메트리 확인

@@ -68,7 +68,7 @@
 
 ### 개인PC에서 실기 없이 Day2~4를 진행하는 순서
 1. `install_emulator.sh` 실행 → virtual 모드 확보
-2. 실기 접근 가능한 날에 **D435i depth를 rosbag으로 한 번 녹화** (`/d435i/depth/image_rect_raw`, `/camera_info`, `/tf_static`)
+2. 실기 접근 가능한 날에 **D435i depth를 rosbag으로 한 번 녹화** — 정확한 토픽 목록·런치 인자·순서는 `md/state.md`의 "출근 후 D435i 세션" 절에 있다 (네임스페이스는 `/camera/camera/...`)
 3. 이후 개인PC에서 rosbag 재생 + virtual 로봇으로 Octomap·플래너·상태머신을 전부 개발
 
 > **이 rosbag 한 개가 이 계획의 핵심 자산이다.** 이게 있으면 개인PC 혼자서 Day2 P0의 대부분과 Day3 P1 전체를 실기 없이 끝낼 수 있다. 없으면 모든 게 실기 대기 상태가 된다.

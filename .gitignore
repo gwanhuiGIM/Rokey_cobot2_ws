@@ -51,6 +51,7 @@ cobot1_edu/
 # 중첩 git repo 실수 방지 (vendoring 시 서브모듈로 오인되는 것 차단)
 **/.git/
 
+# PDF 서고(강의자료·교재). 작업 문서는 md/에 있고 정상 커밋된다.
 docs/
 
 # NVIDIA Isaac ROS 원본 저장소 — 커밋하지 않고 scripts/setup_isaac_ros.sh로 재현한다.
