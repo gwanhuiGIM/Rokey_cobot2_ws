@@ -26,3 +26,13 @@ runs/
 .vscode/
 .idea/
 .DS_Store
+
+#Private
+*.pdf
+*.ppt
+*.pptx
+
+*.obsidian
+*.claude
+
+*CLAUDE.md
