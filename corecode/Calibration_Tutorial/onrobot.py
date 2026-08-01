@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+[라이브러리] OnRobot RG2/RG6 그리퍼 Modbus TCP 드라이버 — 직접 실행하지 않는다
+
+사용: gripper = RG("rg2", "192.168.1.1", "502"); gripper.close_gripper()
+대화형 테스트는 modbus.ipynb 참고.
+
+단위 (RG 매뉴얼 규약):
+  폭   1/10 mm   → rg2 0~1100 (=110mm), rg6 0~1600
+  힘   1/10 N    → rg2 0~400  (=40N),   rg6 0~1200
+레지스터: 0=target force, 1=target width, 2=control. unit=65는 슬레이브 주소(툴 체인저).
+
+주의:
+- pymodbus 2.x 전용이다(`pymodbus.client.sync`). 3.x에서는 경로가 바뀌어 ImportError가 난다.
+- close/open/move는 명령을 던지고 바로 리턴한다. 완료를 기다리지 않으므로
+  집은 뒤 바로 이동하면 놓친다. get_status()[0](busy)로 폴링하거나 wait()를 넣는다.
+- IP는 툴 체인저 것이며 로봇 컨트롤러 IP와 다르다.
+"""
 
 from pymodbus.client.sync import ModbusTcpClient as ModbusClient
 

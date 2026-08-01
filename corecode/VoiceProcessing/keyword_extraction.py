@@ -1,3 +1,22 @@
+"""
+[음성 파이프라인 3단계] 문장 → (도구, 목적지) 추출 (gpt-4o + LangChain)
+
+실행: python3 keyword_extraction.py   → 파일 하단 예시 문장으로 동작 확인
+사용: ExtractKeyword().extract_keyword("hammer를 pos1으로 가져와") → (["hammer"], ["pos1"])
+
+필요: 같은 디렉토리에 .env, 안에 OPENAI_API_KEY=sk-...
+
+인식 어휘(프롬프트에 하드코딩): hammer, screwdriver, wrench, pos1, pos2, pos3
+  → 새 물체를 추가하려면 prompt_content의 <도구 리스트>와 YOLO 클래스 이름을 함께 고쳐야 한다.
+출력 규약: LLM이 "도구1 도구2 / pos1 pos2" 형식으로 답하고, 이 코드가 '/'로 잘라 파싱한다.
+
+주의:
+- LLM이 형식을 어기면(‘/’가 0개 또는 2개 이상) 경고만 내고 None을 반환한다.
+  호출부에서 None 처리를 반드시 해야 로봇이 빈 값으로 움직이지 않는다.
+- temperature=0.5다. 같은 문장에 다른 답이 나올 수 있으니 재현성이 필요하면 0으로 내린다.
+- 여기 나온 pos1~pos3는 이름일 뿐이고, 실제 좌표는 로봇 제어 쪽에서 매핑해야 한다.
+"""
+
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI

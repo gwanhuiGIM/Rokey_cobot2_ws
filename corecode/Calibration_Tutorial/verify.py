@@ -1,3 +1,24 @@
+"""
+[핸드아이 캘리브레이션 3단계] 결과 검증 — 클릭한 물체를 실제로 집는다
+
+⚠️ 실기가 움직인다. movel + 그리퍼 개폐가 실행되므로 주변을 비우고 E-stop을 잡은 채로 실행할 것.
+
+실행: python3 verify.py
+사전 조건:
+  1) ros2 launch dsr_bringup2 ... (m0609, 네임스페이스 dsr01)
+  2) ros2 launch realsense2_camera rs_align_depth_launch.py align_depth.enable:=true
+  3) 같은 디렉토리에 T_gripper2camera.npy 존재
+  4) 그리퍼 Modbus 도달 가능 (192.168.1.1:502)
+
+조작: "Webcam" 창에서 물체를 좌클릭 → 픽셀 depth → 카메라 좌표 → 베이스 좌표 → 집어서 JReady로 이동 후 놓음. ESC로 종료.
+좌표 변환: base2cam = base2gripper(현재 posx) @ gripper2cam(npy)
+
+주의:
+- 픽셀 하나의 depth를 그대로 쓴다. 물체 가장자리나 반사면을 클릭하면 z가 0이나 튄 값이 되어 엉뚱한 곳으로 간다.
+- posj가 __init__에서 쓰이는데 import는 __main__ 블록에 있다. 이 파일을 모듈로 import하면 NameError가 난다.
+- 오차가 크면 코드보다 먼저 의심할 것: TCP 설정, 체커보드 실측 칸 크기, depth 정렬 여부.
+"""
+
 import cv2
 import rclpy
 from rclpy.node import Node

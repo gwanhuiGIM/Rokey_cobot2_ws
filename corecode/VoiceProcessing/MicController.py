@@ -1,3 +1,20 @@
+"""
+[라이브러리] 마이크 입력 래퍼 — 직접 실행하지 않는다
+
+사용: mic = MicController(); mic.open_stream(); ... ; mic.close_stream()
+      wakeup_word.py가 mic.stream을 그대로 넘겨받아 쓴다.
+
+MicConfig 기본값: 48kHz / mono / int16 / chunk 12000(=0.25초) / buffer_size 24000(=0.5초)
+openWakeWord는 16kHz를 요구하므로 wakeup_word.py 쪽에서 resample한다.
+
+주의:
+- device_index=10이 선언돼 있지만 audio.open()에 넘기지 않는다. 실제로는 시스템 기본 입력 장치가 열린다.
+  특정 마이크를 쓰려면 open()에 input_device_index=self.config.device_index를 추가해야 한다.
+  장치 번호는 mic_test.py나 `python3 -c "import pyaudio;..."`로 먼저 확인한다.
+- record_audio()는 self를 쓰지 않고 내부에서 MicController를 새로 만든다.
+  이미 open_stream()한 인스턴스에서 호출하면 장치를 두 번 여는 셈이니 주의.
+"""
+
 import pyaudio
 import wave
 import io

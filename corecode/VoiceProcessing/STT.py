@@ -1,3 +1,23 @@
+"""
+[음성 파이프라인 2단계] 음성 → 텍스트 (OpenAI Whisper API)
+
+실행: python3 STT.py   → 5초 녹음 후 인식 결과 출력
+사용: STT(api_key).speech2text() → str
+
+필요: 같은 디렉토리에 .env, 안에 OPENAI_API_KEY=sk-...
+      .env는 절대 커밋하지 않는다(.gitignore 확인).
+
+녹음: sounddevice로 16kHz mono int16, 5초 고정(self.duration).
+      임시 wav로 떨어뜨린 뒤 whisper-1에 업로드한다.
+
+주의:
+- 네트워크 API다. 오프라인/키 없음/과금 한도 초과면 여기서 멈춘다.
+- MicController를 쓰지 않고 sounddevice로 따로 녹음한다. 즉 wakeup_word가 쓰던 스트림과 별개다.
+  wakeup 직후 바로 부르면 장치 점유가 겹칠 수 있으니 close_stream() 후 호출한다.
+- 5초 고정이라 말이 길면 잘린다. duration을 늘리거나 무음 감지를 붙여야 한다.
+- 임시 wav는 delete=False라 /tmp에 남는다.
+"""
+
 from openai import OpenAI
 import sounddevice as sd
 import scipy.io.wavfile as wav

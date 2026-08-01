@@ -1,3 +1,18 @@
+"""
+[핸드아이 캘리브레이션 1단계] 체커보드 이미지 + 로봇 자세 동시 수집
+
+실행: python3 data_recording.py   (dsr_bringup2 실행 중이어야 함, 실기/가상 무관하게 posx 필요)
+입력: DEVICE_NUMBER(=6) V4L2 카메라. RealSense ROS 토픽이 아니라 /dev/videoN을 직접 연다.
+출력: ./data/<x>_<y>_<z>.jpg 와 ./data/calibrate_data.json (poses[] + file_name[])
+조작: 카메라 창에서 'q' → 현재 프레임 저장 + 현재 posx 기록. 자세를 바꿔가며 15~20회 반복.
+
+주의:
+- 'q'는 저장이지 종료가 아니다. 루프 탈출 코드가 없으므로 Ctrl+C로 끝낸다.
+- set_tool/set_tcp 이름("Tool Weight_2FG", "2FG_TCP")이 티치펜던트에 등록돼 있어야 한다.
+  RG2를 쓰면 이 두 줄을 실제 등록명으로 바꿔야 원점이 맞는다.
+- 자세는 회전을 충분히 섞어야 한다. 평행이동만 하면 캘리브레이션이 수렴하지 않는다.
+"""
+
 import os
 import cv2
 import json

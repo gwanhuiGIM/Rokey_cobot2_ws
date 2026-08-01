@@ -1,3 +1,20 @@
+"""
+[핸드아이 캘리브레이션 2단계 - eye-in-hand] 카메라가 그리퍼에 달린 경우
+
+실행: python3 handeye_calibration.py   (ROS 불필요, 오프라인 계산)
+입력: data/calibrate_data.json + data/*.jpg  (data_recording.py 산출물)
+출력: T_gripper2camera.npy — 그리퍼→카메라 4x4 변환. verify.py와 pick_and_place가 이걸 읽는다.
+방법: cv2.calibrateCamera로 내부파라미터 추정 → cv2.calibrateHandEye(PARK)
+
+설정값: checkerboard_size=(8,6) 내부 코너 개수, square_size=25mm. 보드가 다르면 여기를 고친다.
+
+주의:
+- find_checkerboard_pose 안의 objp가 square_size 대신 25로 하드코딩돼 있다(31행).
+  square_size만 바꾸면 반영되지 않으니 두 곳을 같이 고쳐야 한다.
+- 회전 규약은 ZYZ 오일러(두산 posx 규약)다. 다른 로봇에 쓰려면 여기부터 바꾼다.
+- 단위는 전부 mm. 결과 변환행렬의 평행이동도 mm다.
+"""
+
 import cv2
 import numpy as np
 import json

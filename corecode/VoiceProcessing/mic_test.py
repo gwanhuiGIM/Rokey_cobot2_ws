@@ -1,3 +1,16 @@
+"""
+[진단 도구] 마이크 실시간 파형 확인
+
+실행: python3 mic_test.py   → 파형 창이 뜬다. 창을 닫으면 종료.
+용도: 음성 파이프라인이 안 될 때 "마이크가 실제로 소리를 받고 있는가"를 먼저 확인한다.
+      말했는데 직선이면 코드 문제가 아니라 장치/권한/볼륨 문제다.
+
+설정은 MicController.MicConfig와 맞춰 둔 값이다(48kHz, mono, chunk 12000).
+
+주의: 기본 입력 장치를 연다. 장치를 지정하려면 p.open()에 input_device_index를 넘긴다.
+      번호 목록은 p.get_device_info_by_index(i)로 확인한다.
+"""
+
 import pyaudio
 import numpy as np
 import matplotlib.pyplot as plt

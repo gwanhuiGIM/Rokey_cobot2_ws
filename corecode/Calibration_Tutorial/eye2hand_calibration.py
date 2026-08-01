@@ -1,3 +1,21 @@
+"""
+[핸드아이 캘리브레이션 2단계 - eye-to-hand] 카메라가 삼각대 등에 고정된 경우
+
+실행: python3 eye2hand_calibration.py   (ROS 불필요, 오프라인 계산)
+입력: data/calibrate_data.json + data/*.jpg  (data_recording.py 산출물, 체커보드는 그리퍼에 부착)
+출력: T_cam2base.npy — 카메라→베이스 4x4 변환
+방법: AX=XB를 Park-Martin 방식으로 직접 구현(Calibrate 함수). cv2.calibrateHandEye를 쓰지 않는다.
+
+handeye_calibration.py와의 차이: 카메라 장착 위치가 반대다. 둘 중 하나만 쓴다.
+카메라가 그리퍼에 달렸으면 handeye_calibration.py, 고정돼 있으면 이 파일.
+
+주의:
+- find_checkerboard_pose의 25mm 하드코딩 문제는 handeye_calibration.py와 동일하다.
+- logR()은 theta가 0에 가까우면(회전이 거의 없는 자세쌍) 0으로 나눠 NaN이 된다.
+  수집할 때 자세마다 회전을 충분히 줘야 한다.
+- 특이행렬 자세는 det 검사로 자동 제외되며 콘솔에 경고가 찍힌다.
+"""
+
 import json
 from scipy.spatial.transform import Rotation
 import numpy as np
