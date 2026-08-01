@@ -8,6 +8,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+venv/
+env/
 
 # 비밀/환경변수 (OPENAI_API_KEY 등) — 커밋 금지
 .env
@@ -30,5 +32,19 @@ runs/
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
+
+# 테스트/도구 캐시
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.colcon/
+
+*.log
+cobot2_edu/
+cobot1_edu/
+
+# 중첩 git repo 실수 방지 (vendoring 시 서브모듈로 오인되는 것 차단)
+**/.git/
 
 docs/
