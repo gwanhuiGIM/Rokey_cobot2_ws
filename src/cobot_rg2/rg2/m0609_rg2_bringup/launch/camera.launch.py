@@ -34,9 +34,23 @@ def generate_launch_description():
     sys.path.insert(0, os.path.join(pkg_share, 'scripts'))
     from calib_npy_to_tf import npy_to_tf_args  # noqa: E402
 
+    # 해상도 기본값을 낮게 잡는다. 드라이버 기본(848x480x30)은 이 랩탑에서 안 돌아간다:
+    # i7-10510U 15W / GPU 없음 / ros2_control_node가 상시 204% 인데
+    # 848*480*30 = 12.2 M point/s 다. 424x240x15면 1/8 (약 1.5 M point/s).
+    # 실측 근거는 md/context/constraints.md "octomap_server — 이 랩탑 리소스로는 ...".
+    #
+    # color도 같이 낮춘다: align_depth.enable=true면 depth를 **color 해상도로 리샘플**하므로
+    # color만 크면 낮춘 의미가 없다.
+    #
+    # [튜닝] GPU PC나 여유 있는 머신에서는 인자로 올린다:
+    #   ros2 launch ... camera.launch.py depth_profile:=848x480x30 color_profile:=848x480x30
     args = [
         DeclareLaunchArgument('driver', default_value='true',
                               description='RealSense 드라이버 spawn 여부 (false면 TF만)'),
+        DeclareLaunchArgument('depth_profile', default_value='424x240x15',
+                              description='depth 스트림 WxHxFPS. 올리면 move_group CPU가 같이 오른다'),
+        DeclareLaunchArgument('color_profile', default_value='424x240x15',
+                              description='color 스트림 WxHxFPS. align_depth가 이 해상도를 따라간다'),
     ]
 
     realsense_node = Node(
@@ -48,6 +62,8 @@ def generate_launch_description():
             'align_depth.enable': True,
             'pointcloud.enable': True,
             'enable_sync': True,
+            'depth_module.depth_profile': LaunchConfiguration('depth_profile'),
+            'rgb_camera.color_profile': LaunchConfiguration('color_profile'),
         }],
         condition=IfCondition(LaunchConfiguration('driver')),
         output='screen',

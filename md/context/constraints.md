@@ -247,15 +247,33 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 
 ### 어느 moveit config를 쓰나 — **`m0609_rg2_moveit`**
 `dsr_moveit_config_m0609`는 URDF에 RG2가 없어 **self-filter가 그리퍼를 못 거른다.**
-`m0609_rg2_moveit`의 SRDF는 `virtual_joint(parent_frame="world", child_link="base_link")` →
-**플래닝 프레임은 `world`**(SRDF virtual_joint 기준). `octomap_frame`도 **`world`로 맞춘다.**
+`m0609_rg2_moveit`의 SRDF에 `virtual_joint(parent_frame="world", child_link="base_link")`가 있지만
+**플래닝 프레임은 `world`가 아니라 `base_link`다.** `octomap_frame`도 **`base_link`**.
+(상단 "플래닝 프레임" 절과 같은 결론이다 — 근거·실측은 거기 있다.)
 
-> 📌 **한때 `base_link`로 들어가 있었다(2026-08-02, 되돌림).** 사용자가 지시한 선택이 아니라
-> 내가 근거 없이 넣은 값이었고, 나중에 "`world`는 발행이 빠질 수 있다"는 **사실이 아닌 이유로 정당화**했다.
-> 실제로는 `bringup.launch.py:195`, `bringup_camera.launch.py:195`, `moveit.launch.py:137` 세 곳 모두
-> `world→base_link` static TF를 발행한다 — 없어서 못 찾는 구성은 존재하지 않는다.
-> `world→base_link`가 identity라 어느 쪽이든 값은 같지만, 플래닝 프레임과 이름을 맞추는 쪽이
-> 베이스가 움직이는 구성으로 확장할 때 조용히 어긋나지 않는다.
+> 📌 **판단 번복 이력 (2026-08-02) — 결론은 `base_link`다.**
+> 순서: ① 내가 근거 없이 `base_link`를 넣음 → ② 다음 세션에 "`world`는 발행이 빠질 수 있다"는
+> **사실이 아닌 이유로 `world`로 바꾸고 정당화** → ③ 실측으로 `base_link`가 맞다고 확인하고 되돌림.
+> ①은 근거가 없었을 뿐 값 자체는 맞았고, ②가 틀렸다.
+>
+> ②의 오류: SRDF의 virtual_joint가 `world`를 가리키니 플래닝 프레임도 `world`일 것이라 **추론**했다.
+> 아니다 — MoveIt은 **fixed** 타입 virtual joint로는 모델 프레임을 만들지 않아 플래닝 프레임이
+> 루트 링크(`base_link`)로 남는다. `world`는 TF에는 있지만 **planning scene은 모른다.**
+> 실측: `frame_id='world'`로 CollisionObject 발행 → `[ERROR] Unknown frame: world`, 장애물 **조용히 무시**.
+> `frame_id='base_link'` → `/monitored_planning_scene`에 정상 등록.
+>
+> **교훈: TF에 프레임이 있는 것과 planning scene이 그 프레임을 아는 것은 별개다.**
+> 그리고 "정당화 문장을 쓰기 전에 명령을 한 번 돌려라" — 이때 필요했던 건 발행 한 번이었다.
+
+### 캘리브 npy의 정본은 `corecode/` 쪽이다 (2026-08-02 사용자 결정)
+`T_cam2base.npy`가 `corecode/Calibration_Tutorial/`와 `m0609_rg2_bringup/config/` 두 곳에 있다.
+후자는 내가 `camera.launch.py`를 만들면서 수동 `cp`로 만든 사본이고, **정본이 아니다.**
+
+- **정본**: `corecode/Calibration_Tutorial/T_cam2base.npy` — 재캘리브 시 결과가 나오는 위치가 여기로 고정돼 있다.
+- 로봇 bringup 패키지에는 결국 캘리브 결과가 들어가지 않을 예정 → `m0609_rg2_bringup/config/` 사본은 **삭제 대상**.
+- 지우기 전에 `camera.launch.py`가 corecode 경로를 직접 읽도록 먼저 바꿔야 한다.
+  순서를 반대로 하면 `base_link→camera_link` static TF가 통째로 사라진다(npy 없으면 TF 노드가 빠지는 설계).
+- ⚠️ 그 전까지는 **재캘리브 후 `cp`를 잊으면 낡은 값으로 발행된다.** 340 mm 어긋난 전례가 이 구조다.
 
 ### 설정 — **실제 값은 파일이 단일 출처다**
 `src/cobot_rg2/rg2/m0609_rg2_moveit/config/sensors_3d.yaml` (2026-08-02 작성).
@@ -271,7 +289,7 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 | `padding_scale` | 1.2 | 1.0 |
 | `max_update_rate` | 2.0 | 1.0 |
 | `filtered_cloud_topic` | `/filtered_cloud` | `/moveit/filtered_cloud` |
-| `octomap_frame` | `world` | `world` (한때 `base_link`였다가 되돌림 — 위 📌 참고) |
+| `octomap_frame` | `world` | **`base_link`** (`world`는 planning scene이 모른다 — 위 📌 참고) |
 | `octomap_resolution` | 0.03 | **0.02** |
 
 `octomap_frame`/`octomap_resolution`은 yaml이 아니라 `moveit.launch.py`의 `octomap_params`에서 주입한다.

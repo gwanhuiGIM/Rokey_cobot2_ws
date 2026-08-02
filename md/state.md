@@ -46,9 +46,12 @@ code .                                          # 이후 VS Code Source Control�
 
 ## 다음 할 일 (순서 고정 — 위가 막히면 아래로 내려가지 않는다)
 > 이 절이 "다음에 뭐 하지"의 단일 출처다. 끝난 항목은 지우고 Day 진행 절로 옮긴다.
+> 08-03 상세 계획: [[ws/cobot2/plans/2026-08-03-octomap-integration]]
 
 1. **`sudo apt install ros-humble-moveit-ros-perception`** — ⛔ **현재 미설치**(확인함). `PointCloudOctomapUpdater`
    플러그인이 이 패키지에 있다. 없으면 `sensors_3d.yaml`을 채워도 플러그인 로드 실패로 **조용히** octomap이 안 생긴다.
+1.5. **depth 프로파일을 `424x240x15`로 낮추고 켠다** — i7-10510U 15W·GPU 없음·`ros2_control_node` 204%에
+   848x480x30(12.2 M point/s)은 안 돌아간다(어제 `octomap_server`에서 확인). `camera.launch.py`에 인자 추가.
 2. **`/moveit/filtered_cloud`로 self-filter 검증** ← **진짜 관문.** 로봇 팔이 지워졌는지 RViz로 눈으로 본다.
    남아 있으면 로봇이 자기 몸을 장애물로 보고 한 발짝도 못 움직인다. `padding_offset`을 키운다.
    (1번 설치 전에는 플러그인이 없어 이 토픽 자체가 안 나온다.)
@@ -80,10 +83,25 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
 - ✅ **`octomap_server`는 이 파이프라인에서 불필요하다고 결론.** MoveIt은 `/octomap_binary`를 구독하지 않고
   `move_group` 내부에서 octree를 직접 만든다. 둘 다 돌리면 CPU 이중 소모 — 정식 경로는 `sensors_3d.yaml`이다.
 - ✅ **`m0609_rg2_moveit/config/sensors_3d.yaml` 작성 완료** + `moveit.launch.py`에서 주입(`octomap:=true` 기본).
-  실제 채택값: `octomap_frame: world`, **`octomap_resolution: 0.02`**(계획은 `0.03`),
+  실제 채택값: **`octomap_frame: base_link`**, **`octomap_resolution: 0.02`**(계획은 `0.03`),
   토픽 `/camera/camera/depth/color/points`(계획은 `/depth/points_xyz`), 센서명 `realsense_pointcloud`.
   `ros2 param get /move_group`으로 주입까지 확인. ⛔ **다만 `moveit-ros-perception` 미설치라 플러그인 로드는 실패 중**(위 1번).
-  ※ `octomap_frame`이 한때 `base_link`로 들어가 있었다(내가 근거 없이 넣음) → `world`로 되돌림. 경위는 [[ws/cobot2/context/constraints]].
+  ※ 한때 `world`로 적혀 있었으나 **틀렸다**(2026-08-02 실측): SRDF에 `virtual_joint(fixed, parent_frame="world")`가
+  있어도 MoveIt은 fixed 타입으로는 모델 프레임을 만들지 않아 플래닝 프레임이 루트 링크(`base_link`)로 남는다.
+  `frame_id='world'`로 CollisionObject를 발행하면 `Unknown frame: world` 에러와 함께 **조용히 무시**된다.
+  RViz Scene Objects도 같은 규칙. 경위는 [[ws/cobot2/context/constraints]].
+- ✅ **캘리브 결과를 launch가 npy에서 직접 계산** — `m0609_rg2_bringup/config/T_cam2base.npy` →
+  `camera.launch.py`가 매 실행 `calib_npy_to_tf.py`로 static TF 생성. **하드코딩된 `static_transform_publisher`
+  명령을 다시 만들지 말 것** (낡은 값으로 340 mm 어긋난 이력 있음).
+- ✅ **런치 3분할 확정**: `bringup`(로봇 전용) / `camera`(RealSense + 캘리브 TF) / `moveit`(move_group + JTC spawner + RViz).
+  `bringup_camera.launch.py`는 **eye-in-hand 전용**(URDF가 camera_link를 tool0에 붙임) — 현재 리그와 섞으면 TF가 깨진다.
+- ✅ **MoveIt 실기 Plan·Execute 성공** — Execute ABORTED의 원인은 두 개였다: bringup이 `dsr_moveit_controller`를
+  안 띄움 + 네임스페이스 불일치. `moveit.launch.py`에 spawner 추가 + `moveit_controllers.yaml`의 컨트롤러 이름을
+  절대경로 `/dsr01/dsr_moveit_controller`로. **`dsr_controller2`와 동시 active 가능**(인터페이스를 claim하지 않는 서비스 래퍼).
+- ✅ **팀원용 통합 `README.md` 작성**(ws 루트) — 3터미널 실행 절차·인자표·기능확인 체크1~3·알려진 함정.
+- ⚠️ **로봇 명령 경로가 두 개 살아 있다**: `dsr_controller2`(서비스 movej/movel → DRFL) 와
+  `dsr_moveit_controller`(JTC → `Drfl.servoj_rt`/`Drfl.amovej`, `dsr_hw_interface2.cpp:494-503`).
+  **동시에 명령하지 말 것.**
 - ⚠️ `realsense-viewer`가 USB를 독점해 ROS 카메라 노드를 죽인다 — 증상이 "TF 프레임 없음"으로 나와 오진 유발. 뷰어 먼저 닫을 것.
 
 ## 출근 후 D435i 세션 (순서 고정)

@@ -189,7 +189,7 @@ String values are: ['realsense_pointcloud']
 $ ros2 param get /move_group realsense_pointcloud.sensor_plugin
 String value is: occupancy_map_monitor/PointCloudOctomapUpdater
 $ ros2 param get /move_group octomap_frame
-String value is: base_link      # ⚠️ 이 출력은 실측 당시 값. 이후 'world'로 변경했다(미재확인)
+String value is: base_link      # 'world' 아님 — planning scene은 world를 모른다 (8절 참고)
 ```
 설치 전 로그는 `Failed to load sensor: realsense_pointcloud` — 설정은 읽혔고 클래스만 없다는 뜻이다.
 설치 후에는 이 줄이 사라져야 한다.
