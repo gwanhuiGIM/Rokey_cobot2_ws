@@ -36,7 +36,9 @@ code .                                          # 이후 VS Code Source Control�
 - **GPU PC에서 `nvidia-smi`, `docker info | grep -i runtime` 미확인** — 실패하면 스프린트 계획 전체 재작성 필요.
 - 하드웨어(M0609 + RG2 + D435i + C270)는 `.bashrc` alias 추론이며 실기로 재확인되지 않음.
 - **D435i depth rosbag 미확보** — 이게 있어야 개인PC에서 실기 없이 Octomap·플래너·상태머신 개발 가능. 절차는 아래 "출근 후 D435i 세션" 참조.
-- **카메라 마운트 강성 미확보** — 견고한 고정이 아직 어려움. 캘리브는 **잠정(provisional)**으로 취급하고, Day4 ray-plane 실측 정확도 검증은 마운트 확정 후로 미룬다. 개발용 TF로는 잠정값으로 충분하다.
+- **카메라 마운트 강성 미확보** — 견고한 고정이 아직 어려움. 캘리브는 **잠정(provisional)**으로 취급하고, Day4 인식 정확도 실측 검증은 마운트 확정 후로 미룬다. 개발용 TF로는 잠정값으로 충분하다.
+- **Day4 인식 방식 변경(2026-08-02)**: ray-plane intersection → **FoundationPose**(6D pose), 하드코딩 그립 → **GraspGenX**. 평면 가정이 사라지는 건 이득이지만 **GPU 의존이 커졌다** — Day4는 GPU PC 전용이 된다. `GraspGenX` 저장소는 실재 미확인(`NVlabs/GraspGen`은 확인됨).
+- **Day1.5 압축 경로 신설** — 캘리브·인식 전부 생략하고 "장애물 놓으면 궤적이 바뀐다"만 보여주는 시연용 경로. GPU 불필요, 개인PC 가능. 임시 static TF를 쓰므로 **rosbag 녹화와 절대 겹치면 안 된다.**
 - `dsr_moveit_config_m0609/config/sensors_3d.yaml`이 `sensors: []`로 비어 있음 — 채워야 MoveIt Octomap 연동됨.
 
 ## 출근 후 D435i 세션 (순서 고정)

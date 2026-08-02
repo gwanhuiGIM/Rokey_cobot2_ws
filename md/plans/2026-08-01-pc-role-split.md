@@ -37,13 +37,18 @@
 | **Day2** `sensors_3d.yaml` 작성 + MoveIt Octomap 반영 | 개인PC | SIM | 아래 2절 참고 — **가장 큰 선물** |
 | **Day3** 장애물 회피 모션 | 개인PC(SIM) → 실기 | SIM 후 실기 | Gazebo/virtual에서 먼저 |
 | **Day3** OMPL 플래너 튜닝 비교 | **개인PC** | SIM | 플래너 성공률·계획시간은 시뮬로 충분, 실기 시간 낭비 |
-| **Day4** ray-plane intersection 노드 작성 | **개인PC** | SIM | 순수 기하 계산, 단위테스트 가능 |
-| **Day4** ray-plane 정확도 검증 | 어느 쪽이든 | **실기** | 실측 오차 측정 |
+| **Day4** FoundationPose 6D pose 추정 | **GPU PC 전용** | **실기** | TensorRT/CUDA 필수. ray-plane 방식을 대체(2026-08-02 변경) — 개인PC에서 불가 |
+| **Day4** GraspGenX 그립 생성 | **GPU PC 전용** | SIM | 동일. 단 저장소 실재 미확인 — Day0 확인 항목 |
+| **Day4** 인식 노드 **인터페이스**(토픽·msg 타입) 확정 | **개인PC** | SIM | GPU 없이 가능. 껍데기만 먼저 만들고 나중에 알맹이 교체 |
 | **Day4** TAMP-lite 상태머신 작성 | **개인PC** | SIM | 상태 전이 로직, 로봇 불필요 |
 | **Day4** VoiceProcess 퍼블리셔 작성 | **개인PC** | — | 마이크만 있으면 됨 |
 | **Day5** 통합 10회 반복 | GPU PC | **실기** | 전체 스택 |
 
-**요약:** GPU PC가 반드시 필요한 건 **nvblox 빌드/실행 뿐**이다. 나머지는 개인PC에서 다 만들어놓고 GPU PC는 통합·실기 검증에만 쓴다.
+**요약(2026-08-02 개정):** 원래는 "GPU PC가 필요한 건 nvblox 뿐"이었고 nvblox는 시각화로 강등돼서 GPU 의존이 사라지는 듯했다. 그런데 **Day4 인식이 ray-plane → FoundationPose로 바뀌면서 GPU 의존이 오히려 커졌다.** nvblox는 없어도 되지만 FoundationPose는 없으면 Day4가 성립하지 않는다.
+
+- **개인PC(GPU 없음)**: Day1.5 ~ Day3 전부 + 상태머신·인터페이스 껍데기. rosbag만 있으면 실기 없이도 진행 가능 — 여기가 여전히 대부분이다.
+- **GPU PC**: Day4 인식·그립 + Day5 통합. **미확인 상태이므로 Day0에 `nvidia-smi` / `docker info | grep -i runtime` 먼저.**
+- GPU PC가 없다면: 인식을 색상/AprilTag 기반 CPU 경로로 되돌리고 그립 지점은 물체 1종 하드코딩. 시연 목표(장애물 회피 + pick)는 그래도 달성된다.
 
 ---
 
