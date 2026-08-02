@@ -13,6 +13,9 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
 
     # ── Launch Arguments ──────────────────────────────────────────────
+    # ⚠️ 이건 eye-in-hand 전용이다 (m0609_with_rg2_camera.urdf.xacro가 camera_link를
+    #    bracket_link→tool0에 붙인다). 현재 D435i는 eye-to-hand라 bringup.launch.py를 써야 한다.
+    #    여기에 base_link→camera_link static TF를 얹으면 camera_link의 부모가 둘이 되어 TF가 깨진다.
     # (virtual) ros2 launch m0609_rg2_bringup bringup_camera.launch.py
     # (real)    ros2 launch m0609_rg2_bringup bringup_camera.launch.py mode:=real host:=192.168.1.100
     args = [

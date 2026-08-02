@@ -6,15 +6,20 @@
 출력: T_gripper2camera.npy — 그리퍼→카메라 4x4 변환. verify.py와 pick_and_place가 이걸 읽는다.
 방법: cv2.calibrateCamera로 내부파라미터 추정 → cv2.calibrateHandEye(PARK)
 
-설정값: checkerboard_size=(8,6) 내부 코너 개수, square_size=25mm. 보드가 다르면 여기를 고친다.
+설정값: checkerboard_size=(10,7) 내부 코너 개수, square_size=24mm (11x8칸 보드). 보드가 다르면 여기를 고친다.
 
 주의:
-- find_checkerboard_pose 안의 objp가 square_size 대신 25로 하드코딩돼 있다(31행).
-  square_size만 바꾸면 반영되지 않으니 두 곳을 같이 고쳐야 한다.
+- (2026-08-02 수정됨) find_checkerboard_pose의 objp가 25로 하드코딩돼 있던 문제는 square_size를 쓰도록 고쳤다.
 - 회전 규약은 ZYZ 오일러(두산 posx 규약)다. 다른 로봇에 쓰려면 여기부터 바꾼다.
 - 단위는 전부 mm. 결과 변환행렬의 평행이동도 mm다.
 """
 #321
+import os
+from pathlib import Path
+
+# 경로는 cwd가 아니라 이 파일 위치를 기준으로 잡는다.
+# (VS Code는 워크스페이스 루트에서 실행하고 터미널은 이 디렉토리에서 실행해 서로 어긋났다.)
+DATA_DIR = Path(__file__).resolve().parent / "data"
 import cv2
 import numpy as np
 import json
@@ -37,15 +42,15 @@ def find_checkerboard_pose(
     image, board_size, square_size, camera_matrix, dist_coeffs
 ):
     """
-    checkerboard_size = (7, 5)  # 내부 코너 개수
-    square_size = 25.0          # mm 단위
+    board_size: 내부 코너 개수 (cols, rows) — 칸 개수가 아니다
+    square_size: 한 칸 크기 (mm)
     이미지에서 체커보드를 찾고, solvePnP로 카메라→체커보드 변환(R, t)을 구함.
     반환값: (R_camera2checker, t_camera2checker)
     """
     objp = np.zeros((board_size[0] * board_size[1], 3), np.float32)
     # 예: x 방향으로 square_size씩 증가, y 방향으로 square_size씩 증가
     objp[:, :2] = (
-        np.mgrid[0 : board_size[0], 0 : board_size[1]].T.reshape(-1, 2) * 25
+        np.mgrid[0 : board_size[0], 0 : board_size[1]].T.reshape(-1, 2) * square_size
     )
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -153,14 +158,15 @@ def calibrate_camera_from_chessboard(
 # Main Function
 if __name__ == "__main__":
     # 캘리브레이션 데이터 로드
-    data = json.load(open("data/calibrate_data.json"))
+    data = json.load(open(DATA_DIR / "calibrate_data.json"))
     robot_poses = np.array(data["poses"])
 
     robot_poses[:, :3] = robot_poses[:, :3]
-    image_paths = ["data/" + d for d in data["file_name"]]
+    image_paths = [str(DATA_DIR / d) for d in data["file_name"]]
 
-    checkerboard_size = (8, 6)  # 내부 코너 개수
-    square_size = 25
+    # 실물 보드: 11x8 칸 = 내부 코너 10x7, 한 칸 24mm (2026-08-02 사용자 확인)
+    checkerboard_size = (10, 7)  # 내부 코너 개수 (칸 개수 아님)
+    square_size = 24.0          # mm, 캘리퍼스 실측값으로 갱신할 것
     # 카메라 캘리브레이션 수행(내부 파라미터 왜곡 보정)
     camera_matrix, dist_coeffs, rvecs, tvecs = calibrate_camera_from_chessboard(
         image_paths, checkerboard_size, square_size
@@ -241,4 +247,4 @@ if __name__ == "__main__":
     print("T_gripper2camera:\n", T_gripper2cam[:3, 3].tolist())
 
     # save T_grigper2camera
-    np.save("T_gripper2camera.npy", T_gripper2cam)
+    np.save(DATA_DIR.parent / "T_gripper2camera.npy", T_gripper2cam)

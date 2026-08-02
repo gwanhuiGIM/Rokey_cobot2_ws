@@ -2,7 +2,7 @@
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-01
+**최종 갱신:** 2026-08-02
 
 ## 계정/환경
 - 공유 랩탑(`rokey`)의 `kimkh` 계정, `cobot2_ws`.
@@ -33,13 +33,58 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
-- **GPU PC에서 `nvidia-smi`, `docker info | grep -i runtime` 미확인** — 실패하면 스프린트 계획 전체 재작성 필요.
+- **GPU PC에 GPU 있음 — 사용자 확인 (2026-08-02).** 스프린트 Day4~5(nvblox·FoundationPose·GraspGenX) 재작성 리스크는 해소됐다.
+  단 **`docker info | grep -i runtime`으로 nvidia-docker 런타임이 잡히는지는 아직 미확인** — nvblox 컨테이너 빌드 전에 확인할 것. GPU 모델·VRAM도 미확인(FoundationPose VRAM 요구량 판단에 필요).
 - 하드웨어(M0609 + RG2 + D435i + C270)는 `.bashrc` alias 추론이며 실기로 재확인되지 않음.
 - **D435i depth rosbag 미확보** — 이게 있어야 개인PC에서 실기 없이 Octomap·플래너·상태머신 개발 가능. 절차는 아래 "출근 후 D435i 세션" 참조.
 - **카메라 마운트 강성 미확보** — 견고한 고정이 아직 어려움. 캘리브는 **잠정(provisional)**으로 취급하고, Day4 인식 정확도 실측 검증은 마운트 확정 후로 미룬다. 개발용 TF로는 잠정값으로 충분하다.
 - **Day4 인식 방식 변경(2026-08-02)**: ray-plane intersection → **FoundationPose**(6D pose), 하드코딩 그립 → **GraspGenX**. 평면 가정이 사라지는 건 이득이지만 **GPU 의존이 커졌다** — Day4는 GPU PC 전용이 된다. `GraspGenX` 저장소는 실재 미확인(`NVlabs/GraspGen`은 확인됨).
+- **캘리브 방식 변경(2026-08-02)**: `easy_handeye2` → `corecode/Calibration_Tutorial`(`eye2hand_calibration.py` / `handeye_calibration.py`). 두 알고리즘 모두 합성 데이터로 정답 복원 확인(오차 ~1e-13). npy(mm) → static TF(m) 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`. **미해결: `data_recording.py`가 `set_tcp` 후의 `posx`를 기록하므로 결과의 부모 프레임이 flange가 아니라 TCP다** — 수집 전에 정할 것.
 - **Day1.5 압축 경로 신설** — 캘리브·인식 전부 생략하고 "장애물 놓으면 궤적이 바뀐다"만 보여주는 시연용 경로. GPU 불필요, 개인PC 가능. 임시 static TF를 쓰므로 **rosbag 녹화와 절대 겹치면 안 된다.**
-- `dsr_moveit_config_m0609/config/sensors_3d.yaml`이 `sensors: []`로 비어 있음 — 채워야 MoveIt Octomap 연동됨.
+- **좌표 규약 버그 발견·수정 (2026-08-02)** — npy는 OpenCV **optical** 규약인데 ROS `camera_link`(body 규약)로 발행해 클라우드가 로봇 옆으로 90° 튀었다. `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`가 이제 기본 보정한다. **`inv(T)` 문제가 아니었다** — 규약을 먼저 의심할 것. 채점표는 [[ws/cobot2/context/constraints]].
+- **octomap_rviz_plugins 미설치** — `/octomap_binary`·`/octomap_full`을 RViz에서 볼 수 없다. 당장은 `/octomap_point_cloud_centers`(PointCloud2)로 우회 중. `topic_tools`도 미설치(throttle 불가 → 카메라 프로파일에서 줄인다).
+
+## 다음 할 일 (순서 고정 — 위가 막히면 아래로 내려가지 않는다)
+> 이 절이 "다음에 뭐 하지"의 단일 출처다. 끝난 항목은 지우고 Day 진행 절로 옮긴다.
+
+1. **`sudo apt install ros-humble-moveit-ros-perception`** — ⛔ **현재 미설치**(확인함). `PointCloudOctomapUpdater`
+   플러그인이 이 패키지에 있다. 없으면 `sensors_3d.yaml`을 채워도 플러그인 로드 실패로 **조용히** octomap이 안 생긴다.
+2. **`/moveit/filtered_cloud`로 self-filter 검증** ← **진짜 관문.** 로봇 팔이 지워졌는지 RViz로 눈으로 본다.
+   남아 있으면 로봇이 자기 몸을 장애물로 보고 한 발짝도 못 움직인다. `padding_offset`을 키운다.
+   (1번 설치 전에는 플러그인이 없어 이 토픽 자체가 안 나온다.)
+3. 장애물 놓고 궤적이 바뀌는지 확인 (fake execution 먼저).
+4. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
+   `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).
+   실기 켠 김에 돌려서 기대값과 대조하고 경고를 지운다.
+5. **D435i depth rosbag 녹화** — 개인PC에서 실기 없이 개발하려면 필수. 절차는 아래 "출근 후 D435i 세션".
+
+**상시 실행** — ⚠️ **MoveIt octomap 경로에는 더 이상 필요 없다(2026-08-02).**
+`sensors_3d.yaml`이 RealSense가 직접 발행하는 `/camera/camera/depth/color/points`를 쓰므로
+`depth_image_proc`를 거치지 않는다. 아래 노드는 **RViz 육안 확인·nav2용 별도 클라우드**일 때만 띄운다.
+(이 노드가 죽어도 MoveIt 충돌회피는 안 멈춘다 — 예전 설명이 틀렸다.)
+```bash
+export ROS_DOMAIN_ID=93
+ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
+  -r image_rect:=/camera/camera/depth/image_rect_raw \
+  -r camera_info:=/camera/camera/depth/camera_info \
+  -r points:=/camera/camera/depth/points_xyz
+```
+카메라를 재기동하면 이 노드도 같이 죽는다. `ros2 topic list | grep points_xyz`로 먼저 확인할 것.
+
+## Day2 진행 (2026-08-02)
+- ✅ 캘리브 결과 → static TF 연결 성공: `base_link → camera_link`, `tf2_echo base_link camera_depth_optical_frame` 정상.
+  **유효값은 `Translation: [1.148, 0.640, 0.678]` (약 1.48 m)** — 사용자 확인(2026-08-02).
+  (이 줄에 처음 적혀 있던 993.4 mm는 좌표 규약 버그 수정 **전**의 값이라 폐기.)
+- ✅ **`base_0`는 TF에 존재하지 않는 프레임임을 확인** — `base_link`가 맞다. 계획서 전체를 `base_0`→`base_link`, `link6`→`link_6`으로 수정 완료. 근거·표는 [[ws/cobot2/context/constraints]].
+- ✅ **좌표 규약 버그 수정 후 육안 검증 통과** — 클라우드 속 로봇 팔이 모델에 정확히 포개짐. 캘리브 잠정값 사용 가능.
+- ✅ **`octomap_server`는 이 파이프라인에서 불필요하다고 결론.** MoveIt은 `/octomap_binary`를 구독하지 않고
+  `move_group` 내부에서 octree를 직접 만든다. 둘 다 돌리면 CPU 이중 소모 — 정식 경로는 `sensors_3d.yaml`이다.
+- ✅ **`m0609_rg2_moveit/config/sensors_3d.yaml` 작성 완료** + `moveit.launch.py`에서 주입(`octomap:=true` 기본).
+  실제 채택값: `octomap_frame: world`, **`octomap_resolution: 0.02`**(계획은 `0.03`),
+  토픽 `/camera/camera/depth/color/points`(계획은 `/depth/points_xyz`), 센서명 `realsense_pointcloud`.
+  `ros2 param get /move_group`으로 주입까지 확인. ⛔ **다만 `moveit-ros-perception` 미설치라 플러그인 로드는 실패 중**(위 1번).
+  ※ `octomap_frame`이 한때 `base_link`로 들어가 있었다(내가 근거 없이 넣음) → `world`로 되돌림. 경위는 [[ws/cobot2/context/constraints]].
+- ⚠️ `realsense-viewer`가 USB를 독점해 ROS 카메라 노드를 죽인다 — 증상이 "TF 프레임 없음"으로 나와 오진 유발. 뷰어 먼저 닫을 것.
 
 ## 출근 후 D435i 세션 (순서 고정)
 
@@ -50,7 +95,7 @@ code .                                          # 이후 VS Code Source Control�
 2. `ros2 topic list`로 토픽 이름 재확인 (아래는 2026-08-01 확인분)
 3. **rosbag 녹화** ← 여기서 개인PC 작업이 풀린다
 4. **eye-to-hand 캘리브** — 3~4 사이에 카메라를 건드리지 않는다 (건드리면 bag과 짝이 안 맞음)
-5. `~/.ros/easy_handeye2/*.calib` → `config/handeye/`에 복사해 커밋 (파일명에 `_provisional`)
+5. `T_cam2base.npy` → `config/handeye/`에 복사해 커밋 (파일명에 `_provisional`). `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`로 static TF 인자 생성
 
 ### 녹화용 런치 (운용 설정과 다름 — 의도적)
 ```bash

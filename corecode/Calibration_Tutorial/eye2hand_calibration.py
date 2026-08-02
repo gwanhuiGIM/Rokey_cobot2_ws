@@ -10,12 +10,18 @@ handeye_calibration.py와의 차이: 카메라 장착 위치가 반대다. 둘 �
 카메라가 그리퍼에 달렸으면 handeye_calibration.py, 고정돼 있으면 이 파일.
 
 주의:
-- find_checkerboard_pose의 25mm 하드코딩 문제는 handeye_calibration.py와 동일하다.
+- (2026-08-02 수정됨) find_checkerboard_pose의 25mm 하드코딩은 square_size를 쓰도록 고쳤다.
 - logR()은 theta가 0에 가까우면(회전이 거의 없는 자세쌍) 0으로 나눠 NaN이 된다.
   수집할 때 자세마다 회전을 충분히 줘야 한다.
 - 특이행렬 자세는 det 검사로 자동 제외되며 콘솔에 경고가 찍힌다.
 """
 
+import os
+from pathlib import Path
+
+# 경로는 cwd가 아니라 이 파일 위치를 기준으로 잡는다.
+# (VS Code는 워크스페이스 루트에서 실행하고 터미널은 이 디렉토리에서 실행해 서로 어긋났다.)
+DATA_DIR = Path(__file__).resolve().parent / "data"
 import json
 from scipy.spatial.transform import Rotation
 import numpy as np
@@ -37,15 +43,15 @@ def find_checkerboard_pose(
     image, board_size, square_size, camera_matrix, dist_coeffs
 ):
     """
-    checkerboard_size = (7, 5)  # 내부 코너 개수
-    square_size = 25.0          # mm 단위
+    board_size: 내부 코너 개수 (cols, rows) — 칸 개수가 아니다
+    square_size: 한 칸 크기 (mm)
     이미지에서 체커보드를 찾고, solvePnP로 카메라→체커보드 변환(R, t)을 구함.
     반환값: (R_camera2checker, t_camera2checker)
     """
     objp = np.zeros((board_size[0] * board_size[1], 3), np.float32)
     # 예: x 방향으로 square_size씩 증가, y 방향으로 square_size씩 증가
     objp[:, :2] = (
-        np.mgrid[0 : board_size[0], 0 : board_size[1]].T.reshape(-1, 2) * 25
+        np.mgrid[0 : board_size[0], 0 : board_size[1]].T.reshape(-1, 2) * square_size
     )
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -208,11 +214,11 @@ def Calibrate(A, B):
 
 # Main Function
 if __name__ == "__main__":
-    data = json.load(open("data/calibrate_data.json"))
+    data = json.load(open(DATA_DIR / "calibrate_data.json"))
     robot_poses = np.array(data["poses"])
 
     robot_poses[:, :3] = robot_poses[:, :3]
-    image_paths = ["data/" + d for d in data["file_name"]]
+    image_paths = [str(DATA_DIR / d) for d in data["file_name"]]
 
     valid_indices = []
     for i, pose in enumerate(robot_poses):
@@ -228,8 +234,9 @@ if __name__ == "__main__":
     robot_poses = robot_poses[valid_indices]
     image_paths = [image_paths[i] for i in valid_indices]
 
-    checkerboard_size = (8, 6)  # 내부 코너 개수
-    square_size = 25
+    # 실물 보드: 11x8 칸 = 내부 코너 10x7, 한 칸 24mm (2026-08-02 사용자 확인)
+    checkerboard_size = (10, 7)  # 내부 코너 개수 (칸 개수 아님)
+    square_size = 24.0          # mm, 캘리퍼스 실측값으로 갱신할 것
 
     camera_matrix, dist_coeffs, rvecs, tvecs = calibrate_camera_from_chessboard(
         image_paths, checkerboard_size, square_size
@@ -298,4 +305,4 @@ if __name__ == "__main__":
     T_cam2base = X
     print(T_cam2base)
     print(T_cam2base[:3, 3])
-    np.save("T_cam2base.npy", T_cam2base)
+    np.save(DATA_DIR.parent / "T_cam2base.npy", T_cam2base)

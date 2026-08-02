@@ -30,7 +30,7 @@
 | **Day1** nvblox 도커 빌드 (`run_dev.sh`) | **GPU PC** | — | nvblox core는 CUDA 필수 |
 | **Day1** nvblox 실행 + RViz 재구성 확인 | **GPU PC** | 실기 | D435i depth 입력 필요 |
 | **Day1** C270 `v4l2_camera` 노드 등록 | 개인PC | 실기(C270만) | GPU 무관, USB 웹캠만 있으면 됨 |
-| **Day2** easy_handeye2 빌드·launch 인자 검증 | 개인PC | SIM | 빌드/토픽 흐름은 로봇 없이 확인 가능 |
+| **Day2** 캘리브 알고리즘 검증(`corecode/Calibration_Tutorial`) | 개인PC | 오프라인 | 로봇·카메라 없이 합성 데이터로 검증 완료(2026-08-02). easy_handeye2는 채택하지 않음 |
 | **Day2** D435i eye-to-hand 캘리브 수행 | 어느 쪽이든 | **실기** | 로봇+카메라 동시 필요 |
 | **Day2** C270 eye-in-hand 캘리브 수행 | 어느 쪽이든 | **실기** | 동일 |
 | **Day2** `depth_image_proc`→`octomap_server` 토픽 흐름 | 개인PC | SIM(rosbag) | GPU 무관, CPU만 씀 |
@@ -123,7 +123,7 @@ git rm -r --cached isaac_ros-dev isaas_ros-dev
 
 **(d) 캘리브레이션 결과는 반드시 커밋 대상에 넣는다**
 
-`easy_handeye2` 산출물(`~/.ros/easy_handeye2/*.calib`)은 홈 디렉토리에 저장되어 **git에 안 잡힌다.** 실기에서 힘들게 딴 오프셋이 한 PC에만 남으면 다른 PC에서 전부 다시 해야 한다.
+캘리브 산출물(`corecode/Calibration_Tutorial/T_*.npy`)은 **`.gitignore` 여부를 확인하고 반드시 커밋한다.** 실기에서 힘들게 딴 오프셋이 한 PC에만 남으면 다른 PC에서 전부 다시 해야 한다.
 → `config/handeye/` 디렉토리를 만들어 복사해 커밋하고, launch에서 그 경로를 읽게 한다.
 
 **(e) `.gitignore`의 `docs/` 항목 확인**

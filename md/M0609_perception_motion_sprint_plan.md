@@ -32,7 +32,7 @@
 | C270 마운트 | M0609 플랜지 부착(eye-in-hand) | Day1 확정, 그리퍼와 간섭 없는 위치 선정 |
 | 픽업 대상 | 단일 레이어 가정 불필요(FoundationPose 채택으로 완화) | 다층/적재도 원칙적으로 가능하나 이번 스프린트는 단일 물체로 검증 범위 한정 |
 | 그리퍼 | OnRobot RG2 (2핑거 병렬, 최대 스트로크 110mm) | GraspGenX 미지원 시 원래 GraspGen의 Robotiq 2F-140 체크포인트를 폭 오프셋 보정해 임시 대체 |
-| GPU | x86_64 + NVIDIA GPU(CUDA), nvidia-docker 런타임 설치됨 | nvblox core는 CUDA 필수 |
+| GPU | ~~x86_64 + NVIDIA GPU(CUDA), nvidia-docker 런타임 설치됨~~ → **🔴 거짓으로 확인 (2026-08-02)** | 이 랩탑은 **Intel UHD 내장뿐, NVIDIA GPU 없음**(i7-10510U / 4C8T 1.8GHz 15W). `nvidia-smi` 미설치, `lspci`에 외장 GPU 없음. **nvblox·FoundationPose·GraspGenX 전제가 전부 깨진다** — 별도 GPU 머신 확보 또는 스코프 재조정 필요. 상세: `md/context/constraints.md` |
 | VoiceProcess | 음성 명령 → 문자열 토픽 발행 가능 | Day4 어댑터로 흡수 |
 | M0609 패키지 | `doosan-robotics/doosan_robot2` 기반 MoveIt2 설정 완료 | 본인 확인 사항 반영 |
 
@@ -40,7 +40,7 @@
 
 ## 1.5 빠른 초안 검증 경로 (정확도 튜닝 이전, 최소 동작만 확인)
 
-> Day1~3 전체를 순서대로 다 하지 않고, "장애물을 놓으면 M0609가 궤적을 바꾼다"는 것만 빠르게 보여주고 싶을 때 쓰는 압축 경로. 여기서는 **정밀 캘리브레이션(easy_handeye2), C270, ray-plane, TAMP-lite, 플래너 튜닝을 전부 생략**하고, 카메라-로봇 TF는 줄자/CAD 기반 대략값으로 대체한다. 정확도가 필요해지면 그때 Day2의 정식 `easy_handeye2` 캘리브레이션으로 교체.
+> Day1~3 전체를 순서대로 다 하지 않고, "장애물을 놓으면 M0609가 궤적을 바꾼다"는 것만 빠르게 보여주고 싶을 때 쓰는 압축 경로. 여기서는 **정밀 캘리브레이션(`corecode/Calibration_Tutorial`), C270, ray-plane, TAMP-lite, 플래너 튜닝을 전부 생략**하고, 카메라-로봇 TF는 줄자/CAD 기반 대략값으로 대체한다. 정확도가 필요해지면 그때 Day2의 정식 캘리브레이션(`eye2hand_calibration.py`)으로 교체.
 
 **Step 1. RealSense 실행 + depth → 포인트클라우드**
 ```bash
@@ -57,25 +57,33 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
 
 **Step 2. 카메라→로봇 TF, 대략값으로 임시 발행 (정밀 캘리브레이션 생략)**
 ```bash
-# 줄자/CAD로 잰 대략적인 x y z (m) + roll pitch yaw (rad) 를 base_0 기준으로 입력
+# 줄자/CAD로 잰 대략적인 x y z (m) + roll pitch yaw (rad) 를 base_link 기준으로 입력
 ros2 run tf2_ros static_transform_publisher \
   --x 0.0 --y -0.5 --z 0.6 --roll 0 --pitch 0.6 --yaw 1.57 \
-  --frame-id base_0 --child-frame-id camera_link
+  --frame-id base_link --child-frame-id camera_link
 ```
-**주의:** 이 TF는 "임시"임을 명확히 표시해두고, 정밀도 튜닝 단계(Day2)에서 반드시 `easy_handeye2` 결과로 교체할 것.
+**주의:** 이 TF는 "임시"임을 명확히 표시해두고, 정밀도 튜닝 단계(Day2)에서 반드시 `eye2hand_calibration.py` → `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py` 결과로 교체할 것.
 
 > ⚠️ **rosbag 녹화 중에는 이 임시 TF를 띄우지 않는다.** bag의 `/tf_static`에 가짜 값이 박히면 나중에 진짜 캘리브 값과 충돌해 bag을 못 쓰게 된다. 출근 후 순서는 **rosbag 녹화 → 캘리브 → Day1.5**이며, 상세 절차는 `md/state.md`의 "출근 후 D435i 세션" 절이 기준이다.
 
 **Step 3. Octomap → MoveIt2 PlanningScene 연동**
 ```bash
 sudo apt install ros-humble-octomap-server
+# ⚠️ 기본 설정(848x480x30 + resolution 0.02 + max_range 무제한)은 이 랩탑에서 안 돈다.
+#    octomap_server는 단일 스레드이고 ros2_control이 이미 2코어를 먹는다. 근거: constraints.md
 ros2 run octomap_server octomap_server_node --ros-args \
   -r cloud_in:=/camera/camera/depth/points_xyz \
-  -p frame_id:=base_0 -p resolution:=0.02
+  -p frame_id:=base_link \
+  -p resolution:=0.03 \
+  -p sensor_model.max_range:=1.5 \
+  -p pointcloud_min_z:=-0.1 -p pointcloud_max_z:=1.2
 
 ros2 launch <m0609_moveit_config> demo.launch.py   # 실기 대신 fake execution으로 먼저
-rviz2   # MoveIt 플러그인에서 Octomap 충돌 지오메트리 확인
+rviz2   # PointCloud2 display on /octomap_point_cloud_centers (octomap_rviz_plugins 미설치)
 ```
+> **디버깅은 반드시 이 순서로**: ① `tf2_echo base_link camera_depth_optical_frame` → ② `topic hz .../points_xyz`
+> → ③ RViz PointCloud2 on `.../points_xyz` (Fixed Frame=base_link) → ④ 그제서야 octomap.
+> `/projected_map`은 2D 투영이라 매니퓰레이터 디버깅에 쓸 수 없다. 상세는 `md/context/constraints.md`.
 
 **Step 4. 궤적 확인 (fake execution)**
 - 카메라 앞에 박스 등 장애물을 놓고 RViz MoveIt 플러그인에서 임의 목표 pose로 드래그 → Plan
@@ -135,7 +143,7 @@ ros2 launch realsense2_camera rs_launch.py \
 ros2 launch isaac_ros_nvblox isaac_ros_nvblox.launch.py
 rviz2   # nvblox mesh/voxel 토픽 추가해 재구성 확인 (이번 스프린트에서는 시각화·향후 확장용으로만 사용)
 ```
-**DoD:** RViz에서 3D mesh/voxel 재구성 실시간 확인, `tf2_ros` 트리에 `camera_link(d435i) → base_0` 정상 표시.
+**DoD:** RViz에서 3D mesh/voxel 재구성 실시간 확인, `tf2_ros` 트리에 `camera_link(d435i) → base_link` 정상 표시.
 
 **P1. C270 웹캠 노드 등록**
 ```bash
@@ -157,38 +165,60 @@ ros2 topic hz /webcam/image_raw   # 프레임레이트 확인, D435i 동시 구�
 
 ### Day2 — 이중 캘리브레이션 + PlanningScene 연동
 
-**P0. D435i eye-to-hand 캘리브레이션**
+> **방식 변경(2026-08-02): `easy_handeye2` → `corecode/Calibration_Tutorial` 스크립트.**
+> 이유는 성능이 아니라 리스크다. `easy_handeye2`는 Humble 브랜치·의존성·`aruco` 검출 파이프라인을 새로 세워야 하는 미검증 외부 패키지인데, `corecode/`에는 이미 이 로봇(M0609, ZYZ posx)과 이 카메라를 전제로 쓰인 스크립트가 들어 있다. ROS 노드가 아니라 오프라인 파이썬이라 실패해도 스택 전체를 흔들지 않는다.
+> **알고리즘은 합성 데이터로 검증했다**(2026-08-02): 정답 변환을 심고 되찾는 테스트에서 두 스크립트 모두 오차 `~1e-13`. 아래 "검증 결과" 절 참고.
+
+**공통 1단계 — 데이터 수집 (`data_recording.py`)**
 ```bash
-sudo apt install ros-humble-easy-handeye2
-git clone https://github.com/marcoesposito1988/easy_handeye2.git src/easy_handeye2  # humble 브랜치 확인
-colcon build --packages-select easy_handeye2 && source install/setup.bash
+# dsr_bringup2가 떠 있어야 한다 (posx를 읽는다)
+cd corecode/Calibration_Tutorial
+python3 data_recording.py     # 카메라 창에서 'q' = 저장. 자세 15~20개. 종료는 Ctrl+C
+```
+파일 상단 설정 플래그(2026-08-02 추가):
+- `USE_REALSENSE_TOPIC` — `True`면 D435i ROS 토픽(`/camera/camera/color/image_raw`), `False`면 V4L2 `/dev/video<DEVICE_NUMBER>`. **eye-to-hand(D435i)=True, eye-in-hand(C270)=False.** C270은 `ls /dev/video*`로 번호 확인.
+- `RECORD_IN_FLANGE_FRAME` — 기본 `True`(= `set_tcp` 미적용). **`set_tcp`가 걸린 `posx`는 flange가 아니라 TCP 기준**이라 결과의 부모 프레임도 TCP가 된다. `True`로 두면 부모가 flange라서 CAD/줄자로 검산할 수 있다. `False`로 쓸 거면 `TOOL_NAME`/`TCP_NAME`을 **RG2 등록명으로 교체**할 것 — 티치펜던트에 없는 이름이면 원점이 어긋난다.
+- 조작: `q` = 저장, **`ESC` = 정상 종료**(예전엔 탈출 코드가 없어 Ctrl+C를 써야 했다).
+- **체커보드는 내부 코너 10x7 (칸 11x8) / 한 칸 24mm** → 코드에 `checkerboard_size = (10, 7)`, `square_size = 24.0`으로 반영 완료(2026-08-02). 인쇄물 칸을 캘리퍼스로 재서 갱신할 것.
+- 자세마다 **회전을 충분히 섞을 것.** 평행이동만 하면 `logR()`이 0으로 나눠 NaN이 되어 eye-to-hand가 통째로 죽는다(합성 테스트로 재현 확인).
 
-# 캘리브레이션 타겟(체커보드/AprilTag)을 M0609 플랜지에 부착 후 여러 자세로 이동하며 수집
-ros2 launch easy_handeye2 calibrate.launch.py \
-  calibration_type:=eye_on_base \
-  tracking_base_frame:=camera_link \
-  tracking_marker_frame:=calib_tag \
-  robot_base_frame:=base_0 \
-  robot_effector_frame:=flange
+**P0-a. D435i eye-to-hand (카메라 고정 · 체커보드를 그리퍼에 부착)**
+```bash
+python3 eye2hand_calibration.py        # → T_cam2base.npy  (base_link 기준 카메라 pose, mm)
 
-# 결과 저장된 정적 TF publish 확인
-ros2 run tf2_ros tf2_echo base_0 camera_link
+# npy(mm) → ROS static TF(m) 변환. 인자 그대로 실행하면 TF가 뜬다.
+cd ../.. && ros2 run m0609_rg2_bringup calib_npy_to_tf.py \
+  corecode/Calibration_Tutorial/T_cam2base.npy base_link camera_link
+
+ros2 run tf2_ros tf2_echo base_link camera_link
 ```
 **DoD:** 알려진 좌표 물체 배치 후 D435i가 인식한 3D 위치와 실측값 오차 < 1cm.
 
-**P0. C270 eye-in-hand 캘리브레이션 (flange 오프셋)**
+**P0-b. C270 eye-in-hand (카메라가 그리퍼에 · 체커보드는 작업공간에 고정)**
 ```bash
-# 캘리브레이션 타겟은 이번엔 작업공간에 고정, 로봇(C270)이 여러 자세로 움직이며 수집
-ros2 launch easy_handeye2 calibrate.launch.py \
-  calibration_type:=eye_in_hand \
-  tracking_base_frame:=camera_link_webcam \
-  tracking_marker_frame:=calib_tag_fixed \
-  robot_base_frame:=base_0 \
-  robot_effector_frame:=flange
+python3 handeye_calibration.py         # → T_gripper2camera.npy  (TCP 기준 카메라 pose, mm)
 
-ros2 run tf2_ros tf2_echo flange camera_link_webcam   # 고정 오프셋 확인
+cd ../.. && ros2 run m0609_rg2_bringup calib_npy_to_tf.py \
+  corecode/Calibration_Tutorial/T_gripper2camera.npy link_6 camera_link_webcam
+
+ros2 run tf2_ros tf2_echo link_6 camera_link_webcam   # 고정 오프셋 확인
 ```
-**DoD:** `flange → camera_link_webcam` 정적 TF 확보. 이후 실시간 `camera_link_webcam → base_0`는 FK(현재 조인트 상태)로 자동 계산됨을 `tf2_echo base_0 camera_link_webcam`로 확인.
+**DoD:** `link_6(또는 TCP) → camera_link_webcam` 정적 TF 확보. 이후 실시간 `camera_link_webcam → base_link`는 FK로 자동 계산됨을 `tf2_echo base_link camera_link_webcam`로 확인.
+
+> 저장소에 이미 들어 있는 `T_gripper2camera.npy`는 **튜토리얼 잔재**다(평행이동 247.8mm, z=-233mm). 이 ws의 실측값이 아니므로 반드시 새로 만들어 덮어쓴다.
+
+**검증 결과 (2026-08-02, 합성 데이터)**
+
+| 항목 | 결과 |
+|---|---|
+| `handeye_calibration.py` (eye-in-hand, `cv2.calibrateHandEye` PARK) | ✅ 정답 복원, max\|err\| 1.1e-13 |
+| `eye2hand_calibration.py` (eye-to-hand, Park-Martin 자체 구현) | ✅ 정답 복원, max\|err\| 2.0e-13 |
+| A/B 쌍 구성 방향(`A=G_i G_{i+1}^{-1}`, `B=P_i P_{i+1}^{-1}`) | ✅ `AX=XB`, `X`=베이스 기준 카메라 pose로 성립 |
+| 회전 규약 ZYZ = 두산 `posx` | ✅ 일치 |
+| `logR()` 회전≈0에서 NaN | ⚠️ 재현됨. 수집 시 회전 섞는 것으로 회피 |
+| `find_checkerboard_pose()`의 `square_size` 하드코딩(`* 25`) | ✅ **2026-08-02 수정.** 두 파일 모두 `square_size` 사용. 합성 보드 렌더링으로 거리 복원 확인(24mm/내부코너 10x7 → Z 500.00mm) |
+| `sqrtm` 출력의 직교성 | ✅ 이번 데이터에선 실수·직교. `calib_npy_to_tf.py`가 매번 검사 후 SVD 정규화 |
+| 내부 파라미터를 `camera_info` 대신 `calibrateCamera`로 재추정 | ⚠️ D435i 공장 intrinsic보다 나쁠 수 있음. 오차 1cm 초과 시 여기부터 의심 |
 
 **P0. 실제 3D 포인트클라우드 → MoveIt2 충돌 회피 연동 (선택 A: cuMotion 제외, 표준 Humble 조합)**
 
@@ -206,8 +236,11 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
 # 포인트클라우드를 octomap_server에 연결해 3D occupancy map 생성
 ros2 run octomap_server octomap_server_node --ros-args \
   -r cloud_in:=/camera/camera/depth/points_xyz \
-  -p frame_id:=base_0 \
-  -p resolution:=0.02
+  -p frame_id:=base_link \
+  -p resolution:=0.03 \
+  -p sensor_model.max_range:=1.5 \
+  -p pointcloud_min_z:=-0.1 -p pointcloud_max_z:=1.2
+# resolution/max_range 근거는 constraints.md "octomap_server — 리소스" 절. 기본값은 이 랩탑에서 안 돈다.
 
 # MoveIt2 move_group 설정(sensors_3d.yaml)에 PointCloudOctomapUpdater 플러그인 등록
 #   point_cloud_topic: /camera/camera/depth/points_xyz  (octomap_server 없이 MoveIt이 직접 구독하는 방식도 가능)
@@ -341,6 +374,9 @@ ros2 bag record -o ~/failure_cases/case_$(date +%s) -a
 | isaac_ros_common/nvblox 버전 불일치 (release-3.2 vs 최신 태그 혼용) | 빌드 실패, Day1~2 지연 | 모든 Isaac ROS 저장소를 release-3.2로 통일해서 클론, 다른 릴리스 태그와 섞지 않기. 빌드 에러 시 `.isaac_ros_common-config`의 이미지 키와 태그 조합 재확인 |
 | MoveIt2 sensors_3d.yaml 플러그인 설정 경험 부재로 Day2 지연 | Day2 지연 | Day1 저녁에 `depth_image_proc`+`octomap_server` 조합을 M0609 없이 데스크탑에서 먼저 단독 테스트해 토픽 흐름부터 검증. 막히면 임시로 RViz에 수동 박스 충돌 오브젝트만 넣고 진행, 실제 depth 연동은 Day3로 이월 |
 | eye-to-hand(D435i) 캘리브레이션 오차 누적 | 충돌 회피 정확도 저하 | 알려진 좌표 물체로 오차 측정 후 진행, 1cm 초과 시 Day3 보류 |
+| **캘리브 결과의 부모 프레임이 flange가 아니라 TCP** (`data_recording.py`가 `set_tcp` 후의 `posx`를 기록) | TF 체인이 TCP 오프셋만큼 통째로 틀어진다. 궤적은 멀쩡해 보이는데 그립만 계속 빗나가는, 제일 찾기 어려운 형태로 나타난다 | 수집 전 `set_tcp`를 0으로 두거나, TF 부모를 TCP 프레임으로 명시. **Day2 첫 검증은 "알려진 좌표 물체"가 아니라 "TF 부모가 무엇인지"부터 확인** |
+| **단위 불일치 (corecode는 전 구간 mm, ROS·FoundationPose는 m)** | 1000배 오차. 즉시 드러나므로 치명적이진 않지만 통합 시 반복 발생 | 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py` **한 곳에서만** 한다. 다른 노드에서 `/1000`을 재차 하지 않는다 |
+| `logR()`이 회전≈0인 자세쌍에서 NaN (합성 테스트로 재현) | eye-to-hand 결과가 통째로 NaN | 수집 시 자세마다 회전을 충분히 섞는다. 결과에 NaN이 보이면 데이터 문제지 코드 문제가 아니다 |
 | eye-in-hand(C270) hand-eye 오프셋 오차 | 향후 C270을 근접 확인 용도로 쓸 때 오차 누적 | Day2에 캘리브레이션 인프라는 유지하되, 이번 스프린트 메인 경로에서는 C270 정밀도가 결과에 영향 없음(사용 안 함) |
 | **FoundationPose 세그멘테이션 마스크 품질 의존성** | 마스크 부정확 시 6D pose 추정 오차/실패 | Day4 초반에 간단한 색상 기반 마스크로 먼저 검증, 필요 시 수동 박스 지정으로 폴백 |
 | **isaac_ros_foundationpose가 release-3.2에 없거나 Humble 미지원일 가능성** | Day4 전체 지연 | Day1 저녁에 저장소 태그/브랜치를 미리 확인. 없으면 해당 시점 최신 Humble 호환 태그로 대체하거나, 최악의 경우 FoundationPose 컨테이너를 별도 이미지로 분리 실행(트레이드오프: 통합 복잡도↑) |
@@ -387,6 +423,6 @@ ros2 bag record -o ~/failure_cases/case_$(date +%s) -a
 - People/dynamic reconstruction 모드로 nvblox 전환 (협동로봇 협업 시나리오 대비)
 - ROS 2 Jazzy 전체 마이그레이션 후 cuMotion(`isaac_ros_cumotion_moveit`) 재도전 — GPU 가속 충돌 회피로 전환
 
-> **참고:** 위 명령어들은 패키지/저장소 버전에 따라 인자명이나 launch 파일명이 다를 수 있습니다(특히 `doosan_robot2`, `easy_handeye2`, VoiceProcess 인터페이스는 본인 환경의 실제 저장소 문서로 재확인 필요). 실행 전 각 저장소 README의 Humble 대응 브랜치를 먼저 확인하세요.
+> **참고:** 위 명령어들은 패키지/저장소 버전에 따라 인자명이나 launch 파일명이 다를 수 있습니다(특히 `doosan_robot2`, VoiceProcess 인터페이스는 본인 환경의 실제 저장소 문서로 재확인 필요). 실행 전 각 저장소 README의 Humble 대응 브랜치를 먼저 확인하세요.
 >
 > **버전 정책:** 이번 스프린트는 Humble 유지를 위해 Isaac ROS 관련 저장소를 모두 `release-3.2` 태그로 고정한다. 최신 `release-4.x`는 Docker dev container 기능이 Isaac ROS CLI로 이전되었고 cuMotion 등 신규 패키지가 사실상 Jazzy 중심으로 재편되어, 이번 스코프(Humble/M0609)에서는 사용하지 않는다.

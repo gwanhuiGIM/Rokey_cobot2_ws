@@ -14,6 +14,8 @@
 """
 
 import os
+from pathlib import Path
+
 import cv2
 import json
 import rclpy
@@ -24,6 +26,17 @@ ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
 VELOCITY, ACC = 60, 60
 DEVICE_NUMBER = 6
+
+# 어느 카메라로 수집할지. eye-to-hand(D435i)는 True, eye-in-hand(C270)는 False.
+#   True  → ROS 토픽 /camera/camera/color/image_raw (realsense2_camera 실행 중이어야 함)
+#   False → V4L2 /dev/video<DEVICE_NUMBER>
+USE_REALSENSE_TOPIC = True
+
+# True면 set_tcp을 걸지 않는다 → posx가 flange 기준이 되어 결과를 CAD/줄자로 검산할 수 있다.
+# False면 아래 TOOL_NAME/TCP_NAME이 티치펜던트 등록명과 일치해야 한다.
+RECORD_IN_FLANGE_FRAME = True
+TOOL_NAME = "Tool Weight_2FG"   # RG2 실제 등록명으로 교체
+TCP_NAME = "2FG_TCP"
 
 DR_init.dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
@@ -44,29 +57,54 @@ def main(args=None):
         print(f"Error importing DSR_ROBOT2 : {e}")
         return
     # 공구 및 TCP 설정
-    set_tool("Tool Weight_2FG")
-    set_tcp("2FG_TCP")
+    if RECORD_IN_FLANGE_FRAME:
+        print("[frame] set_tcp 미적용 — posx는 flange 기준. 결과 부모 프레임도 flange다.")
+    else:
+        set_tool(TOOL_NAME)
+        set_tcp(TCP_NAME)
+        print(f"[frame] set_tcp('{TCP_NAME}') 적용 — posx는 TCP 기준. 결과 부모 프레임도 TCP다.")
 
     # 데이터 저장 경로 설정
-    source_path = "./data"
+    source_path = str(Path(__file__).resolve().parent / "data")
     os.makedirs(source_path, exist_ok=True)
+
     # 카메라 연결
-    print(f"현재 선택된 device number는 {DEVICE_NUMBER}입니다.")
-    cap = cv2.VideoCapture(DEVICE_NUMBER)  # 4 is camera number, set your camera number
+    cap = img_node = None
+    if USE_REALSENSE_TOPIC:
+        from realsense import ImgNode
+
+        img_node = ImgNode()
+        print("RealSense 토픽(/camera/camera/color/image_raw)에서 수집합니다.")
+    else:
+        print(f"현재 선택된 device number는 {DEVICE_NUMBER}입니다.")
+        cap = cv2.VideoCapture(DEVICE_NUMBER)
+
+    def read_frame():
+        """수집 소스와 무관하게 BGR 프레임 한 장을 돌려준다. 없으면 None."""
+        if img_node is not None:
+            rclpy.spin_once(img_node, timeout_sec=0.1)
+            return img_node.get_color_frame()
+        ok, f = cap.read()
+        return f if ok else None
 
     write_data = {}
     write_data["poses"] = []
     write_data["file_name"] = []
 
+    print("'q' = 현재 자세 저장, ESC = 종료. 자세마다 회전을 30도 이상 섞을 것.")
     while True:
-        ret, frame = cap.read()
+        frame = read_frame()
 
-        if not ret:
-            print("카메라를 찾을 수 없습니다. DEVICE_NUMBER를 변경해주세요.")
-            exit(True)
+        if frame is None:
+            print("프레임을 받지 못했습니다. 카메라 설정을 확인하세요.")
+            continue
         cv2.imshow("camera", frame)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:  # ESC — json이 잘리지 않게 정상 종료
+            print(f"종료. 총 {len(write_data['poses'])}개 수집.")
+            break
+        if key == ord("q"):
             pos = get_current_posx()[0]
             file_name = f"{pos[0]}_{pos[1]}_{pos[2]}.jpg"
             # 현재 위치 기반 이미지 저장
