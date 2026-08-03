@@ -1,5 +1,9 @@
 # 실기/현장 제약 (실측 사실만 기록. 추측 금지)
 
+> 📁 문서 지도: [[ws/cobot2/README]] · 현재 상태: [[ws/cobot2/state]] · 오류 이력: [[ws/cobot2/errors-log]]
+> **이 문서가 소유하는 것: "무엇이 참인가".** 지금 뭘 할지는 `state.md`, 틀린 이력은 `errors-log.md`.
+> 튜닝값은 **파일이 정본이다**(`sensors_3d.yaml` 등) — 여기 표는 변경 이력이지 현재값 조회용이 아니다.
+
 ## RealSense D435I (2026-08-01)
 - ⚠️ **`reals` alias가 2026-08-03 기준 `ros2 launch m0609_rg2_bringup camera.launch.py`로 바뀌었다**(사용자 확인). 아래 08-01 기록의 `rs_align_depth_launch.py` 설명은 **낡았다** — 이 낡은 줄을 근거로 공식 런치를 써서 `base_link→camera_link` 없는 bag 4.8GB를 찍은 사고가 있었다([[ws/cobot2/rosbag-d435i]] §4). 두 런치는 **다른 것을 준다**: ws 런치만 `camera_calib_tf`(캘리브 TF)와 IMU를 준다.
 - (2026-08-01, 구 alias 기준) `rs_align_depth_launch.py` + `align_depth.enable:=true enable_rgbd:=true pointcloud.enable:=true`, depth 848x480x30 / color 1280x720x30 조합은 **ROS_DOMAIN_ID를 지정하지 않으므로 기본값(비어있음 → 0)에서 뜬다.** 현 alias도 도메인을 지정하지 않는 건 동일.
@@ -167,7 +171,8 @@ ros2 run octomap_server octomap_server_node --ros-args \
   -p sensor_model.max_range:=1.5 \
   -p pointcloud_min_z:=-0.1 -p pointcloud_max_z:=1.2
 ```
-`max_range:=1.5`는 카메라가 base에서 993mm 떨어져 있음을 근거로 한 값. 테이블 먼 쪽이 잘리면 2.0으로.
+~~`max_range:=1.5`는 카메라가 base에서 993mm 떨어져 있음을 근거로 한 값~~ → **993 mm는 좌표 규약 버그
+수정 전의 폐기된 거리다. 근거로 쓰지 말 것.** 현재 거리는 npy를 읽어 확인한다(위 "카메라 TF 연결" 절).
 `topic_tools` 미설치라 throttle 노드는 못 쓴다 — **카메라 프로파일에서 줄이는 게 정답**.
 
 ### octomap 로그 읽는 법
@@ -330,8 +335,10 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 |---|---|---|
 | 센서명 | `default_sensor` | `realsense_pointcloud` |
 | `point_cloud_topic` | `/camera/camera/depth/points_xyz` | `/camera/camera/depth/color/points` (RealSense가 직접 발행 → `depth_image_proc` 불필요) |
-| `max_range` | 1.5 | 2.5 (카메라~로봇 약 1.48 m) |
-| `padding_scale` | 1.2 | 1.0 |
+| `max_range` | 1.5 | 2.5 → 1.5 → **2.0 (2026-08-03 확정)** — 1.5는 카메라~base 거리(1.684 m)보다 작아 베이스 부근을 잘라냈다. **`max_range`는 CPU 손잡이가 아니다**(비용은 점 개수에 비례) |
+| `point_subsample` | 1 | **3** (2026-08-03, CPU) |
+| `padding_offset` | 0.03 | **0.1** (2026-08-03, self-filter 잔여점) |
+| `padding_scale` | 1.2 | 1.0 → **2.0** (2026-08-03) |
 | `max_update_rate` | 2.0 | 1.0 |
 | `filtered_cloud_topic` | `/filtered_cloud` | `/moveit/filtered_cloud` |
 | `octomap_frame` | `world` | **`base_link`** (`world`는 planning scene이 모른다 — 위 📌 참고) |

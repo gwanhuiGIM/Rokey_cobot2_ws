@@ -2,7 +2,9 @@
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-02
+**최종 갱신:** 2026-08-03
+
+> 📁 **문서 전체 지도는 [[ws/cobot2/README]]에 있다.** 어느 문서가 무엇의 단일 출처인지 거기서 본다.
 
 ## 계정/환경
 - 공유 랩탑(`rokey`)의 `kimkh` 계정, `cobot2_ws`.
@@ -56,24 +58,27 @@ code .                                          # 이후 VS Code Source Control�
   - **LOO 수치를 재현성으로 읽지 말 것** — 리스트 순서만 섞어도 같은 크기로 움직이고,
     계통오차에는 눈이 멀다. 잔차 큰 쌍을 한꺼번에 빼면 80 mm 옮겨간 반면 LOO는 3.6 mm였다.
     (2026-08-03 cross-review에서 반증. 그 전 세션에 내가 "LOO 1.5 mm = 양호"로 적은 건 오판)
+- ✅ **`max_range` 1.5 → 2.0으로 되돌림 (2026-08-03, 사용자 결정).** 1.5는 카메라~base 거리 **1.684 m**보다
+  작아 베이스 부근을 잘라내고 있었다. 원래 목적이던 CPU 절감은 체감되지 않았고, `max_range`는 애초에
+  CPU 손잡이가 아니다(비용은 거리가 아니라 점 개수에 비례 → `point_subsample`·카메라 프로파일이 실효 손잡이).
+  **아직 실기 미검증**: 2.0에서 ① 뒷벽이 장애물로 잡히지 않는지 ② 장애물 경계가 또렷해지는지
+  ③ `move_group` CPU가 견디는지 — 다음 실기에서 확인. 경위: [[ws/cobot2/errors-log]] §7
 - **octomap_rviz_plugins 미설치** — `/octomap_binary`·`/octomap_full`을 RViz에서 볼 수 없다. 당장은 `/octomap_point_cloud_centers`(PointCloud2)로 우회 중. `topic_tools`도 미설치(throttle 불가 → 카메라 프로파일에서 줄인다).
 
 ## 다음 할 일 (순서 고정 — 위가 막히면 아래로 내려가지 않는다)
 > 이 절이 "다음에 뭐 하지"의 단일 출처다. 끝난 항목은 지우고 Day 진행 절로 옮긴다.
 > 08-03 상세 계획: [[ws/cobot2/plans/2026-08-03-octomap-integration]]
 
-1. **`sudo apt install ros-humble-moveit-ros-perception`** — ⛔ **현재 미설치**(확인함). `PointCloudOctomapUpdater`
-   플러그인이 이 패키지에 있다. 없으면 `sensors_3d.yaml`을 채워도 플러그인 로드 실패로 **조용히** octomap이 안 생긴다.
-1.5. **depth 프로파일을 `424x240x15`로 낮추고 켠다** — i7-10510U 15W·GPU 없음·`ros2_control_node` 204%에
-   848x480x30(12.2 M point/s)은 안 돌아간다(어제 `octomap_server`에서 확인). `camera.launch.py`에 인자 추가.
-2. **`/moveit/filtered_cloud`로 self-filter 검증** ← **진짜 관문.** 로봇 팔이 지워졌는지 RViz로 눈으로 본다.
-   남아 있으면 로봇이 자기 몸을 장애물로 보고 한 발짝도 못 움직인다. `padding_offset`을 키운다.
-   (1번 설치 전에는 플러그인이 없어 이 토픽 자체가 안 나온다.)
-3. 장애물 놓고 궤적이 바뀌는지 확인 (fake execution 먼저).
-4. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
+> ✅ 1~3번(플러그인 설치 / 프로파일 축소 / self-filter / 장애물 회피)은 **2026-08-03에 끝났다.**
+> 결과·채택값·검증 상태는 [[ws/cobot2/review_moveit]]로 옮겼다. 아래는 남은 것만이다.
+
+1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).
    실기 켠 김에 돌려서 기대값과 대조하고 경고를 지운다.
-5. **D435i depth rosbag 녹화** — 개인PC에서 실기 없이 개발하려면 필수. 절차는 아래 "출근 후 D435i 세션".
+2. **D435i depth rosbag 녹화** — 개인PC에서 실기 없이 개발하려면 필수.
+   ⚠️ **명령의 단일 출처는 [[ws/cobot2/rosbag-d435i]] §A다.** 아래 "출근 후 D435i 세션"에는 순서만 남겼다.
+3. **캘리브 오차 정량 측정** — 알려진 좌표의 물체로 cm 단위. `padding_offset` 해석과 cuRobo 비교의 전제.
+4. **OMPL 플래너 성공률·계획시간 로그** — 스프린트 Day3 P1. cuRobo 비교의 기준선.
 
 **상시 실행** — ⚠️ **MoveIt octomap 경로에는 더 이상 필요 없다(2026-08-02).**
 `sensors_3d.yaml`이 RealSense가 직접 발행하는 `/camera/camera/depth/color/points`를 쓰므로
@@ -116,16 +121,7 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
   절대경로 `/dsr01/dsr_moveit_controller`로. **`dsr_controller2`와 동시 active 가능**(인터페이스를 claim하지 않는 서비스 래퍼).
 - ✅ **팀원용 통합 `README.md` 작성**(ws 루트) — 3터미널 실행 절차·인자표·기능확인 체크1~3·알려진 함정.
 - ⚠️ **로봇 명령 경로가 두 개 살아 있다**: `dsr_controller2`(서비스 movej/movel → DRFL) 와
-  `dsr_moveit_controller`
-# ompl_planning.yaml에서 planner_id 교체하며 비교: RRTConnect, RRTstar, LBKPIECE 등
-ros2 param get /move_group planning_pipeline
-# 각 플래너별 성공률/평균 계획시간 기록 (rosbag으로 planning_scene, trajectory 기록)
-ros2 bag record -o day3_tuning /move_group/monitored_planning_scene /joint_states
-```
-**DoD:** 튜닝 로그 표(성공률, 평균 계획 시간) 작성.
-
-**P1. 협소 입구 통과 전용 테스트 케이스 + narrow-passage 샘플러**
-(JTC → `Drfl.servoj_rt`/`Drfl.amovej`, `dsr_hw_interface2.cpp:494-503`).
+  `dsr_moveit_controller` (JTC → `Drfl.servoj_rt`/`Drfl.amovej`, `dsr_hw_interface2.cpp:494-503`).
   **동시에 명령하지 말 것.**
 - ⚠️ `realsense-viewer`가 USB를 독점해 ROS 카메라 노드를 죽인다 — 증상이 "TF 프레임 없음"으로 나와 오진 유발. 뷰어 먼저 닫을 것.
 
@@ -135,44 +131,15 @@ ros2 bag record -o day3_tuning /move_group/monitored_planning_scene /joint_state
 캘리브 결과는 static TF 6개라서 bag 재생 시 `static_transform_publisher`로 나중에 얹을 수 있다 — depth 데이터 자체는 캘리브와 무관하게 유효하다.
 
 1. 카메라를 최종 위치에 **최대한 고정** + 마스킹테이프 표시 + 사진 (재현용)
-2. `ros2 topic list`로 토픽 이름 재확인 (아래는 2026-08-01 확인분)
-3. **rosbag 녹화** ← 여기서 개인PC 작업이 풀린다
-4. **eye-to-hand 캘리브** — 3~4 사이에 카메라를 건드리지 않는다 (건드리면 bag과 짝이 안 맞음)
-5. `T_cam2base.npy` → `config/handeye/`에 복사해 커밋 (파일명에 `_provisional`). `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`로 static TF 인자 생성
+2. **rosbag 녹화** ← 여기서 개인PC 작업이 풀린다
+3. **eye-to-hand 캘리브** — 1~3 사이에 카메라를 건드리지 않는다 (건드리면 bag과 짝이 안 맞음)
+4. 결과 `T_cam2base.npy`는 **사본을 만들지 않는다** — 정본은 `corecode/Calibration_Tutorial/`이고
+   `m0609_rg2_bringup/config/`는 symlink다. (~~`config/handeye/`에 복사해 커밋~~ 은 폐기된 지시다.)
 
-### 녹화용 런치 (운용 설정과 다름 — 의도적)
-```bash
-ros2 launch realsense2_camera rs_align_depth_launch.py \
-  depth_module.depth_profile:=848x480x30 \
-  rgb_camera.color_profile:=848x480x30 \
-  initial_reset:=true \
-  align_depth.enable:=true \
-  pointcloud.enable:=false \
-  enable_rgbd:=false
-```
-- **color를 848x480으로 낮추는 이유**: `align_depth`는 depth를 **컬러 해상도로 리샘플**한다. color가 1280x720이면 aligned depth가 55MB/s(3.3GB/분)까지 뛴다. 맞추면 24MB/s. Octomap·플래너 개발에 720p depth는 과잉.
-- `pointcloud.enable:=false`: `/depth/color/points`는 ~390MB/s이고 depth+camera_info로 언제든 재생성되는 파생물이다.
-- `enable_rgbd:=false`: 개별 토픽을 다 녹화하므로 합본 메시지는 중복.
-- `initial_reset:=true`: USB 인식 꼬임 방지 — 유지.
-
-### 녹화 명령
-```bash
-ros2 bag record --compression-mode file --compression-format zstd \
-  -o d435i_$(date +%m%d_%H%M) \
-  /camera/camera/depth/image_rect_raw \
-  /camera/camera/depth/camera_info \
-  /camera/camera/aligned_depth_to_color/image_raw \
-  /camera/camera/aligned_depth_to_color/camera_info \
-  /camera/camera/color/image_raw/compressed \
-  /camera/camera/color/camera_info \
-  /camera/camera/extrinsics/depth_to_color \
-  /tf /tf_static
-```
-- 제외: `depth/color/points`(파생물·초대용량), `*/theora`·`*/compressedDepth`(재생 시 디코드 실패 잦음), `*/metadata`, color raw
-- `color/camera_info` 필수 — 없으면 compressed 컬러를 못 쓴다
-- 약 50MB/s → zstd 후 1.5~2GB/분. **60초 × 5장면**(빈 테이블 / 장애물 1개 / 장애물 여러 개 / 사람 손 진입 / 로봇 동작 중)이 10분 연속 1개보다 낫다
-- 녹화 중 **카메라→base 임시 static TF를 띄우지 말 것** — bag의 `/tf_static`에 가짜 값이 박히면 나중에 진짜 캘리브 값과 충돌한다
-- USB로 이동. git 금지(`*.db3`/`*.mcap` 이미 ignore)
+> ⚠️ **녹화 런치·토픽 목록·재생 절차는 여기 두지 않는다. 단일 출처는 [[ws/cobot2/rosbag-d435i]] §A다.**
+> 예전 이 자리에 있던 `rs_align_depth_launch.py` 기반 명령은 **폐기됐다** — 그 런치엔 `camera_calib_tf`가
+> 없어 `base_link→camera_link` 없는 bag 4.8GB가 나왔다. 현행은 `camera.launch.py`(= `reals` alias)다.
+> 녹화 중 **임시 static TF를 띄우지 말 것**(bag의 `/tf_static`에 가짜 값이 박힌다)만 여기 남긴다.
 
 ## 문서 위치 규칙
 - 작업 문서는 **`md/` 한 곳만** 쓴다 (커밋됨). `docs/`는 PDF 서고 전용이며 ignore.

@@ -3,6 +3,9 @@
 **작성:** 2026-08-03 | **대상 스택:** `m0609_rg2_moveit` (MoveIt2 OMPL + `occupancy_map_monitor/PointCloudOctomapUpdater`)
 **목적:** 오늘 수행한 3D octomap 생성→경로계획→회피 과정을 기록해 두고, GPU PC 확보 후 cuRobo와 같은 조건으로 비교할 수 있는 기준선(baseline)을 남긴다.
 
+> 📁 문서 지도: [[ws/cobot2/README]] · 계획서: [[ws/cobot2/plans/2026-08-03-octomap-integration]](이 문서가 그 결과다)
+> · 실측 사실: [[ws/cobot2/context/constraints]] · **이 문서에서 발견된 오류: [[ws/cobot2/errors-log]] §1·2·7·8**
+
 > ⚠️ 이 문서의 "수행 과정"은 사용자 구두 보고 + 이 세션에서 `git diff`로 확인한 설정 변경을 근거로 재구성했다.
 > `ros2 topic hz` / `tf2_echo` / RViz 스크린샷 등을 **이 턴에서 직접 실행해 확인한 것은 아니므로** 3절에 검증 상태를 분리해 표시한다.
 
@@ -50,12 +53,16 @@ RealSense (/camera/camera/depth/color/points, pointcloud.enable=true)
 | 파라미터 | 값 | 근거 |
 |---|---|---|
 | `point_cloud_topic` | `/camera/camera/depth/color/points` | RealSense가 직접 발행, `depth_image_proc` 불필요 |
-| `max_range` | 1.5 m | 카메라~로봇 약 1.48 m, 뒷벽 오탐 방지 (오늘 세션 중 2.5→1.5로 재조정) |
-| `point_subsample` | 4 | GPU 없는 i7-10510U에서 CPU 부하 축소 (오늘 세션 중 1→4로 조정) |
-| `padding_offset` | 0.1 m | self-filter 잔여점 방지 (오늘 세션 중 0.03→0.1로 조정 — 자기 팔이 장애물로 잡히는 문제 대응) |
-| `max_update_rate` | 1.0 Hz | `ros2_control_node` 상시 204% 점유와 경합 방지 |
+| `max_range` | **2.0 m** | 2.5 → 1.5(CPU 절감 목적) → **2.0(되돌림)**. 1.5는 카메라~base 실측 **1.684 m**보다 작아 베이스 부근을 잘라내고 있었고, CPU 이득도 체감되지 않았다(사용자 확인). **CPU는 `point_subsample`·카메라 프로파일에서 줄인다** — 비용은 거리가 아니라 점 개수에 비례한다. 경위: [[ws/cobot2/errors-log]] §7 |
+| `point_subsample` | **3** | GPU 없는 i7-10510U에서 CPU 부하 축소 (1→3) |
+| `padding_offset` | 0.1 m | self-filter 잔여점 방지 (0.03→0.1 — 자기 팔이 장애물로 잡히는 문제 대응) |
+| `padding_scale` | **2.0** | 위와 같은 목적의 배율 손잡이 (1.0→2.0) |
+| `max_update_rate` | 1.0 Hz | `ros2_control_node` 상시 204% 점유와 경합 방지 (변경 없음) |
 | `octomap_frame` | `base_link` | `world`는 planning scene이 모르는 프레임 (constraints.md 실측) |
-| `octomap_resolution` | 0.02 m | |
+| `octomap_resolution` | 0.02 m | 변경 없음. 현재는 캘리브 잔차(40.1 mm)가 이보다 커서 정밀도를 캘리브가 지배한다 |
+
+`moveit.launch.py`에 **오늘 신설**: `default_object_padding: 0.02` / `default_robot_padding: 0.0`
+(`robot_description_planning`에 주입. scene object 충돌 판정에 더할 여유 거리 — self-filter의 `padding_*`과 별개다).
 
 ### `camera.launch.py`
 | 항목 | 값 |
@@ -65,7 +72,7 @@ RealSense (/camera/camera/depth/color/points, pointcloud.enable=true)
 | 미세보정 인자 (오늘 신규 추가) | `dxyz`(m, base_link 축) / `drpy`(deg, camera_link 축) — 드라이버는 그대로 두고 TF만 재발행해 맞출 수 있게 함 |
 
 ### OMPL (`ompl_planning.yaml`)
-- 플래너 후보: `AnytimePathShortening`, `SBL`, `EST`, `LBKPIECE`, `BKPIECE`, `KPIECE`, `RRT` 계열 등 — 기본 파라미터, 이번 스프린트에서 개별 튜닝은 아직 안 함(사프린트 계획 Day3 P1 항목).
+- 플래너 후보: `AnytimePathShortening`, `SBL`, `EST`, `LBKPIECE`, `BKPIECE`, `KPIECE`, `RRT` 계열 등 — 기본 파라미터, 이번 스프린트에서 개별 튜닝은 아직 안 함(스프린트 계획 Day3 P1 항목).
 - `joint_limits.yaml`: `default_velocity/acceleration_scaling_factor = 1.0` (실기 실행 시 별도로 `/move_group` 파라미터를 0.2~0.3으로 낮춤 — 코드 기본값이 아니라 런타임 안전 조치).
 
 ---

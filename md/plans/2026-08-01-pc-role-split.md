@@ -2,6 +2,8 @@
 
 **작성:** 2026-08-01 | **관련:** [[ws/cobot2/M0609_perception_motion_sprint_plan]]
 
+> 📁 문서 지도: [[ws/cobot2/README]] · GPU 항목의 착수 조건은 [[ws/cobot2/plans/2026-08-03-gpu-dependent-candidates]].
+>
 > 스프린트 계획을 **어느 PC에서 / 실기 없이 되는지** 기준으로 재분류한다.
 > 스프린트 내용 자체는 원본 문서를 보고, 여기서는 배치와 동기화만 다룬다.
 

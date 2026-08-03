@@ -2,6 +2,9 @@
 
 **작성일:** 2026-08-03
 **전제:** `M0609_perception_motion_sprint_plan.md` §6-2에서 보류된 항목들. 이 랩탑은 Intel UHD 내장뿐, NVIDIA GPU 없음(`constraints.md` 확인 완료). **이 문서의 어떤 명령도 GPU 머신을 확보하기 전엔 실행하지 않는다** — 지금 할 일은 GPU가 생겼을 때 바로 시작할 수 있도록 순서·인터페이스·검증 기준만 정해두는 것.
+> 📁 문서 지도: [[ws/cobot2/README]] · 상태: **⏸ 보류 — GPU 머신 확보 전엔 어떤 명령도 실행하지 않는다.**
+> CPU로 되는 구간은 [[ws/cobot2/plans/2026-08-01-pc-role-split]], 현재 스택 기준선은 [[ws/cobot2/review_moveit]].
+
 **현재 상태:** 카메라 파이프라인(D435i/C270)과 MoveIt2 Octomap 충돌 회피 확인 완료 → GPU-불필요 구간(§6-1)은 이미 실기 검증된 스택 위에 있음. 이 문서는 그 위에 얹을 GPU 구간만 다룬다.
 
 ---

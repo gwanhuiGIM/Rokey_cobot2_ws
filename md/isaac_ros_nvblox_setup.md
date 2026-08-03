@@ -1,5 +1,10 @@
 # Phase 1: Isaac ROS + nvblox 셋업 가이드 (D435i, RTX 4050/4060 노트북)
 
+> ⏸ **GPU PC 전용 문서다.** 이 랩탑(i7-10510U, Intel UHD)엔 NVIDIA GPU가 없어 실행 불가 —
+> 제목의 "RTX 4050/4060 노트북"은 이 머신이 아니다. 착수 조건은
+> [[ws/cobot2/plans/2026-08-03-gpu-dependent-candidates]] §0. 충돌 회피는 이미 Octomap이 담당 중이라
+> nvblox는 **시각화 전용·우선순위 낮음**이다. 문서 지도: [[ws/cobot2/README]]
+
 목표: 로봇 없이, D435i만으로 nvblox의 실시간 3D 재구성을 눈으로 확인한다.
 
 ---

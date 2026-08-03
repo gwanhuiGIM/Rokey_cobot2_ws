@@ -1,5 +1,9 @@
 # 2026-08-03 계획 — octomap 결합 + self-filter 검증
 
+> ✅ **완료(2026-08-03).** 이 문서는 계획 이력으로만 보존한다 — **결과·채택값·검증 상태는
+> [[ws/cobot2/review_moveit]]가 소유한다.** 여기 적힌 값(`padding_offset` 0.03 등)은 실행 전 목표치라
+> 현재 파일과 다르다. 문서 지도: [[ws/cobot2/README]]
+
 **작성:** 2026-08-02 | **관련:** [[ws/cobot2/state]] · [[ws/cobot2/context/constraints]] · [[ws/cobot2/M0609_perception_motion_sprint_plan]]
 
 ---
