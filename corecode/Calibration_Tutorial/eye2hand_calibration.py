@@ -36,6 +36,8 @@ Calibrate()가 푸는 AX=XB의 해 X가 곧 C = T_base<-cam 이다.
 - 출력 npy는 그대로 static TF의 base_link->camera_link로 들어간다
   (scripts/calib_npy_to_tf.py, 단위 mm->m + OpenCV optical->REP-103 변환은 거기서 한다).
 검산: `python3 eye2hand_calibration.py --selfcheck` — 합성 데이터로 C를 복원해본다.
+수집 진단: `python3 eye2hand_calibration.py --pose-quality` — 풀기 전에 자세 분포만 채점한다
+           (보드 기울기 / 상대회전 축 다양성 / 거리 다양성). 읽기 전용, npy를 건드리지 않는다.
 --------------------------------------------------------------------------------
 
 주의:
@@ -77,6 +79,12 @@ FACTORY_DIST = np.zeros((1, 5))
 
 # False로 두면 예전처럼 이미지셋 추정값을 쓴다. 어느 쪽이 나은지 잔차로 비교할 수 있게 남긴다.
 USE_FACTORY_INTRINSICS = True
+
+# 자세쌍의 상대회전 A가 이보다 작으면 logR()이 0/0에 가까워 회전 추정에 기여를 못 한다.
+# 두 곳(report_residuals / report_pose_quality)에서 같은 양을 재므로 한 곳에 둔다 —
+# 예전엔 15°와 30°로 갈려 있어 같은 자세쌍이 한쪽에선 정상, 한쪽에선 회전부족이었다.
+# UNVERIFIED: digest의 "자세마다 회전 30° 이상"에서 온 값이고 실측 근거는 없다.
+A_ROT_MIN_DEG = 30.0
 
 # 1) 로봇 그리퍼의 절대 좌표 (x, y, z, rx, ry, rz)를 행렬로 변환하는 함수
 def get_robot_pose_matrix(x, y, z, rx, ry, rz):
@@ -348,7 +356,7 @@ def report_residuals(A, B, theta, b_x):
         # 두 조건은 배타가 아니다. 예전엔 회전부족을 먼저 보고 else로 넘겨서,
         # **병진잔차가 가장 큰 쌍이 '회전 부족'이라는 약한 라벨만 받고** 빼야 할 후보에서
         # 빠졌다(2026-08-03 리뷰: 143.7 mm 쌍이 그렇게 가려졌다). 둘 다 붙인다.
-        flag = ('  ← 회전부족' if a_mag < 15 else '') + ('  ← 병진잔차 큼' if e_t > 30 else '')
+        flag = ('  ← 회전부족' if a_mag < A_ROT_MIN_DEG else '') + ('  ← 병진잔차 큼' if e_t > 30 else '')
         print(f"  {i:3d}  {a_mag:6.1f}°  {e_rot:7.2f}°  {e_t:7.1f} mm{flag}")
         rot_res.append(e_rot)
         trans_res.append(e_t)
@@ -378,6 +386,169 @@ def report_residuals(A, B, theta, b_x):
               "         (그 쌍들을 빼면 결과가 수십 mm 옮겨간 전례가 있다 — 무시하고 쓰지 말 것)")
     else:
         print("⚠️ octomap voxel(20 mm)보다 크다. octomap 정밀도를 캘리브가 지배한다.")
+
+
+def report_pose_quality(samples, A_list):
+    """수집한 자세가 캘리브에 쓸 만한 분포인지 **결과를 풀기 전에** 채점한다 (읽기 전용).
+
+    왜 필요한가: 잔차(report_residuals)는 이미 푼 뒤에야 나온다. 20분 걸려 수집하고
+    "40 mm 불합격"을 보는 대신, 수집 직후에 자세 분포만 보고 재수집을 결정하려는 것이다.
+    2026-08-03 수집은 34장으로 26장보다 **늘렸는데 잔차가 나빠졌다** — 양이 아니라
+    분포의 문제였고, 그 분포를 보는 눈이 코드에 없었다.
+
+    두 가지 조건은 **별개**다. 섞어 읽지 말 것:
+
+      [1] 보드 기울기 (Zhang 1998, MSR-TR-98-71) — *내부파라미터* 추정 조건.
+          Proposition 1: "If the model plane at the second position is parallel to its
+          first position, then the second homography does not provide additional
+          constraints." 평행한 평면은 무한원면에서 같은 circular point와 만나므로
+          같은 제약을 반복할 뿐이다. 논문 실험(Sect 5.1): θ=5°에서 시행의 40%가 실패,
+          "Best performance seems to be achieved with an angle around 45 deg".
+          ⚠️ 단 논문 각주: 각도가 커지면 foreshortening으로 코너검출이 나빠진다(실험에
+          미반영). 그래서 45°가 상한 목표지 클수록 좋은 게 아니다.
+          여기서 재는 θ = 보드 법선과 카메라 광축(z) 사이 각 = 보드면과 이미지면 사이 각.
+
+      [2] 상대회전 A의 축 다양성 — *AX=XB(Park-Martin)* 조건. 이쪽이 지금 잔차를 지배한다
+          (USE_FACTORY_INTRINSICS=True라 [1]은 결과에 직접 안 들어간다).
+          Calibrate()가 alpha3 = cross(alpha, alpha2)로 세 번째 축을 만드는데,
+          인접한 두 상대회전의 축이 평행하면 이 외적이 0벡터가 되어 M의 rank가 준다.
+
+    조인트를 크게 움직이는 것과 무관하다. J1을 크게 휘둘러도 손목이 보정하면 보드는
+    카메라에 대해 그대로다. 손목(J4/J5/J6)으로 보드를 비트는 것이 두 조건 모두의 수단이다.
+    """
+    # UNVERIFIED: 20/50°(기울기 목표대), 30°(A 회전량), 0.95(축 평행 판정), 10°(법선 쌍각),
+    # 0.10(법선 rank), 5°(축이 의미를 갖는 최소 회전량)은 구현자가 정한 값이다.
+    # 근거가 있는 건 Zhang의 45°(위 인용)와 digest의 "회전 30° 이상"뿐이다.
+    TILT_LO, TILT_HI, AXIS_PARALLEL, NORMAL_MIN = 20.0, 50.0, 0.95, 10.0
+    A_MIN = A_ROT_MIN_DEG    # report_residuals와 같은 임계값을 쓴다(모듈 상단)
+    RANK_MIN = 0.10          # 법선 산포의 최소/최대 특이값 비. 작으면 법선이 한 평면·한 선에 눕는다
+    AXIS_VALID = 5.0         # 이보다 작은 회전의 축은 로봇 반복도 노이즈다 — 축으로 취급하지 않는다
+
+    if len(samples) < 2:
+        print(f"\n[자세 품질] 코너검출된 장이 {len(samples)}개뿐이다 — 분포를 잴 수 없다. "
+              "보드 제원(내부 코너 수/칸 크기)과 이미지를 먼저 확인할 것.")
+        return
+
+    print("\n[자세 품질] 푸는 것과 무관한 수집 분포 진단 (읽기 전용)")
+    fx_note = ("공장 내부파라미터 사용 중(USE_FACTORY_INTRINSICS=True) — "
+               "[1]은 내부파라미터 추정에 직접 반영되지 않는다. 그래도 보는 이유: "
+               "기울기가 0에 가까우면 solvePnP의 평면 자세 추정이 불안정해져 B가 나빠진다."
+               if USE_FACTORY_INTRINSICS else
+               "추정 내부파라미터 사용 중 — [1]이 결과에 직접 들어간다.")
+    print(f"  ※ {fx_note}")
+    print("\n  [1] 보드 기울기 — 이미지면 대비 보드면 각도 (Zhang: 45° 부근 최적, 0°는 퇴화)")
+    print("    장   기울기   거리      비고")
+    tilts, dists, n_behind = [], [], 0
+    for i, (path, T_cam2board) in enumerate(samples):
+        # 보드 법선: 보드 프레임의 +z를 카메라 프레임으로. 광축은 카메라 프레임의 +z.
+        n_cam = T_cam2board[:3, :3] @ np.array([0.0, 0.0, 1.0])
+        # 코너 10x7(짝x홀)이라 180° 모호성이 없어 법선은 카메라 쪽(n_z>0)이어야 한다.
+        # 예전엔 abs()로 예각을 취했는데, 그러면 n_z<0인 장 — 즉 **PnP가 틀린 장** — 이
+        # 그럴듯한 예각으로 바뀌어 조용히 통과한다(cross-review 지적). 세어서 드러낸다.
+        behind = n_cam[2] < 0
+        n_behind += behind
+        tilt = np.degrees(np.arccos(np.clip(abs(n_cam[2]), 0.0, 1.0)))
+        dist = np.linalg.norm(T_cam2board[:3, 3])
+        flag = ('  ← 거의 평행(퇴화)' if tilt < TILT_LO else
+                '  ← 과도(코너검출 열화)' if tilt > TILT_HI else '')
+        flag += '  ← ⚠️ 법선이 카메라 반대쪽(PnP 의심)' if behind else ''
+        print(f"    {i:3d}  {tilt:6.1f}°  {dist:7.1f} mm{flag}   {Path(path).name[:28]}")
+        tilts.append(tilt)
+        dists.append(dist)
+    n_flat = sum(t < TILT_LO for t in tilts)
+    print(f"    중앙값 {np.median(tilts):.1f}°, 범위 {min(tilts):.1f}~{max(tilts):.1f}°"
+          f"   (20° 미만: {n_flat}/{len(tilts)}장)")
+
+    # 위의 기울기만으로는 Zhang의 조건을 못 잰다. 기울기는 법선의 극각(polar)만 보므로
+    # **둘 다 43°인데 법선 방향이 같은**(= 서로 평행한) 두 장을 통과시킨다.
+    # Proposition 1이 금지하는 건 "평평함"이 아니라 "서로 평행함"이다 → 법선 쌍각을 직접 잰다.
+    normals = np.array([T[:3, :3] @ np.array([0.0, 0.0, 1.0]) for _, T in samples])
+    pair_angles = [
+        np.degrees(np.arccos(np.clip(abs(float(np.dot(normals[i], normals[j]))), 0.0, 1.0)))
+        for i in range(len(normals)) for j in range(i + 1, len(normals))
+    ]
+    n_par_board = sum(a < NORMAL_MIN for a in pair_angles)
+    frac_par = n_par_board / len(pair_angles)
+    print(f"    법선 쌍각(서로 평행한가): 최소 {min(pair_angles):.1f}°, 중앙값 "
+          f"{np.median(pair_angles):.1f}°   ({NORMAL_MIN:.0f}° 미만 쌍: {n_par_board}"
+          f"/{len(pair_angles)} = {100 * frac_par:.0f}%)")
+
+    # 쌍각만으로는 부족하다(cross-review 지적): 손목 한 축만 흔들면 법선들이 **한 평면을
+    # 쓸고 지나가** 쌍각은 전부 크게 나오는데도 내부파라미터가 ambiguous하다
+    # (Sturm-Maybank류 퇴화). 법선 집합이 3차원을 채우는지 특이값으로 직접 본다.
+    sv = np.linalg.svd(normals, compute_uv=False)
+    rank_ratio = float(sv[2] / sv[0])
+    print(f"    법선 산포 특이값 {np.array2string(sv, precision=2)} → 최소/최대 "
+          f"{rank_ratio:.3f}   ({RANK_MIN} 미만이면 법선이 한 평면·한 선에 눕는다)")
+    print(f"    거리 범위 {min(dists):.0f}~{max(dists):.0f} mm "
+          f"(비 {max(dists) / min(dists):.2f}배 — 1.0에 가까우면 fx/Z 스케일 모호성)")
+
+    print("\n  [2] 상대회전 A — 회전량과 인접 축의 평행도 (Park-Martin의 rank 조건)")
+    print("    쌍   A회전량   인접축각   비고")
+    axes, mags = [], []
+    for Ai in A_list:
+        Ra = Ai[:3, :3]
+        ang = np.degrees(np.arccos(np.clip((np.trace(Ra) - 1) / 2, -1, 1)))
+        v = np.array([Ra[2, 1] - Ra[1, 2], Ra[0, 2] - Ra[2, 0], Ra[1, 0] - Ra[0, 1]])
+        n = np.linalg.norm(v)
+        # 가드가 부동소수 하한(1e-9)뿐이면 θ=1.2°짜리 축도 통과해 표에 소수점까지 찍힌다 —
+        # 그 축은 로봇 반복도 노이즈다(cross-review 지적). **물리적 하한**으로 자른다.
+        valid = ang >= AXIS_VALID and n > 1e-9
+        axes.append(v / n if valid else np.zeros(3))
+        mags.append(ang)
+    n_par = 0
+    for i in range(len(A_list)):
+        if i + 1 < len(A_list) and np.linalg.norm(axes[i]) > 0 and np.linalg.norm(axes[i + 1]) > 0:
+            c = abs(float(np.dot(axes[i], axes[i + 1])))
+            sep = f"{np.degrees(np.arccos(np.clip(c, 0, 1))):6.1f}°"
+            par = c > AXIS_PARALLEL
+            n_par += par
+        else:
+            sep, par = "  회전<5°" if mags[i] < AXIS_VALID else "     -", False
+        flag = ('  ← 회전부족' if mags[i] < A_MIN else '') + ('  ← 인접축 평행(외적≈0)' if par else '')
+        print(f"    {i:3d}  {mags[i]:6.1f}°  {sep}{flag}")
+    n_small = sum(m < A_MIN for m in mags)
+    print(f"    중앙값 {np.median(mags):.1f}°   (30° 미만: {n_small}/{len(mags)}쌍, "
+          f"인접축 평행: {n_par}쌍)")
+
+    # 판정은 **계산한 지표를 전부** 쓴다. 예전 버전은 n_par_board(법선 쌍각)와 TILT_HI를
+    # 계산해놓고 처방에서 n_flat만 봤다 — 계산한 것과 판정하는 것이 달랐다(cross-review 지적).
+    n_hi = sum(t > TILT_HI for t in tilts)
+    findings = []
+    if n_flat > len(tilts) / 3:
+        findings.append("보드가 카메라와 거의 평행한 장이 많다 → 손목으로 20~50° 비틀어 재수집.")
+    if frac_par > 0.25:
+        findings.append(f"서로 평행한 보드 자세쌍이 {100 * frac_par:.0f}%다 (Zhang Prop 1: "
+                        "평행하면 새 제약을 못 준다) → 법선 방향 자체를 흩을 것.")
+    if rank_ratio < RANK_MIN:
+        findings.append(f"법선이 3차원을 못 채운다(비 {rank_ratio:.3f}) → 손목 한 축만 흔든 "
+                        "수집이다. 회전축을 두 축 이상으로 바꿀 것.")
+    if n_hi > len(tilts) / 3:
+        findings.append(f"기울기 {TILT_HI:.0f}° 초과가 {n_hi}장 → foreshortening으로 코너검출이 "
+                        "나빠진다(Zhang 각주). 45°를 넘기지 말 것.")
+    if n_behind:
+        findings.append(f"법선이 카메라 반대쪽인 장 {n_behind}개 → 그 장의 solvePnP가 틀렸다. "
+                        "빼고 재계산할 것.")
+    if n_small > len(mags) / 3 or n_par > len(mags) / 3:
+        findings.append(f"상대회전이 작거나({n_small}쌍) 축이 겹친다({n_par}쌍) → 자세마다 "
+                        f"{A_MIN:.0f}° 이상, 회전축을 X/Y/Z로 바꿔가며.")
+    if max(dists) / min(dists) < 1.3:
+        findings.append("보드 거리가 한 값에 몰려 있다 → 내부파라미터를 재추정할 거면 거리도 흩을 것.")
+
+    # 마지막 줄만 읽는 사람에게 잘못된 통과 신호를 주지 않는다 — report_residuals와 같은 이유로
+    # [판정]을 명시한다. 임계값 대부분이 UNVERIFIED라는 사실도 여기서 한 번 더 말한다.
+    print("\n  [처방]")
+    for f in findings:
+        print(f"    · {f}")
+    print(f"\n  [판정] 분포 결함 {len(findings)}건 — ", end='')
+    if not findings:
+        print("뚜렷한 결함 없음. 잔차가 크면 원인은 분포 밖에 있다\n"
+              "         (보드 강성/평면도, posx 기록 시점, square_size, 카메라 마운트 흔들림).")
+    else:
+        print("위 항목을 고쳐 재수집할 것.")
+    print("  ※ 이 판정은 **수집 분포만** 본다. 정확도의 근거가 아니다 — 잔차는 "
+          "--pose-quality 없이 돌려 report_residuals로 확인할 것.\n"
+          "  ※ 임계값 대부분이 코드 주석의 UNVERIFIED다. 현장 요구정밀도로 교체할 것.")
 
 
 def _selfcheck():
@@ -415,7 +586,7 @@ def _selfcheck():
     print("selfcheck OK — X = T_base<-cam 이 맞고, G(판↔그리퍼)는 소거된다")
 
 
-def main(save=True):
+def main(save=True, pose_quality=False):
     # ---- 입력 로드 ----------------------------------------------------------
     data = json.load(open(DATA_DIR / "calibrate_data.json"))   # data_recording.py 산출물
     robot_poses = np.array(data["poses"])                      # (N, 6) = x,y,z,rx,ry,rz (mm, deg, ZYZ)
@@ -455,6 +626,7 @@ def main(save=True):
     t_camera2checker_list = []    # (미사용 — 유지만)
     R_checker2camera_list = []    # T_board<-cam 의 회전부
     t_checker2camera_list = []    # 〃 병진부
+    samples = []                  # (경로, T_cam<-board) — 자세 품질 진단용
 
     for img_path, pose in zip(image_paths, robot_poses):
         # 1) 로봇 posx → T_base<-gripper (판을 물고 있는 그리퍼의 베이스 기준 pose)
@@ -486,6 +658,7 @@ def main(save=True):
         T_cam2checker[:3, :3] = R_cam2checker
         T_cam2checker[:3, 3] = t_cam2checker.flatten()          # mm (square_size 단위를 그대로 따라감)
         T_checker2cam = np.linalg.inv(T_cam2checker)
+        samples.append((img_path, T_cam2checker.copy()))
 
         R_checker2camera_list.append(T_checker2cam[:3, :3].copy())
         t_checker2camera_list.append(T_checker2cam[:3, 3].copy())
@@ -509,6 +682,12 @@ def main(save=True):
         B_i = np.dot(inv(T_checker2cam_list[i]), T_checker2cam_list[i + 1])     # 카메라 쪽 상대 이동
         A_list.append(A_i)
         B_list.append(B_i)
+
+    # --pose-quality: 분포만 채점하고 끝낸다. 푸는 것도, 저장도 하지 않는다 —
+    # "읽기 의도의 실행에 쓰기 부작용을 두지 않는다"(--no-save를 만든 것과 같은 이유).
+    if pose_quality:
+        report_pose_quality(samples, A_list)
+        return
 
     theta, b_x = Calibrate(A_list, B_list)                      # AX=XB 풀이
     X = np.eye(4)
@@ -544,8 +723,10 @@ if __name__ == "__main__":
         # 왜 있나: 2026-08-03에 리뷰용으로 이 스크립트를 "읽기만" 하려고 돌렸다가
         # 실기 TF의 소스인 T_cam2base.npy가 조용히 덮어써졌다(값은 결정적이라 같았지만
         # 운이 좋았을 뿐이다). 진단 실행에 쓰기 부작용이 있는 게 원인이므로 끌 수 있게 한다.
+        # --pose-quality: 수집 분포만 채점(읽기 전용). 풀지도 저장하지도 않는다.
+        pose_quality = "--pose-quality" in sys.argv
         save = "--no-save" not in sys.argv
-        args = [a for a in sys.argv[1:] if a != "--no-save"]
+        args = [a for a in sys.argv[1:] if a not in ("--no-save", "--pose-quality")]
         if any(a.startswith("-") for a in args):       # -h 등 모르는 플래그를 디렉토리로 읽지 않게
             raise SystemExit(__doc__)
         # 버전 디렉토리를 인자로 받는다: python3 eye2hand_calibration.py data1
@@ -554,4 +735,4 @@ if __name__ == "__main__":
             DATA_DIR = Path(__file__).resolve().parent / args[0]
             if not DATA_DIR.is_dir():
                 raise SystemExit(f"디렉토리 없음: {DATA_DIR}")
-        main(save=save)
+        main(save=save, pose_quality=pose_quality)
