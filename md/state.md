@@ -2,7 +2,7 @@
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-02
+**최종 갱신:** 2026-08-03
 
 ## 계정/환경
 - 공유 랩탑(`rokey`)의 `kimkh` 계정, `cobot2_ws`.
@@ -33,13 +33,23 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
+- ⛔ **캘리브 수집이 막혀 있다 (2026-08-03)**: `data_recording.py`의 `set_tool('Tool Weight')`가 이름이 맞는데도
+  `-1`을 돌려줘 `SystemExit`. 등록명은 실기로 확인됨(`Tool Weight` / `GripperDA_v1`). 가설·배제 순서는
+  [[ws/cobot2/context/constraints]] "수집 시 주의" 절. **다음 실기 세션의 1번 항목.**
+- **`data_recording.py` 알려진 버그 2건(미수정)**: `:48` `DR_init.dsr__id` 오타(언더바 누락 → 로그의 `_robot_id =`가
+  빈 값. `_srv_name_prefix`가 어차피 `''`라 동작엔 무해), `:134` `cap.release()`가 `USE_REALSENSE_TOPIC=True`일 때
+  `None`이라 ESC 종료 시 크래시(저장은 끝난 뒤라 데이터는 안 날아감).
+- **캘리브 사본 480 mm 사고 → symlink로 해결 (2026-08-03)**. `config/T_cam2base.npy`가 이제 `corecode/` 정본을
+  가리키는 symlink다. 재캘리브 후 `cp` 불필요. 경위·남은 함정(merge-install)은 [[ws/cobot2/context/constraints]].
+- **미스테이징 변경분(리뷰 지적 있음)**: `sensors_3d.yaml`의 `max_range: 1.5`(주석은 2.5 — 로봇 뒤쪽이 잘린다),
+  `padding_offset: 0.1`(링크 주변 10 cm 삭제 → 집으려는 물체까지 지워질 수 있다). 실측 후 확정할 것.
 - **GPU PC에 GPU 있음 — 사용자 확인 (2026-08-02).** 스프린트 Day4~5(nvblox·FoundationPose·GraspGenX) 재작성 리스크는 해소됐다.
   단 **`docker info | grep -i runtime`으로 nvidia-docker 런타임이 잡히는지는 아직 미확인** — nvblox 컨테이너 빌드 전에 확인할 것. GPU 모델·VRAM도 미확인(FoundationPose VRAM 요구량 판단에 필요).
 - 하드웨어(M0609 + RG2 + D435i + C270)는 `.bashrc` alias 추론이며 실기로 재확인되지 않음.
 - **D435i depth rosbag 미확보** — 이게 있어야 개인PC에서 실기 없이 Octomap·플래너·상태머신 개발 가능. 절차는 아래 "출근 후 D435i 세션" 참조.
 - **카메라 마운트 강성 미확보** — 견고한 고정이 아직 어려움. 캘리브는 **잠정(provisional)**으로 취급하고, Day4 인식 정확도 실측 검증은 마운트 확정 후로 미룬다. 개발용 TF로는 잠정값으로 충분하다.
 - **Day4 인식 방식 변경(2026-08-02)**: ray-plane intersection → **FoundationPose**(6D pose), 하드코딩 그립 → **GraspGenX**. 평면 가정이 사라지는 건 이득이지만 **GPU 의존이 커졌다** — Day4는 GPU PC 전용이 된다. `GraspGenX` 저장소는 실재 미확인(`NVlabs/GraspGen`은 확인됨).
-- **캘리브 방식 변경(2026-08-02)**: `easy_handeye2` → `corecode/Calibration_Tutorial`(`eye2hand_calibration.py` / `handeye_calibration.py`). 두 알고리즘 모두 합성 데이터로 정답 복원 확인(오차 ~1e-13). npy(mm) → static TF(m) 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`. **미해결: `data_recording.py`가 `set_tcp` 후의 `posx`를 기록하므로 결과의 부모 프레임이 flange가 아니라 TCP다** — 수집 전에 정할 것.
+- **캘리브 방식 변경(2026-08-02)**: `easy_handeye2` → `corecode/Calibration_Tutorial`(`eye2hand_calibration.py` / `handeye_calibration.py`). 두 알고리즘 모두 합성 데이터로 정답 복원 확인(오차 ~1e-13). npy(mm) → static TF(m) 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`. ~~미해결: 부모 프레임이 flange냐 TCP냐~~ → **해결(2026-08-03)**: `RECORD_IN_FLANGE_FRAME` 플래그로 노출, 기본 `False`(TCP 기준). eye-to-hand에서는 판↔그리퍼 변환이 AX=XB에서 소거되어 **어느 쪽이든 결과가 같다**(`eye2hand_calibration.py --selfcheck`로 확인). `False`인 이유는 정확도가 아니라 이후 pick 코드와 프레임을 맞추기 위해서다.
 - **Day1.5 압축 경로 신설** — 캘리브·인식 전부 생략하고 "장애물 놓으면 궤적이 바뀐다"만 보여주는 시연용 경로. GPU 불필요, 개인PC 가능. 임시 static TF를 쓰므로 **rosbag 녹화와 절대 겹치면 안 된다.**
 - **좌표 규약 버그 발견·수정 (2026-08-02)** — npy는 OpenCV **optical** 규약인데 ROS `camera_link`(body 규약)로 발행해 클라우드가 로봇 옆으로 90° 튀었다. `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`가 이제 기본 보정한다. **`inv(T)` 문제가 아니었다** — 규약을 먼저 의심할 것. 채점표는 [[ws/cobot2/context/constraints]].
 - **octomap_rviz_plugins 미설치** — `/octomap_binary`·`/octomap_full`을 RViz에서 볼 수 없다. 당장은 `/octomap_point_cloud_centers`(PointCloud2)로 우회 중. `topic_tools`도 미설치(throttle 불가 → 카메라 프로파일에서 줄인다).
@@ -104,50 +114,21 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
   **동시에 명령하지 말 것.**
 - ⚠️ `realsense-viewer`가 USB를 독점해 ROS 카메라 노드를 죽인다 — 증상이 "TF 프레임 없음"으로 나와 오진 유발. 뷰어 먼저 닫을 것.
 
-## 출근 후 D435i 세션 (순서 고정)
+## D435i rosbag 세션
 
-**rosbag → 캘리브 순서로 한다.** 캘리브가 그날 제일 잘 깨지는 단계라, 먼저 하다 실패하면 빈손이 된다.
-캘리브 결과는 static TF 6개라서 bag 재생 시 `static_transform_publisher`로 나중에 얹을 수 있다 — depth 데이터 자체는 캘리브와 무관하게 유효하다.
+**명령어는 여기 두지 않는다 → [[ws/cobot2/rosbag-d435i]] §A(재녹화)·§5(재생)가 유일한 출처다.**
+2026-08-03에 못 쓰는 bag 4.8GB가 나왔다. 원인은 이 절과 `md/Personal_0801`이 둘 다
+`rs_align_depth_launch.py`를 지시했고, **그 런치엔 `camera_calib_tf`가 없다는 걸 몰랐던** 것이다.
+사본이 여러 곳이면 이런 오류를 한 번에 못 고친다. 명령을 여기 다시 붙여넣지 말 것.
 
-1. 카메라를 최종 위치에 **최대한 고정** + 마스킹테이프 표시 + 사진 (재현용)
-2. `ros2 topic list`로 토픽 이름 재확인 (아래는 2026-08-01 확인분)
-3. **rosbag 녹화** ← 여기서 개인PC 작업이 풀린다
-4. **eye-to-hand 캘리브** — 3~4 사이에 카메라를 건드리지 않는다 (건드리면 bag과 짝이 안 맞음)
-5. `T_cam2base.npy` → `config/handeye/`에 복사해 커밋 (파일명에 `_provisional`). `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`로 static TF 인자 생성
-
-### 녹화용 런치 (운용 설정과 다름 — 의도적)
-```bash
-ros2 launch realsense2_camera rs_align_depth_launch.py \
-  depth_module.depth_profile:=848x480x30 \
-  rgb_camera.color_profile:=848x480x30 \
-  initial_reset:=true \
-  align_depth.enable:=true \
-  pointcloud.enable:=false \
-  enable_rgbd:=false
-```
-- **color를 848x480으로 낮추는 이유**: `align_depth`는 depth를 **컬러 해상도로 리샘플**한다. color가 1280x720이면 aligned depth가 55MB/s(3.3GB/분)까지 뛴다. 맞추면 24MB/s. Octomap·플래너 개발에 720p depth는 과잉.
-- `pointcloud.enable:=false`: `/depth/color/points`는 ~390MB/s이고 depth+camera_info로 언제든 재생성되는 파생물이다.
-- `enable_rgbd:=false`: 개별 토픽을 다 녹화하므로 합본 메시지는 중복.
-- `initial_reset:=true`: USB 인식 꼬임 방지 — 유지.
-
-### 녹화 명령
-```bash
-ros2 bag record --compression-mode file --compression-format zstd \
-  -o d435i_$(date +%m%d_%H%M) \
-  /camera/camera/depth/image_rect_raw \
-  /camera/camera/depth/camera_info \
-  /camera/camera/aligned_depth_to_color/image_raw \
-  /camera/camera/aligned_depth_to_color/camera_info \
-  /camera/camera/color/image_raw/compressed \
-  /camera/camera/color/camera_info \
-  /camera/camera/extrinsics/depth_to_color \
-  /tf /tf_static
-```
-- 제외: `depth/color/points`(파생물·초대용량), `*/theora`·`*/compressedDepth`(재생 시 디코드 실패 잦음), `*/metadata`, color raw
-- `color/camera_info` 필수 — 없으면 compressed 컬러를 못 쓴다
-- 약 50MB/s → zstd 후 1.5~2GB/분. **60초 × 5장면**(빈 테이블 / 장애물 1개 / 장애물 여러 개 / 사람 손 진입 / 로봇 동작 중)이 10분 연속 1개보다 낫다
-- 녹화 중 **카메라→base 임시 static TF를 띄우지 말 것** — bag의 `/tf_static`에 가짜 값이 박히면 나중에 진짜 캘리브 값과 충돌한다
-- USB로 이동. git 금지(`*.db3`/`*.mcap` 이미 ignore)
+이 절에는 **명령이 아닌 것**만 남긴다:
+- 카메라를 최종 위치에 **최대한 고정** + 마스킹테이프 표시 + 사진 (재현용)
+- **카메라를 옮겼으면 재캘리브가 녹화보다 먼저다.** 낡은 `T_cam2base.npy` 상태로 녹화하면
+  bag에 가짜 `base_link→camera_link`가 박혀 **없는 것보다 나쁘다**.
+  ("rosbag → 캘리브" 순서는 npy가 없던 시절 규칙이다. 지금은 유효한 npy가 있다.)
+- 캘리브 산출물 `T_cam2base.npy` → `config/handeye/`에 `_provisional` 붙여 복사·커밋.
+  `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`로 static TF 인자 생성
+- bag은 USB로 이동. git 금지(`*.db3`/`*.mcap` 이미 ignore)
 
 ## 문서 위치 규칙
 - 작업 문서는 **`md/` 한 곳만** 쓴다 (커밋됨). `docs/`는 PDF 서고 전용이며 ignore.
@@ -157,5 +138,8 @@ ros2 bag record --compression-mode file --compression-format zstd \
 - **doosan-robot2 launch의 `model` 기본값이 `m1013`** — M0609 쓸 때마다 `model:=m0609` 명시 필요. `dsr_bringup2_{rviz,gazebo,mujoco,moveit}.launch.py` 모두 해당.
 - 시뮬 경로 3종 존재: virtual 모드(DRCF 에뮬레이터, `install_emulator.sh` 선행 필요), Gazebo(`dsr_gazebo2`), MuJoCo(`dsr_mujoco`).
 - RealSense D435I 도메인/지터 이슈는 [[ws/cobot2/context/constraints]]에 기록.
-- **D435i 토픽 네임스페이스는 `/camera/camera/...`** (2026-08-01 `ros2 topic list` 실측). 계획서 초안의 `/d435i/...`는 오기다. 토픽 이름은 **런치 명령이 정하지 마운트 방식(eye-in-hand/eye-to-hand)이 정하지 않는다** — 마운트를 바꿔도 이름은 그대로고 TF 부모 프레임만 바뀐다.
+- **D435i 토픽 네임스페이스는 `/camera/camera/...`** (2026-08-01 `ros2 topic list` 실측). 계획서 초안의 `/d435i/...`는 오기다. **런치와 무관하다** — `realsense2_camera_node` 자체 기본값이 name=`camera`+namespace=`camera`라, ws의 `camera.launch.py`처럼 `name=`/`namespace=`를 안 줘도 두 겹이 된다 (2026-08-03 `ros2 node list` → `/camera/camera` 재확인).
+- **bag의 쓸모는 용량이 아니라 tf_static이 정한다** (2026-08-03). 공식 `rs_align_depth_launch.py`로 찍은 `rosbag_modified/` 3개(4.8GB)는 `base_link→camera_link`가 없어 포인트클라우드를 로봇 좌표계에 못 올린다 — 그 런치엔 `camera_calib_tf`가 없기 때문. `reals`(ws 런치)로 찍은 159MB짜리가 더 쓸모 있다. 재생 시 `camera.launch.py driver:=false`로 TF만 보충하면 살릴 수 있다. 상세는 [[ws/cobot2/rosbag-d435i]] §4-5
+- **D435i IMU가 기본으로 켜져 있다** — `gyro/sample` 199 Hz 실발행(2026-08-03 `ros2 topic hz`). 드라이버 기본이 꺼짐일 거라는 추정은 틀렸다. `infra1`/`infra2`도 발행된다.
+- **토픽 이름은 마운트 방식(eye-in-hand/eye-to-hand)과 무관하다** — 마운트를 바꿔도 이름은 그대로고 TF 부모 프레임만 바뀐다. (2026-08-01에 "런치가 정한다"고 적었으나 위 항목대로 **런치와도 무관**하다. 런치가 정하는 건 이름이 아니라 **어떤 TF·스트림을 켜느냐**다 — 그게 4.8GB 사고의 실제 축이었다.)
 - `align_depth.enable:=true`일 때 `aligned_depth_to_color`의 해상도는 **depth가 아니라 color 프로파일을 따른다.** 대역폭 계산 시 주의.

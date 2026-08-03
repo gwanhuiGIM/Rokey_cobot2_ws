@@ -1,7 +1,8 @@
 # 실기/현장 제약 (실측 사실만 기록. 추측 금지)
 
 ## RealSense D435I (2026-08-01)
-- alias `reals` (`rs_align_depth_launch.py` + `align_depth.enable:=true enable_rgbd:=true pointcloud.enable:=true`, depth 848x480x30 / color 1280x720x30)는 **ROS_DOMAIN_ID를 지정하지 않으므로 기본값(비어있음 → 0)에서 뜬다.**
+- ⚠️ **`reals` alias가 2026-08-03 기준 `ros2 launch m0609_rg2_bringup camera.launch.py`로 바뀌었다**(사용자 확인). 아래 08-01 기록의 `rs_align_depth_launch.py` 설명은 **낡았다** — 이 낡은 줄을 근거로 공식 런치를 써서 `base_link→camera_link` 없는 bag 4.8GB를 찍은 사고가 있었다([[ws/cobot2/rosbag-d435i]] §4). 두 런치는 **다른 것을 준다**: ws 런치만 `camera_calib_tf`(캘리브 TF)와 IMU를 준다.
+- (2026-08-01, 구 alias 기준) `rs_align_depth_launch.py` + `align_depth.enable:=true enable_rgbd:=true pointcloud.enable:=true`, depth 848x480x30 / color 1280x720x30 조합은 **ROS_DOMAIN_ID를 지정하지 않으므로 기본값(비어있음 → 0)에서 뜬다.** 현 alias도 도메인을 지정하지 않는 건 동일.
 - `.bashrc`의 `rdm` alias는 `ROS_DOMAIN_ID=93`을 설정한다. 카메라(도메인 0)와 rqt/다른 터미널(도메인 93)이 섞이면 rqt에 토픽이 전혀 안 보인다 — 실측으로 확인(도메인 93에서 `ros2 topic list`는 `/parameter_events`, `/rosout`만 나옴).
 - CPU는 병목이 아님: `align_depth+enable_rgbd+pointcloud` 동시 실행 중에도 `load average 0.5~0.6`, realsense 노드 CPU 18.8%. 그런데도 `/camera/camera/color/image_raw`, `/rgbd`, `/depth/color/points`의 `ros2 topic hz`가 최소 간격(~0.031~0.033s, 30fps대)은 정상이면서 가끔 0.2~0.3s까지 벌어져 누적 평균이 계속 떨어짐 — USB/드라이버 쪽 간헐적 프레임 드롭으로 추정(미검증, CPU 원인은 배제됨).
 
@@ -46,7 +47,19 @@
 ### 수집 시 주의
 - **자세마다 회전을 충분히(30° 이상, 여러 축으로) 섞을 것.** 평행이동만 하면 `logR()`이 0으로 나눠 NaN이 되어 eye-to-hand 결과가 통째로 죽는다 — 합성 데이터로 재현 확인.
 - `data_recording.py`는 `set_tcp` 적용된 `posx`를 기록한다. **`set_tcp`를 0으로 두고 수집하면 결과의 부모 프레임이 flange가 되어 CAD/줄자로 검산할 수 있다.** TCP를 걸어둔 채 수집하면 검산 기준이 없어진다.
-- `set_tool`/`set_tcp` 이름("Tool Weight_2FG", "2FG_TCP")은 티치펜던트 등록명이다. RG2용 실제 등록명으로 바꾸지 않으면 원점이 어긋난다.
+- **티치펜던트 실제 등록명은 `Tool Weight` / `GripperDA_v1`이다 (2026-08-03 실기 확인).**
+  ~~"Tool Weight_2FG", "2FG_TCP"~~는 낡은 값이라 폐기. 확인 명령(list API는 없다 — 현재 선택된 것 하나만 읽힌다):
+  ```bash
+  ros2 service call /dsr01/tool/get_current_tool dsr_msgs2/srv/GetCurrentTool
+  ros2 service call /dsr01/tcp/get_current_tcp  dsr_msgs2/srv/GetCurrentTcp
+  ```
+  `dsr_msgs2/srv/{tool,tcp}/`에 `GetToolList` 같은 건 없다. 등록 목록 전체는 펜던트 화면에서만 본다.
+- ⛔ **미해결 (2026-08-03): 이름이 맞는데도 `set_tool('Tool Weight')`가 `-1`을 돌려준다.**
+  `data_recording.py:75-78`이 여기서 `SystemExit`으로 끊긴다. 코드 경로상 서비스는 **응답했고 `success=False`**였다
+  (없으면 `spin_until_future_complete`가 무한 대기, 예외면 `UnboundLocalError`였을 것 — 둘 다 아니었다).
+  미배제 가설: ① 로봇 상태가 STANDBY 아님(펜던트 수동모드/서보오프) ② 이미 같은 값이라 컨트롤러가 False 반환
+  ③ bringup이 virtual 모드. 배제 순서 ①→③→②, ①은 `get_robot_state`/`get_robot_mode` 한 줄이면 갈린다.
+  ⚠️ `data_recording.py:76`의 에러 문구 "티치펜던트 등록명을 확인할 것"은 **오진을 유도한다** — 이름은 맞았다.
 
 ### 알고리즘 검증 (합성 데이터, 2026-08-02)
 - `handeye_calibration.py`(eye-in-hand, `cv2.calibrateHandEye` PARK): 정답 복원, max|err| 1.1e-13.
@@ -81,11 +94,12 @@ camera_link → camera_depth_frame/camera_color_frame → *_optical_frame   ← 
 **`camera.launch.py`가 `config/T_cam2base.npy`를 읽어 자동 발행한다 (2026-08-02).**
 launch는 단위로 나눠져 있다 — `bringup`(로봇만) / `camera`(RealSense+TF) / MoveIt `demo`.
 `bringup.launch.py`는 카메라를 모른다. 카메라가 필요하면 `camera.launch.py`를 따로 띄운다.
-숫자를 launch나 alias에 하드코딩하지 않는다 — 재캘리브 후엔 npy만 갈아끼운다:
-```bash
-cp corecode/Calibration_Tutorial/T_cam2base.npy \
-   src/cobot_rg2/rg2/m0609_rg2_bringup/config/T_cam2base.npy   # symlink-install이면 rebuild 불필요
+숫자를 launch나 alias에 하드코딩하지 않는다 — **재캘리브하면 자동 반영된다. `cp`는 이제 필요 없다**(2026-08-03):
 ```
+install/.../config/T_cam2base.npy → src/.../config/T_cam2base.npy → corecode/Calibration_Tutorial/T_cam2base.npy
+        (colcon --symlink-install)          (git에 커밋된 상대경로 symlink)
+```
+~~`cp corecode/... src/.../config/`~~ 는 이제 `cp: are the same file`로 **실패**한다. 쓰지 말 것.
 npy가 없으면 이 TF만 빠지고 bringup은 정상 진행한다. 값만 확인하려면:
 ```bash
 ros2 run m0609_rg2_bringup calib_npy_to_tf.py corecode/Calibration_Tutorial/T_cam2base.npy base_link camera_link
@@ -223,6 +237,11 @@ roll이 여전히 ±90° 근처면 경고를 찍는다.
 **육안 판정 기준**: depth 이미지에 로봇 팔이 찍혀 있으면 포인트클라우드에도 팔이 있어야 하고,
 그게 **로봇 모델 위에 포개져야** 한다. "로봇 근처에 있다"는 통과가 아니다.
 
+## MoveIt octomap 실기 Execute (2026-08-03, 사용자 구두 보고 — 정량 미측정)
+- 실기 Execute까지 진행해 장애물 회피 확인. 단 **캘리브 오차로 장애물 영역 경계가 모호하게 잡혔다** — 그래도 무시되지는 않고 회피는 수행됨.
+- 오차 정량값(cm)은 아직 안 잼. `padding_offset:0.1`(현재값)이 오차를 흡수해서 완전히 안 지워지고 모호하게만 잡힌 것으로 보이나 **이건 추론**이다. 실측은 알려진 좌표 물체로 다음 세션에.
+- 상세 리뷰·cuRobo 비교 설계는 [[ws/cobot2/review_moveit]].
+
 ## MoveIt octomap 연동 (2026-08-02)
 
 ### octomap_server와 MoveIt의 octomap은 **별개다**
@@ -265,15 +284,20 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 > **교훈: TF에 프레임이 있는 것과 planning scene이 그 프레임을 아는 것은 별개다.**
 > 그리고 "정당화 문장을 쓰기 전에 명령을 한 번 돌려라" — 이때 필요했던 건 발행 한 번이었다.
 
-### 캘리브 npy의 정본은 `corecode/` 쪽이다 (2026-08-02 사용자 결정)
-`T_cam2base.npy`가 `corecode/Calibration_Tutorial/`와 `m0609_rg2_bringup/config/` 두 곳에 있다.
-후자는 내가 `camera.launch.py`를 만들면서 수동 `cp`로 만든 사본이고, **정본이 아니다.**
+### 캘리브 npy의 정본은 `corecode/` 쪽이다 — symlink로 해결 (2026-08-03)
+- **정본**: `corecode/Calibration_Tutorial/T_cam2base.npy` — 재캘리브 결과가 나오는 위치가 여기로 고정돼 있다.
+- `m0609_rg2_bringup/config/T_cam2base.npy`는 이제 **상대경로 symlink**(`../../../../../corecode/...`)다.
+  git에 mode `120000`으로 커밋되므로 clone한 다른 계정·PC에서도 그대로 동작한다.
 
-- **정본**: `corecode/Calibration_Tutorial/T_cam2base.npy` — 재캘리브 시 결과가 나오는 위치가 여기로 고정돼 있다.
-- 로봇 bringup 패키지에는 결국 캘리브 결과가 들어가지 않을 예정 → `m0609_rg2_bringup/config/` 사본은 **삭제 대상**.
-- 지우기 전에 `camera.launch.py`가 corecode 경로를 직접 읽도록 먼저 바꿔야 한다.
-  순서를 반대로 하면 `base_link→camera_link` static TF가 통째로 사라진다(npy 없으면 TF 노드가 빠지는 설계).
-- ⚠️ 그 전까지는 **재캘리브 후 `cp`를 잊으면 낡은 값으로 발행된다.** 340 mm 어긋난 전례가 이 구조다.
+> 🔥 **사고 기록 (2026-08-03): `cp`를 잊어 사본이 480 mm 낡은 채로 조용히 돌았다.**
+> 두 npy의 평행이동 차이가 `[-184.31, 425.18, -118.45]` mm. 에러가 안 난다 — 틀린 TF로 정상 동작한다.
+> 2026-08-02의 340 mm 사건과 **같은 구조의 재발**이다(그때는 하드코딩, 이번엔 수동 사본).
+> **규칙: 캘리브 결과처럼 "생성 위치가 정해진 산출물"은 사본을 만들지 않는다. symlink 아니면 경로 참조다.**
+
+- ⚠️ 남은 함정: 상대경로 symlink는 **`--merge-install`에서 깨진다**(`install/share/<pkg>/config` 기준 5단계 위가
+  ws 루트가 아니게 됨). 이 ws는 기본 isolated install이라 현재는 맞다. merge-install로 바꾸면 여기부터 확인할 것.
+- ⚠️ 깨진 symlink는 `os.path.exists()`가 `False`라 `camera.launch.py`가 **경고만 찍고 정상 종료**한다.
+  증상이 "포인트클라우드가 로봇과 안 붙음"으로만 나타난다.
 
 ### 설정 — **실제 값은 파일이 단일 출처다**
 `src/cobot_rg2/rg2/m0609_rg2_moveit/config/sensors_3d.yaml` (2026-08-02 작성).
