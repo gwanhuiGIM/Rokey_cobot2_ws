@@ -164,8 +164,8 @@ RViz MotionPlanning 패널에서:
 | 로봇 bringup (virtual) | ✅ 검증됨 | 컨트롤러 3개 active 확인 (2026-08-02) |
 | 로봇 bringup (real) | ✅ 검증됨 | 실기 연결 후 MoveIt Plan/Execute까지 확인 (2026-08-02) |
 | 카메라 드라이버 (`reals` alias) | ✅ 검증됨 | `/camera/camera/...` 토픽 실측 (2026-08-01) |
-| 카메라 드라이버 (`camera.launch.py`) | ⚠️ **미검증** | 이번에 새로 만든 런치. `ros2 launch -p` 드라이런만 했고 **실기 카메라로 기동한 적 없다**. 포인트클라우드 토픽 leaf 이름은 RealSense 관례에 따른 추론 |
-| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. 정밀도 실측은 마운트 확정 후 |
+| 카메라 드라이버 (`camera.launch.py`) | ✅ 검증됨 | 실기 D435i로 기동 (2026-08-03). `/camera/camera` + `/camera_calib_tf` 노드 기동, `/camera/camera/depth/color/points` 18~20 Hz 발행, `/tf_static`의 `base_link→camera_link`가 `calib_npy_to_tf.py` 출력과 소수점까지 일치 |
+| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. TF 발행 자체는 검증됨(위). 현행 캘리브(2026-08-03, `data/` 34장)는 **자체 진단에서 불합격** — AX=XB 병진잔차 중앙값 40.1 mm, 31쌍 중 21쌍이 30 mm 초과. octomap voxel(20 mm)의 2배라 **octomap 정밀도를 캘리브가 지배한다.** 개발용 TF로는 쓸 수 있으나 인식 정확도 실측의 근거로 삼지 말 것 |
 | MoveIt 경로 계획 | ✅ 검증됨 | RRTConnect, 0.019 s |
 | MoveIt 궤적 실행(Execute) | ✅ **실기 검증됨** | 실제 로봇으로 Plan → Execute 확인 (2026-08-02) |
 | RViz 수동 장애물 회피 | ✅ 설정 완료 | `publish_geometry_updates` 등 4개 활성. [8절](#8-시뮬레이션에서-장애물-놓고-회피-디버깅) |

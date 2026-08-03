@@ -413,15 +413,29 @@ ros2 bag record -o ~/failure_cases/case_$(date +%s) -a
 
 ---
 
-## 6. 다음 스프린트 후보 (이번엔 스코프 아웃)
+## 6. 다음 스프린트 후보
 
-- 다층/적재(bin-picking) 상황 대응: FoundationPose+GraspGenX 조합을 여러 물체/겹침 상황으로 확장, 순서 결정(picking order) 로직 추가
-- C270 근접 확인 역할 재도입 검토: FoundationPose가 self-occlusion 구간에서 끊길 경우의 폴백으로
-- cuTAMP 스타일 GPU 배치 최적화 (skeleton search + 배치 IK/충돌/안정성 제약 만족)
-- VLM 기반 자연어 지시 → 서브골 자동 생성 (OWL-TAMP/VLM-TAMP 개념)
-- 실패 사례 기반 skill-effect 모델 재학습 (Fail2Progress 개념 본격 적용)
-- People/dynamic reconstruction 모드로 nvblox 전환 (협동로봇 협업 시나리오 대비)
-- ROS 2 Jazzy 전체 마이그레이션 후 cuMotion(`isaac_ros_cumotion_moveit`) 재도전 — GPU 가속 충돌 회피로 전환
+> 3절 리스크와 constraints.md가 이미 확정한 사실이 우선한다: **이 랩탑엔 NVIDIA GPU가 없다**(i7-10510U, Intel UHD뿐). nvblox·FoundationPose·GraspGenX·cuMotion·cuRobo는 전부 CUDA 전제라 **GPU 머신을 새로 확보하기 전엔 후보에서 뺀다** — 여기 다시 올리면 3절과 같은 거짓 가정을 반복하는 것. 아래는 현재 CPU-only 랩탑 + 이미 실기 검증된 MoveIt/Octomap 스택(state.md, constraints.md) 위에서 실제로 착수 가능한 것만 추렸다.
+
+### 6-1. GPU 없이 바로 착수 가능 (우선순위 순)
+
+| 후보 | 왜 지금 가능한가 | 가치 |
+|---|---|---|
+| **narrow-passage 유효 상태 샘플러 튜닝** (`ObstacleBasedValidStateSampler` 등) | `ros-humble-ompl`에 이미 포함, 신규 패키지·GPU 불필요. Day3 플래너 튜닝의 연장 | 좁은 틈 그립 접근 시 RRTConnect 실패율을 직접 낮춤 — 이번 스프린트에서 이미 검증된 충돌회피 스택의 신뢰도를 높이는 가장 저비용 개선 |
+| **색상/AprilTag 기반 pose 추정 + 하드코딩 그립으로 pick 서브골 완성** | FoundationPose/GraspGenX 자리에 CPU 대체재를 끼우면 Day4 상태머신(`tamp_lite_statemachine`)을 GPU 없이 끝까지 돌릴 수 있음. 인터페이스(토픽/메시지 타입)만 맞으면 나중에 GPU 모델로 교체 가능 | 이번 스프린트 최우선 DoD인 "인식→그립→모션 최소 동작"을 GPU 없이도 완주 — 이월시키지 않아도 됨 |
+| **PDDLStream + FastDownward 기반 TAMP-lite 교체** | 순수 Python/CPU, Docker·GPU 불필요. 위 CPU 인식/그립을 stream으로 그대로 재사용 가능 | 겹침/차단 물체(occlusion-aware pick)에 필요한 "방해물 먼저 치우기" 같은 순서 계획을 상태머신 하드코딩 없이 얻음 — 다층/적재 대응의 전제 조건 |
+| **C270 근접 확인 역할 재도입** | 이미 확보된 eye-in-hand 캘리브레이션(Day2) 재사용, 신규 하드웨어·GPU 없음 | self-occlusion 구간 폴백 — 위 CPU 인식 경로의 약점을 바로 보완 |
+| **실패 케이스 rosbag → 실패 유형 분류 문서화** | Day5에 이미 녹화하는 데이터, 학습 없이 사람이 분류만 하면 됨(Fail2Progress의 "재학습" 부분은 제외) | 다음 스프린트 우선순위를 실측 실패율로 정하게 해줌 — 다른 모든 후보의 근거 데이터 |
+
+### 6-2. GPU 머신 확보가 선행 조건 (착수 보류)
+
+| 후보 | 보류 사유 |
+|---|---|
+| FoundationPose 6D pose, GraspGenX 그립 생성 | CUDA/TensorRT 필수, 이 랩탑에서 실행 불가 (constraints.md) |
+| nvblox 3D 재구성 | 원래도 시각화 용도일 뿐 충돌 회피는 이미 Octomap이 담당 — GPU 있어도 후순위 |
+| cuTAMP 스타일 GPU 배치 최적화, cuRobo/cuMotion 모션 플래닝 | 6-1의 CPU OMPL 스택이 이미 실기 검증됨 — GPU 버전은 그 스택이 병목일 때만 재검토 |
+| People/dynamic reconstruction nvblox 모드 | nvblox 자체가 보류 상태라 선행 조건 미충족 |
+| VLM 기반 자연어 지시 → 서브골 생성 | 로컬 GPU 없이도 API 호출로는 가능하나(OWL-TAMP류), TAMP-lite 골격(6-1의 PDDLStream)이 먼저 서야 붙일 대상이 생김 — 순서상 후순위 |
 
 > **참고:** 위 명령어들은 패키지/저장소 버전에 따라 인자명이나 launch 파일명이 다를 수 있습니다(특히 `doosan_robot2`, VoiceProcess 인터페이스는 본인 환경의 실제 저장소 문서로 재확인 필요). 실행 전 각 저장소 README의 Humble 대응 브랜치를 먼저 확인하세요.
 >

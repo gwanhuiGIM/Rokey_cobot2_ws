@@ -23,15 +23,15 @@ realsense_pointcloud:
 
   # [튜닝] 이 거리(m)보다 먼 점은 버린다. 카메라~로봇 거리가 약 1.48 m이므로
   # 2.5 m면 작업영역을 덮는다. 늘리면 뒷벽까지 장애물로 잡혀 계획이 막힌다.
-  max_range: 2.5
+  max_range: 1.5
 
   # [튜닝] 점 N개마다 1개만 쓴다. 1=전부. CPU가 모자라면 2~3으로 올린다.
-  point_subsample: 1
+  point_subsample: 3
 
   # [튜닝] 로봇 자기 몸을 클라우드에서 지울 때 링크를 얼마나 부풀릴지.
   # 자기 팔이 장애물로 잡혀 계획이 실패하면 padding_offset을 키운다(단위 m).
-  padding_offset: 0.03
-  padding_scale: 1.0
+  padding_offset: 0.1
+  padding_scale: 2.0
 
   # [튜닝] octomap 갱신 주파수(Hz). 환경이 안 바뀐다는 전제이므로 낮게 잡는다.
   max_update_rate: 1.0

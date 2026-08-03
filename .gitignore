@@ -25,8 +25,14 @@ env/
 *.bag
 *.db3
 *.mcap
+rosbag/
+*zstd
 datasets/
 runs/
+
+# 핸드아이 캘리브레이션 입력 이미지 (파일명이 좌표라 촬영마다 전부 새 파일이 된다).
+# 결과인 T_cam2base.npy / T_gripper2camera.npy는 계속 커밋한다 — 실기 보정값이라 재현 비용이 크다.
+corecode/Calibration_Tutorial/data/
 
 # 에디터·OS
 # 워크스페이스 루트의 .vscode/settings.json만 커밋한다 — GPU PC에서도 같은 제외 설정이 적용되게.

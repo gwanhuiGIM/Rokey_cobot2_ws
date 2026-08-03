@@ -75,7 +75,15 @@ def generate_launch_description():
     # -----------------------------------------------------------------------
     joint_limits_yaml = load_yaml('m0609_rg2_moveit', 'config/joint_limits.yaml')
     joint_limits = {
-        'robot_description_planning': joint_limits_yaml
+        'robot_description_planning': {
+            **joint_limits_yaml,
+            # [튜닝] scene object(장애물)와의 충돌 판정에 더할 여유 거리(m).
+            # 0.0이면 실측 형상 그대로 충돌 검사. 값을 올리면 그만큼 멀리서부터
+            # "닿았다"고 판정해 더 넉넉히 돌아간다 (planning_scene_monitor
+            # 심볼 configureDefaultPadding 확인).
+            'default_object_padding': 0.02,
+            'default_robot_padding': 0.0,
+        }
     }
 
     # -----------------------------------------------------------------------

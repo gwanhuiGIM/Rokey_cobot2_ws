@@ -7,10 +7,6 @@ Panels:
         - /Global Options1
         - /Status1
         - /Grid1
-        - /TF1
-        - /TF1/Frames1
-        - /PointCloud21
-        - /PointCloud21/Topic1
       Splitter Ratio: 0.5
     Tree Height: 590
   - Class: rviz_common/Selection
@@ -155,11 +151,17 @@ Visualization Manager:
       Enabled: true
       Frame Timeout: 15
       Frames:
-        All Enabled: false
+        All Enabled: true
         base:
-          Value: false
+          Value: true
         base_link:
-          Value: false
+          Value: true
+        camera_accel_frame:
+          Value: true
+        camera_accel_optical_frame:
+          Value: true
+        camera_aligned_depth_to_infra1_frame:
+          Value: true
         camera_color_frame:
           Value: true
         camera_color_optical_frame:
@@ -168,36 +170,48 @@ Visualization Manager:
           Value: true
         camera_depth_optical_frame:
           Value: true
+        camera_gyro_frame:
+          Value: true
+        camera_gyro_optical_frame:
+          Value: true
+        camera_infra1_frame:
+          Value: true
+        camera_infra1_optical_frame:
+          Value: true
+        camera_infra2_frame:
+          Value: true
+        camera_infra2_optical_frame:
+          Value: true
         camera_link:
           Value: true
         link_1:
-          Value: false
+          Value: true
         link_2:
-          Value: false
+          Value: true
         link_3:
-          Value: false
+          Value: true
         link_4:
-          Value: false
+          Value: true
         link_5:
-          Value: false
+          Value: true
         link_6:
           Value: true
         rg2_base_link:
-          Value: false
+          Value: true
         rg2_left_inner_finger:
-          Value: false
+          Value: true
         rg2_left_inner_knuckle:
-          Value: false
+          Value: true
         rg2_left_outer_knuckle:
-          Value: false
+          Value: true
         rg2_right_inner_finger:
-          Value: false
+          Value: true
         rg2_right_inner_knuckle:
-          Value: false
+          Value: true
         rg2_right_outer_knuckle:
-          Value: false
+          Value: true
         tool0:
-          Value: false
+          Value: true
         world:
           Value: true
       Marker Scale: 1
@@ -211,11 +225,25 @@ Visualization Manager:
             base:
               {}
             camera_link:
+              camera_accel_frame:
+                camera_accel_optical_frame:
+                  {}
+              camera_aligned_depth_to_infra1_frame:
+                camera_infra1_optical_frame:
+                  {}
               camera_color_frame:
                 camera_color_optical_frame:
                   {}
               camera_depth_frame:
                 camera_depth_optical_frame:
+                  {}
+              camera_gyro_frame:
+                camera_gyro_optical_frame:
+                  {}
+              camera_infra1_frame:
+                {}
+              camera_infra2_frame:
+                camera_infra2_optical_frame:
                   {}
             link_1:
               link_2:
@@ -266,8 +294,8 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: /camera/camera/depth/points_xyz
+        Reliability Policy: Reliable
+        Value: /camera/camera/depth/color/points
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -317,7 +345,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.314297676086426
+      Distance: 3.730877161026001
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -332,10 +360,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7747970819473267
+      Pitch: 0.46979743242263794
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.020581264048814774
+      Yaw: 0.2855817675590515
     Saved: ~
 Window Geometry:
   Displays:

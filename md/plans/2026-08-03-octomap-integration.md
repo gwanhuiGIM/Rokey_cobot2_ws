@@ -43,7 +43,7 @@ ros2 launch m0609_rg2_bringup camera.launch.py   # depth 424x240x15 목표
 ```bash
 # RViz에 PointCloud2 → /moveit/filtered_cloud 추가
 ```
-- ✅ 판정: **로봇 팔이 클라우드에서 지워져 있다**
+- ✅ 판정: **로봇 팔이 클라우드w서 지워져 있다**
 - ❌ 팔이 남아 있으면 로봇이 자기 몸을 장애물로 보고 한 발짝도 못 움직인다 → `sensors_3d.yaml`의 `padding_offset`을 0.03 → 0.05 → 0.08로 올린다
 
 여기서 막히면 ④ 이후는 의미가 없다. **오늘 여기까지만 되어도 성공.**

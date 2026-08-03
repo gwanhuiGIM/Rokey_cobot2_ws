@@ -3,7 +3,9 @@
 로봇과 분리된 단위다. 순서:
   1) ros2 launch m0609_rg2_bringup bringup.launch.py mode:=real host:=192.168.1.100   # 로봇만
   2) ros2 launch m0609_rg2_bringup camera.launch.py                                    # 카메라 + TF
-  3) ros2 launch dsr_moveit_config_m0609 demo.launch.py                                # MoveIt
+  3) ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false                   # move_group + JTC + RViz
+     (dsr_moveit_config_m0609 demo.launch.py 아니다 — 패키지명 불일치로 애초에 안 뜨고,
+      떠도 그 config URDF엔 RG2가 없다. README "알려진 함정" 참고.)
 
 TF 값을 여기 하드코딩하지 않는다. config/T_cam2base.npy를 읽어 매 launch마다 계산한다.
 재캘리브 후엔 npy만 갈아끼운다 (symlink-install이면 rebuild 불필요):

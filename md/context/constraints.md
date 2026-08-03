@@ -106,9 +106,30 @@ ros2 run m0609_rg2_bringup calib_npy_to_tf.py corecode/Calibration_Tutorial/T_ca
 ```
 **하드코딩된 static_transform_publisher 명령을 다시 만들지 말 것** — npy가 갱신돼도 그 숫자는 안 따라온다.
 실제로 2026-08-02에 붙여쓰던 명령이 갱신 전 캘리브 값이라 340 mm 어긋나 있었다.
-- ~~평행이동 993.4 mm~~ → **폐기(좌표 규약 버그 수정 전 값).** **유효값은 약 1.48 m**
-  (`Translation: [1.148, 0.640, 0.678]`, 사용자 확인 2026-08-02). 회전행렬 직교성 검사 통과,
-  `tf2_echo base_link camera_depth_optical_frame` 정상 동작 확인.
+- ~~평행이동 993.4 mm~~ → 폐기(좌표 규약 버그 수정 전 값).
+- ~~약 1.48 m `[1.148, 0.640, 0.678]` (2026-08-02)~~ → **폐기(2026-08-03 재캘리브).**
+- **현행 카메라 위치를 문서에 적지 않는다.** 하루에 세 번 바뀌었다(2026-08-03: 1.48 → 1.542
+  → 1.684 m). 적는 순간 낡는다. 알아야 할 땐 읽는다:
+  ```bash
+  python3 -c "import numpy as np; T=np.load('corecode/Calibration_Tutorial/T_cam2base.npy'); \
+  print(T[:3,3], np.linalg.norm(T[:3,3])/1000, 'm')"
+  ```
+  **거리에 의존하는 임계값을 다른 파일에 하드코딩하지 말 것** — `sensors_3d.yaml`의
+  `max_range: 1.5`가 낡은 1.48 m를 근거로 잡혔고, 그 사이 실제 거리가 그걸 넘어섰다.
+- 발행 자체는 검증됨: 회전행렬 직교성 검사 통과, `/tf_static` 값이 `calib_npy_to_tf.py`
+  출력과 일치, `tf2_echo base_link camera_depth_optical_frame` 체인 연결(2026-08-03).
+- **캘리브 이미지셋으로 추정한 내부파라미터는 못 쓴다** (2026-08-03). 카메라가 고정이라 보드
+  거리 다양성이 부족해 `cv2.calibrateCamera` 추정 fx가 공장값보다 7.7% 낮게 나왔다
+  (839.78 vs 909.53). 거리 추정이 통째로 그만큼 틀어진다. → D435i **개체 고유** 공장값을
+  쓴다. 값과 재취득 명령은 `eye2hand_calibration.py`의 `FACTORY_INTRINSICS`에 있다
+  (여기 베껴 적지 않는다 — 카메라를 교체하면 한 곳만 고쳐야 하니까).
+- **`eye2hand_calibration.py`를 진단 목적으로 돌릴 땐 `--no-save`를 붙인다** (2026-08-03).
+  이 스크립트는 실행할 때마다 실기 TF의 소스인 `T_cam2base.npy`를 덮어쓴다. 리뷰용으로
+  "읽기만" 하려고 돌렸다가 실제로 덮어썼다(계산이 결정적이라 값은 같았지만 운이 좋았을 뿐이다).
+  **읽기 의도의 실행에 쓰기 부작용이 있는 게 원인**이라 플래그로 끌 수 있게 만들었다.
+  과거 수집분을 재계산할 땐 디렉토리를 인자로 준다(`... data1` → `T_cam2base_data1.npy`로 분리 저장).
+- **캘리브 수집은 1280x720으로 띄운 뒤 한다** — `data_recording.py`는 해상도를 지정하지 않고
+  구독만 하므로, `camera.launch.py` 기본값(424x240)으로 띄운 채 찍으면 코너 정밀도가 무너진다.
 - **아직 미검증**: `T_cam2base`의 방향(parent가 base_link가 맞는지). `eye2hand_calibration.py:305`가 AX=XB의 X를 그대로 저장하는데, 코드 명명 관행(`gripper2base` = base 좌표계의 gripper pose)상 parent=base_link로 추정. RViz에서 포인트클라우드가 엉뚱한 곳/뒤집혀 뜨면 `np.linalg.inv(T)`가 답이다. **부호를 만지지 말 것.**
 
 ## realsense-viewer와 ROS 노드는 동시에 못 쓴다 (2026-08-02, 실측)
