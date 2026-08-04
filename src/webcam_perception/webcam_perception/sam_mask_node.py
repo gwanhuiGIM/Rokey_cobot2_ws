@@ -64,7 +64,7 @@ class SamMaskNode(Node):
 
     def __init__(self):
         super().__init__('sam_mask_node')
-        self.declare_parameter('image_topic', '/webcam/image_raw')
+        self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('mask_topic', '/webcam/segmentation_mask')
         self.declare_parameter('diff_thresh', 30.0)
         self.declare_parameter('min_area_frac', 0.01)

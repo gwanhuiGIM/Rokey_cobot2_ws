@@ -36,8 +36,14 @@ def generate_launch_description():
         DeclareLaunchArgument('octomap', default_value='true',
                               description='RealSense 포인트클라우드로 3D 장애물 감지. '
                                           'false면 RViz로 직접 놓은 장애물만 반영(알고리즘 디버깅용)'),
+        # rosbag 재생(`ros2 bag play --clock`)으로 디버깅할 때 true. 안 맞추면 move_group이
+        # 벽시계를 보는데 bag의 TF·클라우드는 녹화 시각 스탬프라 전부 "너무 낡음"으로 버려진다
+        # (octomap이 조용히 비어 있는다). 실기에서는 false 그대로 둔다.
+        DeclareLaunchArgument('use_sim_time', default_value='false',
+                              description='true: /clock을 따른다 (rosbag play --clock과 한 짝)'),
     ]
     is_standalone = IfCondition(LaunchConfiguration('standalone'))
+    use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     # -----------------------------------------------------------------------
     # 패키지 경로
@@ -162,7 +168,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='both',
-        parameters=[robot_description],
+        parameters=[robot_description, use_sim_time],
         condition=is_standalone,
     )
 
@@ -173,7 +179,7 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
-        parameters=[robot_description],
+        parameters=[robot_description, use_sim_time],
         condition=is_standalone,
     )
 
@@ -214,7 +220,7 @@ def generate_launch_description():
             planning_pipelines,
             moveit_controllers_yaml,
             planning_scene_monitor_params,
-            {'use_sim_time': False},
+            use_sim_time,
         ]
         if LaunchConfiguration('octomap').perform(context).lower() == 'true':
             params.append(octomap_params)
@@ -244,6 +250,7 @@ def generate_launch_description():
             robot_description_kinematics,
             planning_pipelines,
             joint_limits,
+            use_sim_time,
         ],
         condition=IfCondition(LaunchConfiguration('rviz')),
     )

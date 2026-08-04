@@ -142,9 +142,9 @@
   </xacro:macro>
 
   <xacro:macro name="right_outer_knuckle_joint" params="prefix">
-    <joint name="${prefix}base_link" type="revolute">
+    <joint name="${prefix}right_outer_knuckle_joint" type="revolute">
       <origin xyz="0 0.017178 0.125797" rpy="0 0 ${pi}" />
-      <parent link="${prefix}onrobot_rg2_base_link" />
+      <parent link="${prefix}base_link" />
       <child link="${prefix}right_outer_knuckle" />
       <axis xyz="1 0 0" />
       <limit lower="-0.785398" upper="0.785398" velocity="100.0" effort="1000" />

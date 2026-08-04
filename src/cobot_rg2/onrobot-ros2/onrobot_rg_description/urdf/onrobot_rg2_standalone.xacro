@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="onrobot-rg2">
+    <!-- m0609_rg2_bringup의 onrobot_rg2_model_macro.xacro를 쓴다 (실기 검증됨: joint명 버그 수정 +
+         has_bracket 파라미터 보유). onrobot_rg_description 자체 사본은 브라켓 오프셋이 빠져 있어
+         실기와 마운트 자세가 어긋난다 (2026-08-04 사진 대조로 확인: 브라켓 실재).
+         onrobot_rg2 매크로가 world->base_link joint(joint0)를 자체 생성하므로 별도 wrapper joint는 넣지 않는다. -->
+    <xacro:include filename="$(find m0609_rg2_bringup)/urdf/onrobot_rg2_model_macro.xacro" />
+    <xacro:onrobot_rg2 prefix="" effector_base="world" has_bracket="true"/>
+</robot>
