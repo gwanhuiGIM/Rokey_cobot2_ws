@@ -30,7 +30,7 @@
   <joint name="joint0" type="fixed">
     <parent link="world"/>
     <child link="base_link"/>
-    <origin rpy="0. 0. 1.57" xyz="0. 0. 0."/>
+    <origin rpy="1.5708 0 1.5708" xyz="0.004 0. 0."/>
   </joint>
   <gazebo reference="base_link">
     <mu1>1.0</mu1>
@@ -122,7 +122,6 @@
   <gazebo reference="left_inner_finger">
     <kp>1000000.0</kp>
     <kd>1.0</kd>
-    <kd>1.0</kd>
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
     <minDepth>0.00001</minDepth>
@@ -213,7 +212,6 @@
   <gazebo reference="right_inner_finger">
     <kp>1000000.0</kp>
     <kd>1.0</kd>
-    <kd>1.0</kd>
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
     <minDepth>0.00001</minDepth>
@@ -244,9 +242,9 @@
     <mimic joint="finger_joint" multiplier="1" offset="0"/>
   </joint>
   <joint name="right_outer_knuckle_joint" type="revolute">
-    <origin rpy="0 0 3.141592653589793" xyz="0 0.017178 0.125797"/>
     <parent link="base_link"/>
     <child link="right_outer_knuckle"/>
+    <origin rpy="0 0 3.141592653589793" xyz="0 0.017178 0.125797"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.785398" upper="0.785398" velocity="100.0"/>
     <mimic joint="finger_joint" multiplier="-1" offset="0"/>
