@@ -65,3 +65,6 @@ docs/
 #  **/.git/ 규칙 때문에 pull한 쪽에서는 태그·히스토리를 알 수 없게 된다)
 isaac_ros-dev/
 isaas_ros-dev/
+
+# GPU 벤치 측정치는 머신 종속 — 커밋하지 않는다 (corecode/bench.py)
+corecode/bench_*.json
