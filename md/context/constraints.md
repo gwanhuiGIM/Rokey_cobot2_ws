@@ -361,3 +361,63 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 3. **잔상**: octomap은 시간으로 안 사라진다. free 공간을 **다시 관측해야** 지워진다. 팔에 가려진
    뒤쪽은 계속 장애물로 남는다. 초기화는 `/clear_octomap` 서비스.
 4. `max_update_rate: 2.0`이 이 랩탑의 실질적 CPU 방어선. 30Hz를 그대로 먹이면 `ros2_control`(상시 2코어)과 부딪힌다.
+
+---
+
+## OnRobot RG2 — 커맨드 단위 (2026-08-04 확인)
+
+**근거**: `src/cobot_rg2/onrobot-ros2/onrobot_rg_msgs/msg/OnRobotRGOutput.msg`
+
+| 필드 | 단위 | RG2 유효범위 | 실제 |
+|---|---|---|---|
+| `rgwd` (폭) | **1/10 밀리미터** | 0 ~ 1100 | 0 ~ 110.0 mm |
+| `rgfr` (힘) | **1/10 뉴턴** | 0 ~ 400 | 0 ~ 40.0 N |
+
+**미터 → mm로만 바꿔 넣으면 10배 좁게 명령해 물체를 으깬다.**
+```python
+rgwd = int(round(width_m * 10000))   # 0.048 m → 480
+```
+
+- **폭↔각도 변환을 새로 짜지 말 것** — `onrobot_rg_control/_OnRobotRGIsaacSimController.py:131`
+  `widthToJointValue()` / `jointValueToWidth()`가 이미 있다. 실기 명령엔 `rgwd`를 직접 쓰고,
+  관절각은 RViz/Isaac 시각화용으로만 쓴다.
+- `rctr` 0x0001=grip(핑거팁 오프셋 미적용), 0x0010=grip_w_offset(적용), 0x0008=stop.
+
+## 개구 폭 상수가 출처마다 다르다
+
+| 값 | 출처 | 용도 |
+|---|---|---|
+| 0.102 m | GraspGenX `onrobot_RG2/config.json` `sweep_volume.extents[0]` | **grasp 선별 기준** (모델이 이 볼륨으로 conditioning) |
+| 0.110 m | 드라이버 `max_width=1100` | 하드웨어 물리 한계 |
+| 0.152 m | `XGripperInfo.width` (`bbox` x폭) | **개구 폭 아님 — 그리퍼 몸통 폭.** 혼동 주의 |
+
+## M0609 도달 범위 (2026-08-04, URDF 실측)
+
+**근거**: `src/cobot_rg2/doosan-robot2/dsr_description2/xacro/macro.m0609.white.xacro`
+```
+:34   base → joint_1   z = 0.1345      (shoulder 높이)
+:118  0.411  +  :148  0.368  +  :220  0.121  =  0.900
+```
+**0.900 m는 shoulder(joint_2) 기준 flange까지**의 최대 신장이다.
+base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 낙관적이 되어
+못 가는 자세를 통과시킨다.
+
+## 캘리브레이션 결과 파일 (2026-08-04 확인)
+
+`corecode/Calibration_Tutorial/T_cam2base.npy`
+- 이름은 cam2base지만 **내용은 `T_base←cam`** (`eye2hand_calibration.py:696` 주석에 명시)
+- **병진이 mm 단위** (norm 1683.6). GraspGenX/FoundationPose는 m를 쓴다.
+  → `T[:3,3] /= 1000.0` 없이 쓰면 1000배 어긋난다.
+- `data_recording.py:77`의 "결과 부모 프레임도 flange"는 **틀린 주석**이다.
+  eye-to-hand AX=XB에서 TCP 오프셋은 `A_i` 계산에서 소거되므로 부모는 항상 base
+  (같은 파일 `:44-46`이 맞다).
+
+## GraspGenX 관련
+
+- **LFS 포인터 문제는 로컬 체크아웃 한정.** Lightning AI 원격에서는 RG2 데모 정상 동작(2026-08-04).
+  로컬에서 메시 로드/시각화할 때만 `git lfs pull` 필요.
+- `uv sync`가 CPython 3.14를 잡으면 torch 휠이 없다 → `uv sync --python 3.12`.
+- grasp pose 규약: **+Z=접근축, +X=닫히는 방향, 원점=그리퍼 base_link**(`robot.py:59`).
+  `fingertip=[0,0,0.18]` — TCP는 원점에서 +Z로 18cm.
+  `graspmoe.py:289` 주석이 이를 반대로 적어놨다(**코드가 맞고 주석이 틀림**).
+- `isaac_ros_foundationpose`는 **CAD 메시 필수**. model-free 모드 없음(`mesh_file_path` 파라미터).
