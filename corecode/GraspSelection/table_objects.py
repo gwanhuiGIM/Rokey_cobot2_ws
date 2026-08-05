@@ -52,6 +52,10 @@ CLUSTER_EPS_M = 0.02  # DBSCAN 이웃 거리. 물체 간격보다 작아야 안 
 MIN_PTS = 80  # 이보다 작은 클러스터는 노이즈
 RG2_MAX_OPEN_M = 0.102
 
+# 테이블이 이보다 기울어 보이면 캘리브레이션을 의심한다. 실물 테이블은 수평이므로
+# 이 각도는 씬이 아니라 외부 캘리브를 잰다. 3°는 평면 피팅 잡음(±2°)보다 크게 잡은 값이다.
+TILT_FAIL_DEG = 3.0
+
 
 def to_base(depth: np.ndarray, K: np.ndarray, T: np.ndarray, stride: int = 2) -> np.ndarray:
     """depth 전체를 base_link 점군으로. stride 로 솎는다 — 중심 계산엔 충분하다."""
@@ -151,7 +155,17 @@ def main() -> None:
 
     objs, plane = find_objects(pc, ws)
     tilt = np.degrees(np.arccos(abs(plane[2]) / np.linalg.norm(plane[:3])))
-    print(f"[table] 평면 {plane.round(3)} (수평 대비 {tilt:.1f}°) → 물체 {len(objs)}개\n")
+    print(f"[table] 평면 {plane.round(3)} (수평 대비 {tilt:.1f}°) → 물체 {len(objs)}개")
+
+    # 【캘리브레이션 판정】 테이블이 물리적으로 수평임은 사용자가 확인했다(2026-08-05).
+    # 따라서 이 각도는 씬의 성질이 아니라 **외부 캘리브레이션 회전 오차의 측정치**다.
+    # 이 값이 크면 아래 물체 좌표는 전부 그만큼 틀렸다 — 재캘리브 전에는 쓰지 마라.
+    if tilt > TILT_FAIL_DEG:
+        print(f"\n  ❌ 테이블이 {tilt:.1f}° 기울어 보인다. 실물은 수평이므로 이건 캘리브레이션 오차다.")
+        print(f"     작업거리 0.7 m 에서 위치 오차 ≈ {700 * np.sin(np.radians(tilt)):.0f} mm.")
+        print("     eye2hand_calibration.py 재실행 후 이 값이 3° 아래로 내려오는지 확인할 것.\n")
+    else:
+        print(f"  ✅ 기울기 {tilt:.1f}° ≤ {TILT_FAIL_DEG}° — 외부 캘리브 회전은 쓸 만하다.\n")
     for i, o in enumerate(objs):
         c, s = o["center"], o["size"]
         w = min(s[0], s[1])
