@@ -10,7 +10,9 @@
 출력 (loader가 요구하는 이름 그대로):
   <out_dir>/<scene>/depth.npy       float32, **미터**, (H,W)
   <out_dir>/<scene>/rgb.png
-  <out_dir>/<scene>/seg.png         uint8 라벨맵
+  <out_dir>/<scene>/seg.png         uint8 라벨맵cd /workspaces/isaac_ros-dev
+  colcon build --symlink-install \
+    --packages-up-to isaac_ros_cumotion_moveit isaac_ros_cumotion_robot_description
   <out_dir>/<scene>/meta_data.json  intrinsics 3x3 / camera_pose 4x4 / label_map / scene_bounds
 
 camera_pose 는 tf2 lookup(base_link <- camera_color_optical_frame)이다.
@@ -31,12 +33,14 @@ camera_pose 는 tf2 lookup(base_link <- camera_color_optical_frame)이다.
 
 import json
 import os
+import warnings
 
 import cv2
 import numpy as np
 import rclpy
 import tf2_ros
 from cv_bridge import CvBridge
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
@@ -57,12 +61,28 @@ DEFAULTS = {
     'z_min': -0.05, 'z_max': 0.60,
     'table_z': float('nan'),  # nan이면 박스 안 z 중앙값으로 자동 추정
     'obj_min_h': 0.015,       # 테이블면 위 이 높이부터 물체로 본다
+    'obj_max_h': float('nan'),  # nan이면 무제한. 로봇 팔은 xy로 못 빼므로 높이로 자른다
     'min_pixels': 300,        # 이보다 작은 덩어리는 버린다(노이즈)
+    # 단일 시점 depth 는 물체 뒤 가림영역을 전경 깊이로 메운다(occlusion shadow).
+    # 그 꼬리가 덩어리에 붙어 OBB 를 부풀리고, 심하면 grasp 가 0개가 된다
+    # (2026-08-05: 사과 8cm 가 12.6x18.8cm 로 잡혀 후보 0). 덩어리 중앙에서 이 반경 밖을 자른다.
+    # RG2 개구가 0.102 m 라 이보다 큰 물체는 어차피 못 잡는다. nan 이면 끄기.
+    # 0.05 는 씬 10(사과) 실측 튜닝값이다: nan→8개, 0.07→4개, **0.05→32개**, 0.04→1개.
+    # 너무 조이면 OBB 가 작아져 후보가 사라진다. 씬 하나로 잡은 값이니 다른 물체에선 다시 본다.
+    'obj_radius_m': 0.05,
+    'frames': 10,             # depth 를 이만큼 모아 픽셀별 중앙값. 정지 장면이라 가능하다
+    'min_valid_ratio': 0.5,   # 프레임 중 이 비율 이상에서 유효해야 그 픽셀을 쓴다
     'timeout_sec': 10.0,
 }
 
+# LABEL_TABLE 은 **사람용**이다. GraspGenX 로더는 `obj_` 접두어가 아닌 라벨을 전부 무시하고
+# (scene_loaders.py:95), 씬 점군에는 라벨과 무관하게 유효 depth 가 전부 들어간다.
+# 즉 라벨 2와 라벨 0은 GraspGenX 에게 동일하다 — 오버레이로 "박스가 상판을 덮었나"를 눈으로
+# 확인하려고 남긴다. 지우면 디버깅 수단이 사라진다.
 LABEL_TABLE = 2
 LABEL_OBJ_BASE = 100          # obj_1 -> 101, obj_2 -> 102 ... (샘플 데이터와 같은 규약)
+MAX_OBJECTS = 155             # seg.png 가 uint8 이라 100+156 은 조용히 0으로 랩어라운드한다
+MAX_DEPTH_BUFFER = 120        # 실패 경로에서 depth 프레임이 무한히 쌓이는 것을 막는다
 
 
 def quat_to_matrix(x, y, z, w):
@@ -84,27 +104,32 @@ def quat_to_matrix(x, y, z, w):
 class SceneCapture(Node):
     def __init__(self):
         super().__init__('graspgenx_scene_capture')
+        # dynamic_typing: `-p scene:=00` 은 YAML 이 정수 0 으로 파싱해 STRING 선언과 충돌한다.
+        # `-p obj_min_h:=0` (DOUBLE 선언에 INTEGER) 도 같은 예외로 죽는다.
+        # 타입은 선언이 아니라 params() 에서 DEFAULTS 기준으로 맞춘다.
         for k, v in DEFAULTS.items():
-            self.declare_parameter(k, v)
+            self.declare_parameter(k, v, ParameterDescriptor(dynamic_typing=True))
         self.bridge = CvBridge()
-        self.depth = None
+        self.depths = []            # 프레임별 원본. 마지막에 픽셀별 중앙값으로 합친다
         self.color = None
         self.color_is_raw = False   # raw가 오면 compressed 를 덮어쓰지 않는다
         self.K = None
+        self.info_frame = None
+        self.info_wh = None
 
-        p = self.get_parameter
+        p = self.params()
         # 정지한 장면을 한 컷 뜨는 것이라 exact sync 를 쓰지 않는다. 각 토픽의 최신값을 쓴다.
         self.create_subscription(
-            Image, p('depth_topic').value, self._on_depth, qos_profile_sensor_data)
+            Image, p['depth_topic'], self._on_depth, qos_profile_sensor_data)
         self.create_subscription(
-            Image, p('color_topic').value, self._on_color, qos_profile_sensor_data)
+            Image, p['color_topic'], self._on_color, qos_profile_sensor_data)
         # bag 은 컬러가 compressed 로만 녹화돼 있었다(constraints.md). 라이브 런치도 raw 를
         # 안 낼 수 있으므로 둘 다 구독하고 raw 를 우선한다 — 없는 토픽 구독은 무해하다.
         self.create_subscription(
-            CompressedImage, p('color_topic').value + '/compressed',
+            CompressedImage, p['color_topic'] + '/compressed',
             self._on_color_compressed, qos_profile_sensor_data)
         self.create_subscription(
-            CameraInfo, p('info_topic').value, self._on_info, qos_profile_sensor_data)
+            CameraInfo, p['info_topic'], self._on_info, qos_profile_sensor_data)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -112,8 +137,26 @@ class SceneCapture(Node):
     def _on_depth(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         # 16UC1 은 mm, 32FC1 은 이미 m. 이 나눗셈을 빠뜨리면 로봇이 1.6 km 밖을 향한다.
-        self.depth = (img.astype(np.float32) / 1000.0
-                      if img.dtype == np.uint16 else img.astype(np.float32))
+        self.depths.append(img.astype(np.float32) / 1000.0
+                           if img.dtype == np.uint16 else img.astype(np.float32))
+        # color/info 가 안 오면 ready() 가 영원히 False 라 타임아웃까지 쌓인다(1280x720 이면 GB 단위).
+        if len(self.depths) > MAX_DEPTH_BUFFER:
+            del self.depths[:-MAX_DEPTH_BUFFER]
+
+    def merged_depth(self, n_frames, min_valid_ratio):
+        """픽셀별 중앙값. D435i 는 밝고 무늬 없는 상판에서 프레임마다 다른 곳이 튄다 —
+        단일 프레임을 쓰면 그 노이즈가 그대로 '물체'가 된다. 장면이 정지해 있으므로
+        시간축 중앙값이 가장 싼 해법이다(구멍 메우기 + 잡음 제거를 동시에)."""
+        st = np.stack(self.depths[-n_frames:])
+        valid = st > 0
+        cnt = valid.sum(0)
+        with warnings.catch_warnings():
+            # 전 프레임이 0인 픽셀은 All-NaN 이 정상이다(바로 아래에서 0으로 만든다)
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            med = np.nanmedian(np.where(valid, st, np.nan), axis=0)
+        med[~np.isfinite(med)] = 0.0
+        med[cnt < max(1, int(round(min_valid_ratio * len(st))))] = 0.0
+        return med.astype(np.float32), len(st)
 
     def _on_color(self, msg):
         self.color = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
@@ -128,19 +171,55 @@ class SceneCapture(Node):
 
     def _on_info(self, msg):
         self.K = np.asarray(msg.k, dtype=np.float64).reshape(3, 3)
+        # 잘못된 camera_info(예: depth/camera_info)를 물리면 fx 가 ~640 vs ~900 으로 다른데
+        # 아무 에러 없이 통과한다. 프레임 이름과 해상도를 뒤에서 대조하려고 들고 있는다.
+        self.info_frame = msg.header.frame_id
+        self.info_wh = (int(msg.width), int(msg.height))
 
-    def ready(self):
-        return self.depth is not None and self.color is not None and self.K is not None
+    def params(self):
+        """파라미터를 DEFAULTS 의 타입으로 강제한다. dynamic_typing 의 짝이다."""
+        out = {}
+        for k, default in DEFAULTS.items():
+            val = self.get_parameter(k).value
+            if isinstance(default, str):
+                # scene:=00 -> 정수 0 으로 들어온다. 샘플 데이터 규약(00, 01)대로 두 자리로 되돌린다.
+                out[k] = f'{val:02d}' if isinstance(val, int) and k == 'scene' else str(val)
+            elif isinstance(default, bool):
+                out[k] = bool(val)
+            else:
+                out[k] = type(default)(val)
+        return out
+
+    def tf_ready(self, p):
+        """TF 를 대기 조건에 넣는다.
+
+        `Buffer.lookup_transform(timeout=…)` 은 이 구성에서 **무효다**: TransformListener 를
+        spin_thread 없이 만들었으므로 /tf_static 구독이 이 노드에 붙어 있고, Humble 의 Buffer 는
+        타임아웃 동안 sleep 폴링만 할 뿐 executor 를 돌리지 않는다 → 그 3초 동안 새 TF 가
+        들어올 수 없다. depth 10프레임(≈330ms)이 /tf_static 디스커버리보다 먼저 차면
+        헛기다린 뒤 실패하고 **이미 찍은 프레임을 버린다.** 그래서 spin 루프 안에서 확인한다.
+        """
+        if not p['use_tf']:
+            return True
+        return self.tf_buffer.can_transform(
+            p['base_frame'], p['camera_frame'], rclpy.time.Time())
+
+    def ready(self, n_frames, p):
+        return (len(self.depths) >= n_frames and self.color is not None
+                and self.K is not None and self.tf_ready(p))
 
     def camera_pose(self):
         """base_frame <- camera_frame 4x4. 실패하면 None."""
-        p = self.get_parameter
-        if not p('use_tf').value:
-            self.get_logger().warn('use_tf=False — camera_pose 를 단위행렬로 쓴다 (world=카메라)')
+        p = self.params()
+        if not p['use_tf']:
+            self.get_logger().warn(
+                'use_tf=False — camera_pose 가 단위행렬이 된다(world=카메라 광학 프레임). '
+                '⚠️ x_min/x_max/y_*/z_* 는 base 기준 값인데 그대로 카메라 좌표에 적용되므로 '
+                '대개 "박스 안 유효 depth 0개"가 된다. bounds 도 카메라 기준으로 다시 줄 것.')
             return np.eye(4)
         try:
             tf = self.tf_buffer.lookup_transform(
-                p('base_frame').value, p('camera_frame').value,
+                p['base_frame'], p['camera_frame'],
                 rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=3.0))
         except Exception as e:                                   # noqa: BLE001
             self.get_logger().error(f'TF lookup 실패: {e}')
@@ -152,14 +231,26 @@ class SceneCapture(Node):
         return T
 
 
-def segment(depth, K, T_base_cam, p):
-    """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열)."""
+def to_base(depth, K, T_base_cam):
+    """(H,W) depth[m] + K + 4x4 -> (H,W,3) base 프레임 XYZ.
+
+    GraspGenX 쪽 구현과 **반드시 같아야 한다**:
+      scene_loaders.depth_to_camera_xyz:24-33 (optical: x 오른쪽, y 아래, z 전방)
+      scene_loaders.transform_xyz:36-38      (xyz @ R.T + t)
+    한 줄로 분리해 둔 이유는 테스트가 이 식만 따로 겨냥할 수 있게 하려는 것이다 —
+    `R.T` 를 `R` 로 바꾸는 실수는 사과 위치를 통째로 옮기면서도 조용하다.
+    """
     H, W = depth.shape
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     u, v = np.meshgrid(np.arange(W), np.arange(H))
-    # scene_loaders.depth_to_camera_xyz:24 와 같은 규약(optical: x 오른쪽, y 아래, z 전방)
     xyz_cam = np.stack([(u - cx) * depth / fx, (v - cy) * depth / fy, depth], axis=-1)
-    xyz = xyz_cam @ T_base_cam[:3, :3].T + T_base_cam[:3, 3]
+    return xyz_cam @ T_base_cam[:3, :3].T + T_base_cam[:3, 3]
+
+
+def segment(depth, K, T_base_cam, p):
+    """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열)."""
+    H, W = depth.shape
+    xyz = to_base(depth, K, T_base_cam)
     X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
 
     valid = depth > 0
@@ -176,26 +267,51 @@ def segment(depth, K, T_base_cam, p):
         table_z = float(np.median(Z[in_box]))
 
     obj = in_box & (Z > table_z + p['obj_min_h'])
+    max_h = p['obj_max_h']
+    if np.isfinite(max_h):
+        # 로봇 팔은 작업공간 박스 안에 있어 xy 로 뺄 수 없다. 높이로 자른다.
+        obj &= Z < table_z + max_h
+    # 3x3 열림 — depth 가장자리의 한두 픽셀짜리 점들이 덩어리로 잡히는 걸 막는다
+    obj = cv2.morphologyEx(obj.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
     n, comp = cv2.connectedComponents(obj.astype(np.uint8), connectivity=8)
 
     seg = np.zeros((H, W), np.uint8)
-    seg[in_box & ~obj] = LABEL_TABLE
+    # `~obj` 로 칠하면 obj_max_h 에 잘린 키 큰 것(로봇 팔·사람)까지 table 라벨을 받는다.
+    # 실제로 table 라벨의 z 최대가 +0.376 m 로 찍혔다(2026-08-05). 낮은 것만 테이블이다.
+    seg[in_box & (Z <= table_z + p['obj_min_h'])] = LABEL_TABLE
     label_map = {'ground': 0, 'table': LABEL_TABLE}
     kept = []
+    radius = p['obj_radius_m']
     for c in range(1, n):
         m = comp == c
         px = int(m.sum())
         if px < p['min_pixels']:
             continue
+        if np.isfinite(radius):
+            # 중앙값 중심 — 꼬리가 붙어 있어도 평균보다 덜 끌려간다(2026-08-05 실측:
+            # 꼬리 포함 덩어리의 중앙값이 실제 사과 중심에서 1.7cm, 평균은 그 이상).
+            mx, my = float(np.median(X[m])), float(np.median(Y[m]))
+            m &= np.hypot(X - mx, Y - my) <= radius
+            px = int(m.sum())
+            if px < p['min_pixels']:
+                continue
+        if len(kept) >= MAX_OBJECTS:      # uint8 랩어라운드 방지. 예외 없이 조용히 틀린다
+            break
         idx = len(kept) + 1
         seg[m] = LABEL_OBJ_BASE + idx
         label_map[f'obj_{idx}'] = LABEL_OBJ_BASE + idx
-        kept.append((idx, px, float(Z[m].max() - table_z)))
+        # 중심 좌표가 없으면 "어느 게 사과인지" 를 알 방법이 없다 — 튜닝의 유일한 근거다
+        kept.append((idx, px, float(Z[m].max() - table_z),
+                     float(X[m].mean()), float(Y[m].mean()), float(Z[m].mean())))
 
     diag = [f"table_z={table_z:.4f} m ({'자동추정' if auto else '지정'}), "
             f"박스 안 픽셀 {int(in_box.sum())}, 물체 후보 덩어리 {n - 1}개 중 {len(kept)}개 채택"]
-    for idx, px, h in kept:
-        diag.append(f'  obj_{idx}: {px} px, 테이블 위 최대높이 {h * 100:.1f} cm')
+    # ⚠️ "표면중심"이지 물체 중심이 아니다. 단일 시점이라 보이는 면만 평균되고,
+    #    반지름 r 인 구라면 시선축을 따라 카메라 쪽으로 약 2r/3 만큼 앞에 앉는다
+    #    (사과 r=2.5cm -> 1.7cm). **이 편차를 캘리브 오차로 오해해 보정하지 말 것.**
+    for idx, px, h, ox, oy, oz in kept:
+        diag.append(f'  obj_{idx}: {px:5d} px  표면중심 base=({ox:+.3f}, {oy:+.3f}, {oz:+.3f}) m  '
+                    f'테이블 위 최대높이 {h * 100:.1f} cm')
     if not kept:
         diag.append('  ⛔ 채택 0개 — obj_min_h 를 낮추거나 min_pixels 를 줄이거나 bounds 를 확인한다')
     return seg, label_map, '\n'.join(diag)
@@ -205,8 +321,12 @@ def write_scene(out, depth, color_rgb, seg, K, T, label_map, bounds):
     """loader가 요구하는 파일 4개를 쓴다. 카메라 없이도 테스트할 수 있게 분리했다."""
     os.makedirs(out, exist_ok=True)
     np.save(os.path.join(out, 'depth.npy'), depth.astype(np.float32))
-    cv2.imwrite(os.path.join(out, 'rgb.png'), cv2.cvtColor(color_rgb, cv2.COLOR_RGB2BGR))
-    cv2.imwrite(os.path.join(out, 'seg.png'), seg)
+    # imwrite 는 실패해도 예외 없이 False 만 준다 — 그냥 두면 파일 2개짜리 디렉토리를
+    # 만들어 놓고 "저장 완료"라고 보고하고, 실패는 한참 뒤 GraspGenX 로더에서 터진다.
+    for name, img in (('rgb.png', cv2.cvtColor(color_rgb, cv2.COLOR_RGB2BGR)),
+                      ('seg.png', seg)):
+        if not cv2.imwrite(os.path.join(out, name), img):
+            raise IOError(f'{os.path.join(out, name)} 쓰기 실패')
     with open(os.path.join(out, 'meta_data.json'), 'w') as f:
         json.dump({
             'intrinsics': np.asarray(K).tolist(),
@@ -217,38 +337,52 @@ def write_scene(out, depth, color_rgb, seg, K, T, label_map, bounds):
     return out
 
 
-def main():
-    rclpy.init()
-    node = SceneCapture()
-    p = {k: node.get_parameter(k).value for k in DEFAULTS}
-
+def run(node):
+    """캡처 본체. 성공 0, 실패 1. 정리(shutdown)는 main 이 책임진다."""
+    p = node.params()
+    n_frames = max(1, p['frames'])
     end = node.get_clock().now() + rclpy.duration.Duration(seconds=p['timeout_sec'])
-    while rclpy.ok() and not node.ready() and node.get_clock().now() < end:
+    while rclpy.ok() and not node.ready(n_frames, p) and node.get_clock().now() < end:
         rclpy.spin_once(node, timeout_sec=0.1)
-    if not node.ready():
+    if not node.ready(n_frames, p):
         node.get_logger().error(
-            f"토픽 수신 실패 (depth={node.depth is not None}, color={node.color is not None}, "
-            f"info={node.K is not None}) — 카메라 런치와 ROS_DOMAIN_ID 를 확인한다")
-        rclpy.shutdown()
+            f"수신 실패 (depth {len(node.depths)}/{n_frames} 프레임, "
+            f"color={node.color is not None}, info={node.K is not None}, "
+            f"tf={node.tf_ready(p)}) — 카메라 런치와 ROS_DOMAIN_ID 를 확인한다. "
+            f"tf 만 False 면 {p['base_frame']} <- {p['camera_frame']} 이 없는 것이다")
         return 1
 
     T = node.camera_pose()
     if T is None:
-        rclpy.shutdown()
         return 1
 
-    depth, color, K = node.depth, node.color, node.K
+    depth, used = node.merged_depth(n_frames, p['min_valid_ratio'])
+    color, K = node.color, node.K
+    node.get_logger().info(
+        f'depth {used} 프레임 중앙값 병합 — 유효 픽셀 '
+        f'{100.0 * (depth > 0).mean():.1f}% (단일 프레임 '
+        f'{100.0 * (node.depths[-1] > 0).mean():.1f}%)')
+
     if color.shape[:2] != depth.shape[:2]:
         node.get_logger().error(
             f'컬러 {color.shape[:2]} != depth {depth.shape[:2]} — '
             'aligned_depth_to_color 토픽이 맞는지 확인한다')
-        rclpy.shutdown()
         return 1
+    # camera_info 가 depth 와 짝인지 본다. 엉뚱한 info(예: depth/camera_info)를 물리면
+    # fx 가 ~640 vs ~900 으로 달라 grasp 가 통째로 어긋나는데 아무 에러도 안 난다.
+    if node.info_wh != (depth.shape[1], depth.shape[0]):
+        node.get_logger().error(
+            f'camera_info {node.info_wh} != depth {(depth.shape[1], depth.shape[0])} — '
+            f"info_topic({p['info_topic']}) 이 depth 와 짝이 아니다")
+        return 1
+    if p['use_tf'] and node.info_frame != p['camera_frame']:
+        node.get_logger().warn(
+            f"camera_info.frame_id='{node.info_frame}' 인데 camera_frame 파라미터는 "
+            f"'{p['camera_frame']}' 이다 — TF 를 다른 프레임에서 뜨고 있을 수 있다")
 
     seg, label_map, diag = segment(depth, K, T, p)
     if seg is None:
         node.get_logger().error(diag)
-        rclpy.shutdown()
         return 1
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -263,9 +397,21 @@ def main():
         f"  depth {depth.shape} {depth.dtype} 범위 {depth[depth > 0].min():.3f}~{depth.max():.3f} m\n"
         f"  camera_pose t={np.round(T[:3, 3], 4).tolist()}\n"
         f"다음: cd isaac_ros-dev/src/GraspGenX && uv run python scripts/demo_scene_pc.py "
-        f"--sample_data_dir {os.path.dirname(out)} --gripper_name onrobot_RG2 --num_grasps 64")
-    rclpy.shutdown()
+        f"--sample_data_dir {os.path.dirname(out)} --gripper_name onrobot_RG2 "
+        f"--scene {p['scene']} --moe_obb_density dense")
     return 0
+
+
+def main():
+    rclpy.init()
+    node = SceneCapture()
+    try:
+        return run(node)
+    finally:
+        # 예외(잘못된 -p 값, imwrite 실패 등)로 빠져나가도 컨텍스트를 남기지 않는다
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

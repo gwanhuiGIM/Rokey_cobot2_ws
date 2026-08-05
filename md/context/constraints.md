@@ -218,6 +218,37 @@ isaac_ros_cumotion 태그: … v3.2-12 v3.2-13 v3.2-14 v3.2-15 v3.2.0 v4.0-0 …
 
 ---
 
+## 🔴 cuMotion은 MoveIt의 octomap을 **안 본다** (2026-08-05, 소스 확인)
+
+`isaac_ros_cumotion` v3.2 기준. 이 워크스페이스의 "사람 팔 우회" 목표에 직결되는 사실이다.
+
+cuMotion 플래너가 세계를 받는 경로는 한 곳뿐이다:
+
+```python
+# cumotion_planner.py:662-665
+scene = goal_handle.request.planning_options.planning_scene_diff
+world_objects = scene.world.collision_objects        # ← collision_objects "만"
+```
+
+- `cumotion_planner.py` 전체에 **`octomap` 문자열 0건** (grep 확인)
+- MoveIt 플러그인은 `getPlanningSceneMsg()`로 **전체** 씬을 넘겨준다
+  (`cumotion_move_group_client.cpp:72,81`) — 버리는 쪽은 **받는 노드**다
+
+| 장애물 종류 | OMPL | cuMotion (`read_esdf_world:=False`) | cuMotion + nvblox |
+|---|---|---|---|
+| 테이블·박스 (CollisionObject) | 본다 | 본다 | 본다 |
+| **사람 팔 (octomap 복셀)** | **본다** | **❌ 못 본다** | 본다 (ESDF) |
+
+**결론 2개:**
+1. **nvblox는 선택이 아니라 필수다.** cuMotion이 미모델링 장애물을 보는 유일한 경로다.
+2. **가장 위험한 실패 방식이다 — 성공처럼 보인다.** 계획은 빠르게 성공하고 에러도 안 난다.
+   사람 팔을 통과하는 궤적이 나와도 로그로는 안 드러난다.
+   → **nvblox 없이 cuMotion으로 사람 팔 실기를 돌리지 않는다.**
+
+관련: [[ws/cobot2/plans/2026-08-05-cumotion-bringup]] §4-3
+
+---
+
 ## ~~octomap_server — 이 랩탑 리소스로는 기본 설정이 안 돌아간다 (2026-08-02)~~ ← 다른 랩탑 기록
 
 > 🔴 **2026-08-05 확인: 아래 하드웨어 사양은 이 실기 랩탑(`rokey`)이 아니라 개인PC에서 측정된 것이다.**
@@ -513,6 +544,39 @@ cbf3f3bdb2e4c03fca8486ed24de0e6a8a859e6bd22bce2f1434a610335abd3e   dis/epoch_105
   **썩은 캐시 객체를 먼저 지워야** lfs가 "이미 있음"으로 건너뛰지 않는다.
 - 네 파일 권한이 전부 `-rwxrwxrwx`였다 = FAT 계열 매체(USB) 경유 흔적. **대용량 자산을 매체·PC 간
   복사한 뒤에는 `sha256sum` 검증을 습관으로 한다.**
+
+### ✅ GraspGenX grasp 4×4 = `tool0` 목표 자세 (2026-08-05, 양쪽 URDF 대조로 확정)
+
+계획서 §1-3 6번("조용히 틀리는 지점")의 답이다. **추가 변환이 필요 없다.**
+
+| | 부모 → 그리퍼 base 조인트 |
+|---|---|
+| 우리 (`onrobot_rg2.xacro:33-35`) | `tool0 → rg2_base_link`, `xyz="0 0 0" rpy="0 0 1.57"` |
+| GraspGenX (`x_grippers/onrobot_RG2/gripper.urdf:8-12`) | `world → onrobot_rg2_base_link`, `xyz="0 0 0" rpy="0 0 1.5708"` |
+
+같은 메시(`meshes/rg2/visual/base_link.stl`), 같은 90° 요. 그리고 grasp 프레임이 `world` 쪽인 근거:
+`robot.py:61` "approach는 +Z, **contact는 +X**"인데 `onrobot_rg2_base_link` 안에서는 너클이
+**Y**로 벌어진다(`xyz="0 -0.007678 0.142297"`, `axis="-1 0 0"`). 90° 요가 Y→X로 돌린다.
+→ **grasp 프레임 = `world` = 우리 `tool0`.** 요가 양쪽에서 상쇄되므로 그대로 쓰면 된다.
+
+- 손끝(TCP) = grasp 원점 + **0.18 m** × grasp의 +Z축 (`config.json` `fingertip[2]`).
+  **grasp 원점을 물체 위치로 읽으면 안 된다** — 접근이 30° 기울면 원점은 물체에서 9 cm 옆에 앉는다.
+  2026-08-05에 이걸 "좌표 오차 7 cm"로 오진했다. 손끝으로 보면 사과 실측과 **1.1 cm**였다.
+- ⚠️ **미해결: URDF가 실물보다 짧을 수 있다.** URDF는 `tool0 → rg2_base_link` 오프셋이 **0**이고
+  그리퍼 bbox 최대 z가 `0.18999`(≈190 mm)인데, 사용자 확인으로 **RG2 매뉴얼은 ≈220 mm + 브라켓 10 mm**다.
+  차이가 실재하면 **MoveIt이 손끝을 40 mm 더 깊이 밀어넣는다**(§6 분기 F).
+  → 실기 전 **`tool0` 플랜지 면 → 손끝**을 줄자로 실측하고, 차이가 있으면 `tcp_offset_m`이 아니라
+  **`onrobot_rg2.xacro`의 `origin xyz`에 어댑터 두께를 넣는다.**
+
+### ⚠️ 단일 시점 "표면중심"은 물체 중심이 아니다 — 캘리브 오차로 오해하지 말 것 (2026-08-05)
+
+depth 마스크 픽셀의 평균은 **보이는 표면**의 무게중심이다. 반지름 `r`인 구를 한 시점에서 보면
+시선축을 따라 중심보다 카메라 쪽으로 **`2r/3`** 앞에 앉는다
+(투영 원판 균등 샘플: `(1/πr²)∫₀ʳ √(r²-ρ²)·2πρ dρ = 2r/3`).
+
+- 사과 `r=2.5 cm` → **1.7 cm**. 2026-08-05 실측에서 관측된 1.7 cm와 정확히 일치한다.
+- **이 값을 근거로 hand-eye 오프셋을 보정하면 없는 오차를 만들어 넣는 것이다.**
+- 캘리브를 정말 검증하려면 평면 타겟을 쓰거나, 물체라면 `Z.max()`(표면 최고점 ≈ 실제 상단)를 본다.
 
 ### `real_world` 씬 포맷 계약 — 우리 캡처가 이 규약을 따른다 (2026-08-05, loader 왕복 검증)
 

@@ -1,0 +1,25 @@
+diff --git a/src/curobo/curobolib/cpp/helper_math.h b/src/curobo/curobolib/cpp/helper_math.h
+index f0140ae..3c39e41 100644
+--- a/src/curobo/curobolib/cpp/helper_math.h
++++ b/src/curobo/curobolib/cpp/helper_math.h
+@@ -1127,10 +1127,20 @@ inline __host__ __device__ uint4 max(uint4 a, uint4 b)
+ // - linear interpolation between a and b, based on value t in [0, 1] range
+ ////////////////////////////////////////////////////////////////////////////////
+ 
++// [로컬 패치 2026-08-05] C++20에서 std::lerp(float,float,float)가 추가됐고, libstdc++의
++// <math.h>가 그것을 전역 네임스페이스로 주입한다. torch cpp_extension이 -std=c++20을
++// 강제하므로 아래 스칼라 오버로드가 std::lerp와 충돌해 빌드가 죽는다:
++//   helper_math.h:1130: error: 'float lerp(float, float, float)' conflicts with a
++//   previous declaration / cmath:1911: note: previous 'constexpr float std::lerp(...)'
++// 이 스칼라 lerp는 **cuRobo 전체에서 한 번도 호출되지 않는다**(grep 확인) — NVIDIA
++// helper_math.h 샘플에서 딸려온 죽은 코드다. 그래서 막아도 부작용이 없다.
++// 아래 float2/float3/float4 오버로드는 인자 타입이 달라 충돌하지 않으므로 그대로 둔다.
++#if __cplusplus < 202002L
+ inline __device__ __host__ float lerp(float a, float b, float t)
+ {
+     return a + t*(b-a);
+ }
++#endif
+ inline __device__ __host__ float2 lerp(float2 a, float2 b, float t)
+ {
+     return a + t*(b-a);

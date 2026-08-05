@@ -1,0 +1,25 @@
+diff --git a/src/curobo/geom/sdf/world_mesh.py b/src/curobo/geom/sdf/world_mesh.py
+index 4cb9e20..5fdf194 100644
+--- a/src/curobo/geom/sdf/world_mesh.py
++++ b/src/curobo/geom/sdf/world_mesh.py
+@@ -19,6 +19,20 @@ import numpy as np
+ import torch
+ import warp as wp
+ 
++# [로컬 패치 2026-08-05] 아래 67행이 `wp.torch.device_from_torch(...)`를 쓴다.
++# warp는 서브모듈을 자동 노출하지 않으므로 명시 임포트가 필요하다.
++#
++# ⚠️ 이건 **보조 장치일 뿐, 진짜 해결책이 아니다.** warp 1.16.0에는 `warp.torch` 모듈이
++#    아예 없다(ModuleNotFoundError). cuRobo 36ea382(2024-11-22)이 상정한 warp와 14개
++#    마이너 버전이 벌어진 탓이고, `setup.cfg:53`이 `warp-lang>=0.9.0`으로 **상한을 안 걸어**
++#    pip이 최신을 끌어온 결과다. 해결은 warp 다운그레이드다 (계획서 §2-3).
++#    여기서 삼키는 이유: 이 임포트가 실패해도 원래 코드와 같은 지점(67행)에서 죽게 해서,
++#    이 패치가 새로운 실패 원인으로 오해되지 않게 하려는 것이다.
++try:
++    import warp.torch  # noqa: F401
++except ImportError:
++    pass
++
+ # CuRobo
+ from curobo.geom.sdf.warp_primitives import SdfMeshWarpPy, SweptSdfMeshWarpPy
+ from curobo.geom.sdf.world import (

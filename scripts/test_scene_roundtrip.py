@@ -31,14 +31,34 @@ print('objects    :', {k: len(v["pc"]) for k, v in scene['objects'].items()})
 print('scene_xyz  :', scene['scene_xyz'].shape)
 assert set(scene['objects']) == {'obj_1', 'obj_2'}, scene['objects'].keys()
 
-# ③ 좌표가 base 프레임으로 제대로 왔는지 — 합성값과 대조
-for name, expect_z in (('obj_1', 0.05), ('obj_2', 0.06)):
+# ③ loader 가 낸 base 좌표 == 우리가 파일에 의도한 좌표인가.
+#    기대값을 상수로 박지 않는다(카메라 자세가 바뀌면 바로 낡는다).
+#    depth+K+camera_pose 로 여기서 독립적으로 다시 계산해 대조한다.
+import json  # noqa: E402
+import os  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+md = json.load(open(os.path.join(scene_dir, 'meta_data.json')))
+K = np.asarray(md['intrinsics'], float)
+T = np.asarray(md['camera_pose'], float)
+depth = np.load(os.path.join(scene_dir, 'depth.npy')).astype(np.float32)
+seg2d = np.asarray(Image.open(os.path.join(scene_dir, 'seg.png')), dtype=np.int32)
+vv, uu = np.mgrid[0:depth.shape[0], 0:depth.shape[1]]
+p_cam = np.stack([(uu - K[0, 2]) * depth / K[0, 0],
+                  (vv - K[1, 2]) * depth / K[1, 1], depth], -1)
+ref = (T[:3, :3] @ p_cam.reshape(-1, 3).T).T + T[:3, 3]     # R @ p + t
+ref = ref.reshape(depth.shape + (3,))
+
+for name in ('obj_1', 'obj_2'):
     pc = scene['objects'][name]['pc']
-    z = float(np.median(pc[:, 2]))
-    print(f'  {name}: {len(pc)} pts, median z = {z:.4f} m (기대 {expect_z})')
-    assert abs(z - expect_z) < 1e-3, f'{name} z 가 {z}, 기대 {expect_z} — 변환이 틀렸다'
-    cx, cy = float(np.median(pc[:, 0])), float(np.median(pc[:, 1]))
-    assert 0.10 < cx < 0.90 and -0.5 < cy < 0.5, f'{name} 이 작업공간 밖: ({cx}, {cy})'
+    m = (seg2d == md['label_map'][name]) & (depth > 0)
+    want = ref[m]
+    print(f'  {name}: loader {len(pc)} pts / 참조 {int(m.sum())} pts, '
+          f'중앙값 z {np.median(pc[:, 2]):+.4f} vs {np.median(want[:, 2]):+.4f}')
+    assert len(pc) == int(m.sum()), (len(pc), int(m.sum()))
+    d = np.abs(np.sort(pc, axis=0) - np.sort(want, axis=0)).max()
+    assert d < 1e-4, f'{name} loader 좌표가 참조와 {d:.2e} m 어긋난다'
 
 # ④ 충돌 필터가 쓰는 "대상 제외 씬" — 대상 점이 빠지고 나머지(테이블·다른 물체)는 남아야 한다
 full = len(scene['scene_xyz'])

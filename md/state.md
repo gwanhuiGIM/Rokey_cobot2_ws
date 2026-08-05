@@ -2,7 +2,32 @@
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-03
+**최종 갱신:** 2026-08-05
+
+## 🟢 지금 어디까지 왔나 (2026-08-05) — GraspGenX 실기 파이프라인 관통
+
+**명령 한 번에 촬영→세그멘테이션→GPU 추론→grasp 선택까지 돈다. 로봇은 아직 안 움직인다.**
+
+```
+ros2 service call /grasp/compute std_srvs/srv/Trigger
+  [grasp_bridge_node.py] 시스템 파이썬·rclpy          [graspgen_worker.py] uv venv·GPU
+    depth 10프레임 중앙값 → 세그멘테이션 → 씬 4파일 ──파이프──▶ GraspGenX (모델 1회 로드)
+    ◀── grasps(base_link) ── 점수·도달·접근축 필터 ──▶ /grasp/best, /grasp/best_tcp, /grasp/candidates
+```
+
+| 실측 결과 (사과) | 값 |
+|---|---|
+| 손끝(TCP) vs 자로 잰 사과 위치 | **1.1 cm** |
+| 세그멘테이션 표면중심 vs 실측 | **0.1 cm** |
+| 접근축 `R[2,2]` | −1.00 (수직) |
+| grasp 후보 | 12~32개 (씬에 따라) |
+
+- 파일: `scripts/{capture_graspgenx_scene,graspgen_worker,grasp_bridge_node}.py` + 테스트 3종.
+  **아직 ROS 패키지가 아니다**(`scripts/` 단독 실행). 동작이 굳으면 패키지로 올린다.
+- 계약·튜닝값·함정은 [[ws/cobot2/context/constraints]] "GraspGenX 관련"이 단일 출처다.
+- ⛔ **실기 모션 전 블로커 1개**: `tool0` 플랜지면 → RG2 손끝 **실측 거리**.
+  URDF는 190 mm(어댑터 오프셋 0), 매뉴얼은 220 mm + 브라켓 10 mm.
+  차이가 실재하면 MoveIt이 손끝을 **40 mm 더 깊이** 민다. 줄자 한 번이면 갈린다.
 
 > 📁 **문서 전체 지도는 [[ws/cobot2/README]]에 있다.** 어느 문서가 무엇의 단일 출처인지 거기서 본다.
 
@@ -13,9 +38,16 @@
 - push는 **VS Code Source Control**로 한다(터미널 git 아님). 정상 동작 확인 — 커밋 `6a78c78`까지 push 완료, 워킹트리 clean.
 - `~/.claude/CLAUDE.md`(전역 공통 규칙) 복원 완료.
 
-## 두 PC 체제 (2026-08-01 확정)
-- **개인PC(이 노트북)**: NVIDIA GPU **없음**(`nvidia-smi` 없음, docker 기본 런타임 `runc`). nvblox 빌드/실행 불가.
-- **GPU PC**: 별도 머신. nvblox 빌드·실행 전용. GPU/nvidia-docker 유무는 **아직 미확인** — Day0 최우선 확인 항목.
+## 두 PC 체제 — ⚠️ **hostname·계정으로는 구분되지 않는다** (2026-08-05 정정)
+
+두 PC 모두 hostname `rokey`, 계정 `kimkh`, `/home` 구성까지 같다. **`nvidia-smi` 유무로 구분한다.**
+
+- **GPU PC (지금 이 머신)**: **RTX 4060 Laptop 8GB**, 드라이버 595.84. 로봇(`192.168.1.100`)·D435i **직결**.
+  ⚠️ VRAM이 계획서들이 가정한 12GB가 아니라 **8GB**다 — `--num_grasps`를 64로 시작한다.
+  ⚠️ `kimkh`가 **docker 그룹에 없고**(멤버는 `rokey`) `nvidia-container-toolkit`도 미설치 →
+  Isaac ROS 컨테이너 경로(`run_dev.sh`)는 지금 못 쓴다. GraspGenX만 하면 docker 불필요.
+- **개인PC(노트북)**: NVIDIA GPU 없음. rosbag으로 개발.
+- 상세 하드웨어 실측표는 [[ws/cobot2/context/constraints]] "🔴 이 랩탑 하드웨어".
 - 역할 분담·시뮬레이션 범위·동기화 방법은 [[ws/cobot2/plans/2026-08-01-pc-role-split]] 참조.
 
 ### GPU PC 최초 세팅 절차
@@ -32,6 +64,12 @@ code .                                          # 이후 VS Code Source Control�
 - 개인PC에 `release-3.2`로 클론 완료: `isaac_ros_common`(`scripts/run_dev.sh` 존재 확인), `isaac_ros_nvblox` `v3.2-14`(submodule `nvblox_core` 포함).
 - **release-4.x 금지** — `run_dev.sh`가 Isaac ROS CLI로 이전되어 사라졌고 사실상 Jazzy 중심. 4.4로 받았다가 막혀서 3.2로 재클론한 이력 있음(2026-08-01).
 - `.isaac_ros_common-config` = `CONFIG_IMAGE_KEY=ros2_humble.realsense`
+- ⚠️ **`setup_isaac_ros.sh`는 GraspGenX를 클론하지 않는다.** 새 PC에서는 따로 받아야 한다:
+  `git clone https://github.com/NVlabs/GraspGenX.git isaac_ros-dev/src/GraspGenX` → `uv sync` (venv, torch).
+  체크포인트(HF `adithyamurali/GraspGenXModel`)는 **1.7 GB LFS**이고, 매체 복사로 옮기면
+  **크기가 맞아도 내용이 0으로 채워질 수 있다** — 반드시 `sha256sum` 검증(해시는 constraints.md).
+- `isaac_ros-dev/`에 `COLCON_IGNORE` 있음. **없으면 루트 `colcon build`가 CUDA 없이 nvblox를 빌드하려 든다**
+  (colcon은 `base_paths=['.']`로 repo 전체를 훑는다).
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
@@ -71,6 +109,17 @@ code .                                          # 이후 VS Code Source Control�
 
 > ✅ 1~3번(플러그인 설치 / 프로파일 축소 / self-filter / 장애물 회피)은 **2026-08-03에 끝났다.**
 > 결과·채택값·검증 상태는 [[ws/cobot2/review_moveit]]로 옮겼다. 아래는 남은 것만이다.
+
+0. ⛔ **`tool0` 플랜지면 → RG2 손끝 거리 실측 (줄자)** — 실기 모션의 전제.
+   URDF 190 mm vs 매뉴얼 220+10 mm. 차이가 있으면 **`tcp_offset_m`이 아니라
+   `onrobot_rg2.xacro`의 `origin xyz`에 어댑터 두께를 넣는다.** 근거는 constraints.md.
+0-b. **물체 이름 지정** — 지금 선택 정책은 "점수 최고"라 컵·노이즈를 집을 수 있다.
+   실제로 2026-08-05에 558 px 노이즈를 고르고 사과는 후보 0이었던 사례가 있다.
+   `-p min_pixels:=1000`이 임시 방편이고, 정본은 YOLO-seg + 음성 타겟팅
+   ([[ws/cobot2/plans/2026-08-05-foundationpose-graspgenx-pick]] §1).
+   ⚠️ **FoundationPose는 마스크를 만들어주지 않는다** — 마스크를 **입력으로 요구**하고 CAD 메시도 필요하다.
+   ROI/마스크 출처는 여전히 검출기(YOLO-seg 또는 RT-DETR)다.
+0-c. **RG2 개구 폭(`rgwd`) 계산** — grasp에서 폭을 뽑아 그리퍼 명령으로. 아직 미구현.
 
 1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).
