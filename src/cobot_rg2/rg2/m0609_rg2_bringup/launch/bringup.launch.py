@@ -19,6 +19,13 @@ def generate_launch_description():
         DeclareLaunchArgument('mode',       default_value='virtual',     description='Operation mode: real | virtual'),
         DeclareLaunchArgument('host',       default_value='127.0.0.10',   description='Robot IP (real mode)'),
         DeclareLaunchArgument('port',       default_value='12345',        description='Robot port'),
+        # moveit.launch.py도 자기 RViz(moveit.rviz)를 띄운다. 둘 다 켜면 RViz 프로세스가 2개가 되어
+        # /monitored_planning_scene(=octomap voxel 전체)을 두 번 역직렬화·렌더한다. 2026-08-05 실측:
+        # 이쪽 rviz2 21% + moveit쪽 15%. MotionPlanning 패널은 moveit.rviz에만 있으므로
+        # moveit을 함께 쓸 때는 이쪽을 끈다 → bringup.launch.py ... rviz:=false
+        DeclareLaunchArgument('rviz',       default_value='true',
+                              description='bringup RViz(default.rviz) spawn 여부. '
+                                          'moveit.launch.py와 함께 쓸 땐 false'),
     ]
 
     is_real    = PythonExpression(["'", LaunchConfiguration('mode'), "' == 'real'"])
@@ -202,6 +209,7 @@ def generate_launch_description():
         name='rviz2',
         output='log',
         arguments=['-d', rviz_config_file],
+        condition=IfCondition(LaunchConfiguration('rviz')),
     )
 
     return LaunchDescription(args + [

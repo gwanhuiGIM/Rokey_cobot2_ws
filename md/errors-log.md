@@ -139,3 +139,28 @@ $ python3 -c "import numpy as np; T=np.load('corecode/Calibration_Tutorial/T_cam
 4. **원인 해석을 하나로 적기 전에 다른 후보를 한 줄이라도 나열한다.** 오늘 `padding` 해석만 적고
    `max_range` 가설을 빠뜨렸다 — 후보를 적어두기만 했어도 실험이 하나 늘었다.
 5. **파라미터는 한 번에 하나만 바꾼다.** 두 개를 같이 올리면 효과가 겹쳐 원인이 분리되지 않는다.
+
+---
+
+## 2026-08-05 — GraspGenX 첫 실행
+
+### [문서 붕괴] 10. 체크포인트가 조용히 손상돼 있었다 — 에러 문구가 원인을 안 가리켰다
+
+`demo_scene_pc.py` 첫 실행이 `RuntimeError: PytorchStreamReader failed reading zip archive:
+failed finding central directory`로 죽었다.
+
+**오진하기 쉬운 지점 3개** (같은 로그에 전부 들어 있었다):
+- `Unable to load pointnet2_ops cpp extension` → 무해. 이 체크포인트는 `backbone=ptv3vanilla`다
+- `TORCH_CUDA_ARCH_LIST is not set` → 무해
+- traceback이 2겹 → 원인이 2개가 아니다. 1차 실패 후 `find_the_last_ckpt()`가 **같은 파일을 다시 열어**
+  같은 에러를 냈을 뿐이다
+
+**진짜 원인**: `gen/epoch_736.pth`의 크기는 정확한데(1,210,918,342 B) **뒤 80%가 0x00**이었다.
+`.git/lfs/objects/` 캐시 사본도 뒤 12%가 0이었다 — **두 사본이 서로 다른 지점에서 잘려 있었다.**
+파일 권한이 전부 `-rwxrwxrwx`인 것이 FAT 계열 매체 경유 흔적.
+
+**왜 못 알아챘나**: `du -sh`가 3.2 G로 나와서 "체크포인트 실물 있음"으로 판정했다.
+**크기는 무결성의 근거가 아니다.** sha256을 봤어야 했다.
+
+→ 규칙: **대용량 자산(체크포인트·bag·docker tar)을 매체/PC 간 복사한 뒤에는 `sha256sum`으로 검증한다.**
+   기대 해시는 [[ws/cobot2/context/constraints]] "GraspGenX 관련"에 적어뒀다.

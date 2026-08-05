@@ -142,16 +142,92 @@ ros2 run m0609_rg2_bringup calib_npy_to_tf.py corecode/Calibration_Tutorial/T_ca
 프레임을 못 받고, `/camera/*` 토픽이 통째로 사라진다. 증상이 "TF 프레임 없음"으로 나타나서
 캘리브 문제로 오진하기 쉽다. **뷰어를 먼저 닫고 노드를 띄운다.**
 
-## octomap_server — 이 랩탑 리소스로는 기본 설정이 안 돌아간다 (2026-08-02)
+## 🔴 이 랩탑 하드웨어 — 2026-08-05 재측정 (아래 2026-08-02 기록은 다른 랩탑 것이었다)
 
-측정한 실제 하드웨어:
+**실기 랩탑(hostname `rokey`)에서 직접 측정한 값이다. 이 절이 우선한다.**
+
+| 항목 | 실측 (2026-08-05, hostname `rokey`) | 확인 방법 |
+|---|---|---|
+| CPU | **Intel i7-13620H** — 10코어/16스레드 | `lscpu` |
+| GPU | **NVIDIA GeForce RTX 4060 Laptop 8GB** (+ Intel iGPU) | `lspci`, `nvidia-smi` |
+| 드라이버 | 595.84, `nvidia-smi`가 보고하는 CUDA 런타임 13.2 | `nvidia-smi` |
+| CUDA 툴킷 | `/usr/local/cuda-12.4` 존재하고 `nvcc` 바이너리도 있으나 **PATH에 없다** — 맨셸에서 `nvcc` = command not found. 쓰려면 PATH/LD_LIBRARY_PATH 설정 필요 | `ls -l /usr/local/cuda*/bin/nvcc`, `nvcc --version` |
+| GPU 스택 | **`torch` 미설치, `curobo` 미설치.** `~/cobot2_ws/isaac_ros-dev/`는 존재하나 `COLCON_IGNORE`가 있고 `src/`만 있음 | `python3 -c "import torch"`, `ls` |
+| 상시 부하 | `ros2_control_node` **208%**, move_group 23%, rviz2 21%+15%, joint_state_publisher 8% | `top -o %CPU` |
+| GPU 유휴 시 | util 0%, 16.68 W, 24 MiB. ⚠️ `nvidia-smi` 첫 샘플이 **590W/80W·17%** 같은 쓰레기 값을 뱉은 적 있음 — **한 번 더 재고 쓸 것** | `nvidia-smi --query-gpu=... --format=csv` |
+
+⚠️ **RViz가 어느 GPU로 렌더링 중인지는 미확인이다.** `prime-select`는 `on-demand`이고
+`nvidia-smi` 프로세스 목록에 Xorg(4MiB)·gnome-shell(2MiB)뿐 rviz2가 없다는 **정황**은 iGPU를
+가리키지만, `glxinfo`(mesa-utils)가 미설치라 실제 GL renderer 문자열을 확인하지 못했다.
+확정하려면 `sudo apt install mesa-utils` 후 `glxinfo -B | grep "OpenGL renderer"`.
+
+**"GPU 없음"을 근거로 내려진 결정 중 재검토 대상 — 다만 항목마다 근거가 다르다:**
+- nvblox / FoundationPose / GraspGenX / cuMotion / cuRobo 제외
+  ([[ws/cobot2/M0609_perception_motion_sprint_plan]] 3절·438행) → **GPU가 진짜 전제였으므로 무효.**
+  단 위 표대로 torch·curobo가 아직 없어 "가능해졌다"이지 "준비됐다"가 아니다.
+- `camera.launch.py`의 `424x240x15` 기본값 → 주석 근거가 거짓이므로 재검토 대상.
+- 🔴 `sensors_3d.yaml`의 `point_subsample: 3`, `max_update_rate: 1.0` → **이건 GPU 근거가 아니었다.**
+  원래 근거는 CPU다(`review_moveit.md:57` "CPU 부하 축소", `:60` "ros2_control_node 204% 경합 방지").
+  그리고 그 204%는 재측정에서 **208%로 사실상 그대로**다 — 하드웨어 정정이 이 결정을 무너뜨리지 않는다.
+  octomap 삽입에는 GPU가 한 줄도 안 쓰인다. 2026-08-05에 `max_update_rate`만 5.0으로 올리고
+  `point_subsample`은 3으로 되돌렸다(한 번에 하나만). 상세는 `sensors_3d.yaml` 주석.
+
+⚠️ **`PointCloudOctomapUpdater`는 단일 스레드다.** 헤더
+`/opt/ros/humble/include/moveit/pointcloud_octomap_updater/pointcloud_octomap_updater.h`의
+`octomap::KeyRay key_ray_;` — 레이캐스팅 버퍼가 인스턴스 멤버 1개라 구조적으로 동시 실행이 안 된다.
+**이건 소프트웨어 속성이라 랩탑이 바뀌어도 유효하다.** 아래 2026-08-02 절에도 같은 말이 있지만
+그 절은 하드웨어 기록이 틀려 강등됐으므로, 이 사실만 여기로 끌어올린다.
+→ "16스레드니까 여유 있다"는 논거를 octomap 갱신 지연에 쓰면 안 된다.
+
+## ✅ cuMotion은 Humble(Isaac ROS 3.2)에 있다 — 2026-08-05 확인
+
+[[ws/cobot2/M0609_perception_motion_sprint_plan]] 229행의 **"cuMotion은 사실상 Jazzy 전용으로
+재편되어 Humble 지원이 불확실"은 부정확하다.** `git ls-remote`로 확인한 실제 태그:
+
+```
+isaac_ros_cumotion 태그: … v3.2-12 v3.2-13 v3.2-14 v3.2-15 v3.2.0 v4.0-0 … v4.5-0
+```
+
+- **v4.x가 Jazzy 라인**이고, **3.2가 Humble 라인**이다. cuMotion은 3.2에도 있다.
+- 이미 클론된 `isaac_ros_common` / `isaac_ros_nvblox` / `isaac_ros_pose_estimation`이
+  전부 **`v3.2-14`** 태그다 → cuMotion도 같은 `v3.2-14`가 존재해 **버전 정렬이 깨끗하다.**
+- 같은 문서 114행·462행의 "Humble 유지하려면 3.2로 고정" 정책 자체는 옳다. 틀린 건
+  "그래서 cuMotion을 못 쓴다"는 결론뿐이다.
+
+### 착수 전 실제 블로커 (2026-08-05 실측) — GPU 유무가 아니다
+
+| 항목 | 상태 | 성격 |
+|---|---|---|
+| `nvidia-container-toolkit` | ❌ **미설치** (`dpkg -l` 0건, apt 저장소에도 없음) | 🔴 컨테이너에서 GPU를 못 본다. NVIDIA apt 저장소 추가 + `sudo apt` 필요 |
+| docker 그룹 | ❌ `kimkh`가 **docker 그룹에 없음** (`sudo`에는 있음) | 🔴 `docker ps`가 socket permission denied |
+| Docker | ✅ 29.7.0 설치됨 | — |
+| 네트워크 | ✅ github clone 가능 (`git ls-remote` 성공) | — |
+| `isaac_ros_cumotion` | ❌ 아직 클론 안 됨 (다른 3개는 `v3.2-14`로 있음) | 작업 항목 |
+| cuMotion용 로봇 구 모델(XRDF) | ❌ M0609+RG2용은 존재하지 않음 | 🟡 **직접 작성해야 함. 여기가 진짜 일정 리스크다** |
+
+> ⚠️ 위 🔴 두 개는 **팀 공유 랩탑의 시스템 전역 변경**이다(`~/.claude/CLAUDE.md` 5절 —
+> 다른 계정이 의존하는 자원은 임의로 건드리지 않는다). 팀 합의 후 사용자가 직접 실행할 것.
+
+> `/home/rokey/`는 `drwxr-x---`로 **권한 거부**라 그 계정의 curobo를 참고할 수 없다(2026-08-05 확인).
+> 접근 가능한 곳(`/home/jjh`, `/home/kimkh`, `/opt`)에 curobo 설치본은 없다. `~/.cache/uv`에
+> `nvidia-curobo` 메타데이터(567 B)만 있는데 이건 PyPI 조회 흔적이지 설치가 아니다.
+
+⚠️ RViz를 dGPU로 돌리려면 명시적 오프로드가 필요하다(on-demand라 기본은 iGPU):
+`__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia rviz2 ...`
+단 이건 **렌더링만** 옮긴다. octomap 갱신 지연(`max_update_rate`)과는 무관하다.
+
+---
+
+## ~~octomap_server — 이 랩탑 리소스로는 기본 설정이 안 돌아간다 (2026-08-02)~~ ← 다른 랩탑 기록
+
+> 🔴 **2026-08-05 확인: 아래 하드웨어 사양은 이 실기 랩탑(`rokey`)이 아니라 개인PC에서 측정된 것이다.**
+> 사용자 확인 완료. 하드웨어 수치는 위 절을 보고, 아래는 "저사양 머신에서의 octomap 튜닝 사례"로만 읽는다.
+
+측정한 실제 하드웨어 (❌ 개인PC, 이 랩탑 아님):
 - CPU **Intel i7-10510U** — 4코어/8스레드, 1.8GHz base, **15W 노트북 U-시리즈**
 - GPU **없음**. Intel UHD 내장(CometLake-U GT2)뿐 — `nvidia-smi` 미설치, `lspci`에 외장 GPU 없음
 - RAM 15 GB
 - **상시 부하: `ros2_control_node` 204% (= 2코어 점유)**, rviz2 ~12%, joint_state_publisher ~10%
-
-> ⚠️ 이 사실은 스프린트 계획의 **nvblox/FoundationPose/GraspGenX 전제(CUDA GPU)를 정면으로 깬다.**
-> 계획서 1절의 "GPU: x86_64 + NVIDIA GPU(CUDA)" 가정은 이 랩탑에서 **거짓**이다.
 
 octomap 부하 산술 추정(미실측, 추정):
 - 848×480 = 407k point/frame × 30 Hz = **12.2 M point/s**
@@ -421,6 +497,46 @@ base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 �
   `fingertip=[0,0,0.18]` — TCP는 원점에서 +Z로 18cm.
   `graspmoe.py:289` 주석이 이를 반대로 적어놨다(**코드가 맞고 주석이 틀림**).
 - `isaac_ros_foundationpose`는 **CAD 메시 필수**. model-free 모드 없음(`mesh_file_path` 파라미터).
+
+### 체크포인트 무결성 — 크기가 맞아도 내용이 0일 수 있다 (2026-08-05, 실측)
+
+`ext/graspgenx_checkpoints/release/gen/epoch_736.pth`의 정상 sha256:
+```
+8b55f31cdb8340a573b4df27b027c15cff326bd6debcb389bf631d2aaab7ac44   gen/epoch_736.pth   (1,210,918,342 B)
+cbf3f3bdb2e4c03fca8486ed24de0e6a8a859e6bd22bce2f1434a610335abd3e   dis/epoch_1056.pth  (483,889,478 B)
+```
+- **LFS 포인터가 아니라 "내용만 0으로 채워진" 손상이 실재한다.** 크기·머리 바이트(`PK\x03\x04`)가 정상이라
+  `ls`로는 절대 안 보인다. 증상은 `RuntimeError: PytorchStreamReader failed reading zip archive:
+  failed finding central directory` — **원인과 무관한 문구다**(`.pth`는 zip이고, 꼬리가 없다는 뜻).
+- 작업트리 사본과 `.git/lfs/objects/` 캐시 사본이 **서로 다른 지점에서**(19.9% / 87.7%) 잘려 있었다.
+  즉 LFS 캐시도 신뢰할 수 없다 → `git lfs pull`로 HF(`adithyamurali/GraspGenXModel`)에서 재수신해야 하고,
+  **썩은 캐시 객체를 먼저 지워야** lfs가 "이미 있음"으로 건너뛰지 않는다.
+- 네 파일 권한이 전부 `-rwxrwxrwx`였다 = FAT 계열 매체(USB) 경유 흔적. **대용량 자산을 매체·PC 간
+  복사한 뒤에는 `sha256sum` 검증을 습관으로 한다.**
+
+### `real_world` 씬 포맷 계약 — 우리 캡처가 이 규약을 따른다 (2026-08-05, loader 왕복 검증)
+
+`scripts/capture_graspgenx_scene.py` → `demo_scene_pc.py` 경로. 합성 장면으로 GraspGenX **자체 loader**를
+통과시켜 확인했다(`scripts/test_scene_roundtrip.py`, PASS).
+
+| 파일 | 규약 |
+|---|---|
+| `depth.npy` | float32, **미터**, (H,W) |
+| `rgb.png` / `seg.png` | 같은 해상도. seg는 정수 라벨맵 |
+| `meta_data.json` | `intrinsics`(3×3) / `camera_pose`(4×4) / `label_map` / `scene_bounds` |
+
+- `camera_pose`는 **카메라 점을 world로 보내는** 변환이다(`scene_loaders.py:86`). 여기에 tf2의
+  `base_link ← camera_color_optical_frame`을 넣으면 GraspGenX의 "world"가 곧 `base_link`가 된다.
+- **`obj_` 접두 라벨만 grasp 대상이 된다.** 그런데 씬 점군에는 라벨과 무관하게 유효 depth가 전부 들어간다
+  → **장애물은 seg 라벨이 없어도 충돌 필터에 잡힌다**(`build_scene_pc_excluding_object`는 대상 물체
+  픽셀만 뺀다). 테이블도 자동으로 장애물이다.
+- `--sample_data_dir`에는 **씬의 부모 디렉토리**를 준다. `collect_scene_items`가 `meta_data.json`이 있는
+  하위 디렉토리를 전부 긁는다(`:226`). 한 씬만 보려면 `--scene 00`.
+- `demo_scene_pc.py`는 **씬마다 `input("Press Enter…")`로 멈춘다**(`:381`). 멈춘 게 아니라 기다리는 것.
+  시각화는 RViz가 아니라 **viser** <http://localhost:8080>.
+- 기본값: `grasp_threshold 0.7` / `num_grasps 200` / `collision_threshold 0.02 m` /
+  `max_scene_points 8192` / `min_obj_points 100` / `filter_collisions True`.
+  **8 GB VRAM이므로 `--num_grasps 64`로 시작한다**(플랜의 12 GB 가정은 이 랩탑에 안 맞다).
 
 ---
 

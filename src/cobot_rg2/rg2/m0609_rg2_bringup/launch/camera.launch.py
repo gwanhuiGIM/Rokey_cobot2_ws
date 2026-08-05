@@ -48,10 +48,16 @@ def _apply_delta(t, q, dxyz, drpy):
 
 
 def _args():
-    # 해상도 기본값을 낮게 잡는다. 드라이버 기본(848x480x30)은 이 랩탑에서 안 돌아간다:
-    # i7-10510U 15W / GPU 없음 / ros2_control_node가 상시 204% 인데
-    # 848*480*30 = 12.2 M point/s 다. 424x240x15면 1/8 (약 1.5 M point/s).
-    # 실측 근거는 md/context/constraints.md "octomap_server — 이 랩탑 리소스로는 ...".
+    # 해상도 기본값을 낮게 잡는다: 848*480*30 = 12.2 M point/s, 424x240x15면 1/8 (약 1.5 M point/s).
+    #
+    # 🔴 2026-08-05 정정: 여기 있던 "i7-10510U 15W / GPU 없음" 근거는 **이 랩탑 사양이 아니었다**
+    #   (개인PC 측정치가 잘못 옮겨온 것). 실측은 i7-13620H 10C/16T + RTX 4060.
+    #   그래도 기본값을 그대로 두는 이유는 CPU가 아니라 **MoveIt octomap updater가 단일 스레드**라서다
+    #   — 코어가 16개여도 콜백 하나의 처리 시간은 안 줄어든다. 근거는 constraints.md
+    #   "이 랩탑 하드웨어 — 2026-08-05 재측정" 절(헤더의 octomap::KeyRay key_ray_).
+    #
+    # [튜닝] 올릴 때는 sensors_3d.yaml의 max_update_rate/point_subsample과 **곱으로** 붙는다는 점을
+    #   기억한다. 한 번에 하나만 올리고 move_group %CPU와 "queue is full" 로그를 보고 판단한다.
     #
     # color도 같이 낮춘다: align_depth.enable=true면 depth를 **color 해상도로 리샘플**하므로
     # color만 크면 낮춘 의미가 없다.
