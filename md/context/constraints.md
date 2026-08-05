@@ -421,3 +421,11 @@ base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 �
   `fingertip=[0,0,0.18]` — TCP는 원점에서 +Z로 18cm.
   `graspmoe.py:289` 주석이 이를 반대로 적어놨다(**코드가 맞고 주석이 틀림**).
 - `isaac_ros_foundationpose`는 **CAD 메시 필수**. model-free 모드 없음(`mesh_file_path` 파라미터).
+
+---
+
+## Isaac ROS 컨테이너 (Lightning AI / AWS EC2 GPU)
+
+> 📤 **2026-08-04에 [[ws/cobot2/plans/2026-08-04-gpu-rental-checklist]]로 전부 옮겼다.**
+> 대여 GPU(클라우드) 환경의 사실은 **실기 제약이 아니다** — 이 문서는 로컬 실물 하드웨어만 소유한다.
+> Fast DDS/CycloneDDS, nvblox 파라미터, Foxglove, FoundationPose 걸림돌은 전부 그쪽 §6~§8에 있다.

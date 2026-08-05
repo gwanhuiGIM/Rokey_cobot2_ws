@@ -302,12 +302,24 @@ rosdep install -i -r --from-paths src --rosdistro humble -y
 colcon build --symlink-install --packages-up-to isaac_ros_foundationpose
 source install/setup.bash
 
-# 첫 프레임 세그멘테이션 마스크 필요 (간단한 색상 기반 마스크 노드로 임시 대체 가능)
-# CAD 모델 있으면 model-based, 없으면 참조 이미지 몇 장으로 model-free 실행
-ros2 launch isaac_ros_foundationpose isaac_ros_foundationpose.launch.py \
-  input_depth_topic:=/camera/camera/depth/image_rect_raw \
-  input_rgb_topic:=/camera/camera/color/image_raw
+# 실행 명령은 gpu-rental-checklist §8-2 하나로 단일화했다. 3단계로 간다:
+#   1) NVIDIA 퀵스타트(Mustard 메시 + NVIDIA bag)로 스택 자체를 검증
+#   2) 우리 D435i bag/카메라 + iPhone LiDAR 스캔 메시  (interface_specs_file 을 848x480으로 복제)
+#   3) GraspGenX 연동 — 단, GraspGenX는 pose가 아니라 instance_mask를 받는다(§8-2 단계 3)
+sudo apt install -y ros-humble-isaac-ros-examples     # core.launch.py 는 clone이 아니라 apt다
+ros2 launch isaac_ros_examples isaac_ros_examples.launch.py launch_fragments:=foundationpose ...
 ```
+> ❌ **이전 버전의 이 블록에 있던 아래 명령은 틀렸다 (2026-08-05 확인).**
+> ```
+> ros2 launch isaac_ros_foundationpose isaac_ros_foundationpose.launch.py \
+>   input_depth_topic:=... input_rgb_topic:=...
+> ```
+> `input_depth_topic`/`input_rgb_topic`은 **선언되지 않은 launch 인자**다(런치 파일에 없음).
+> ros2 launch는 미선언 인자를 **에러 없이 무시**하므로(로컬 실행 확인) 토픽이 기본값에 남고
+> 노드는 아무것도 못 받은 채 조용히 대기한다. 게다가 `depth/image_rect_raw`는 frame이
+> `camera_depth_optical_frame`이라 컬러 내부파라미터와 맞지 않는다 — `aligned_depth_to_color`를 쓴다.
+> **"CAD 없으면 model-free"도 거짓이다** — `isaac_ros_foundationpose`에 model-free 모드는 없다(`constraints.md:423`).
+
 **DoD:** 물체 1종에 대해 FoundationPose가 추정한 6D pose와 실측 좌표 오차 확인(허용 오차 사전 정의, 예 <5mm, 회전 오차도 함께 기록).
 
 **P0. GraspGenX 기반 RG2 그립 지점 생성**

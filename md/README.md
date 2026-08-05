@@ -33,6 +33,7 @@
 | [plans/2026-08-03-octomap-integration.md](plans/2026-08-03-octomap-integration.md) | ✅ **완료(08-03)** — 결과는 `review_moveit.md`. 계획서 자체는 이력으로 보존 |
 | [plans/2026-08-03-c270-webcam-plan.md](plans/2026-08-03-c270-webcam-plan.md) | ⏸ 미착수 — C270 eye-in-hand. GPU 불필요 |
 | [plans/2026-08-03-gpu-dependent-candidates.md](plans/2026-08-03-gpu-dependent-candidates.md) | ⏸ 보류 — GPU 머신 확보 전엔 **어떤 명령도 실행하지 않는다** |
+| [plans/2026-08-04-gpu-rental-checklist.md](plans/2026-08-04-gpu-rental-checklist.md) | 🔴 **진행 중(Lightning AI).** 대여 GPU 환경의 **모든 것**이 여기 있다 — 절차 §1~5, **밟은 지뢰 §6**, 확정 명령어 §7, 실측 사실 §8. 클라우드 얘기는 `constraints.md`에 쓰지 않는다 |
 
 ## 산출물 · 이력
 

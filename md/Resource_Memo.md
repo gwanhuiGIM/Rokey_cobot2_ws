@@ -14,3 +14,18 @@
     "measured_at": "2026-08-04 08:58"
   }
 }
+
+{
+  "latency_ms": 8.68,
+  "latency_p95_ms": 8.8,
+  "peak_alloc_mb": 321.4,
+  "peak_reserved_mb": 336.0,
+  "total_vram_mb": 14912,
+  "device": "Tesla T4",
+  "workload": {
+    "scene_pts": 20000,
+    "ctrl_pts": 64,
+    "k": 64
+  }
+}
+max grasp K (safety 0.85): 1740

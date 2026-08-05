@@ -26,6 +26,10 @@
 
 ### 2-1. 시스템 패키지
 
+전체 의존성 목록(apt + pip)은 **`requirements.txt`** 한 파일에 모아뒀다.
+처음 세팅하는 머신이면 그쪽을 먼저 본다. 아래는 **MoveIt 4개만** — 빠뜨렸을 때 증상이
+특이해서 따로 남긴다.
+
 ```bash
 sudo apt install \
   ros-humble-moveit-configs-utils \
@@ -93,6 +97,10 @@ ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false
 | | `host` | `127.0.0.10` | 실기 IP. **실기는 반드시 `192.168.1.100`** |
 | | `port` | `12345` | |
 | `camera` | `driver` | `true` | `false`면 TF만 발행 (realsense-viewer를 쓰는 중이거나 bag 재생 시) |
+| | `dxyz` | `0 0 0` | 캘리브 평행이동 손보정 `"x y z"` (m, `base_link` 축) |
+| | `drpy` | `0 0 0` | 캘리브 회전 손보정 `"roll pitch yaw"` (deg, `camera_link` 축). 테이블이 기울어 보이면 pitch부터 |
+| | `depth_profile` | `424x240x15` | 이 랩탑(GPU 없음) 기준으로 낮춰 잡은 값. 올리면 move_group CPU가 같이 오른다 |
+| | `color_profile` | `424x240x15` | `align_depth`가 이 해상도를 따라가므로 depth만 낮춰선 의미 없다 |
 | `moveit` | `standalone` | `true` | **bringup 위에 얹을 땐 `false`.** `true`는 로봇 없이 MoveIt만 볼 때 |
 | | `rviz` | `true` | MoveIt RViz spawn 여부 |
 | | `octomap` | `true` | RealSense로 3D 장애물 감지. `false`면 RViz로 직접 놓은 장애물만 반영 → [알고리즘 디버깅](#8-시뮬레이션에서-장애물-놓고-회피-디버깅) |
