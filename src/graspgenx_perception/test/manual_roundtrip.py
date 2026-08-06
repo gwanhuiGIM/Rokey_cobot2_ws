@@ -1,7 +1,7 @@
 """수동 통합 확인용. 컨테이너 안에서 yolo_seg_node 를 띄운 채로 실행한다.
 
-    ros2 run yolo_seg yolo_seg_node --ros-args -p image_topic:=/yolo_seg_probe/image &
-    python3 src/yolo_seg/test/manual_roundtrip.py <이미지경로>
+    ros2 run graspgenx_perception yolo_seg_node --ros-args -p image_topic:=/yolo_seg_probe/image &
+    python3 src/graspgenx_perception/test/manual_roundtrip.py <이미지경로>
 
 이미지를 컬러 토픽으로 흘려보내고 /yolo_seg/labels 를 받아 라벨 분포를 찍는다.
 pytest 대상이 아니다 (파일명이 test_ 로 시작하지 않는다) — 실제 GPU·토픽이 필요하다.

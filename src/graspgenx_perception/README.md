@@ -1,4 +1,7 @@
-# yolo_seg
+# graspgenx_perception
+
+(구 `yolo_seg` — GraspGenX 파이프라인에 결합하며 패키지명을 바꿨다. 노드명·토픽(`/yolo_seg/*`)은
+그대로다.)
 
 YOLO 인스턴스 세그멘테이션을 ROS 토픽에 붙인다. 컬러 이미지를 구독해 **인스턴스 라벨맵**과
 **이진 마스크**를 발행한다.
@@ -11,17 +14,35 @@ YOLO 인스턴스 세그멘테이션을 ROS 토픽에 붙인다. 컬러 이미�
 - **`show=True` 대신 overlay 토픽.** GUI 창은 컨테이너 X11 에 묶이고 헤드리스에서 죽는다.
   `publish_overlay:=true` 로 켜는 이미지 토픽으로 뺐다.
 
-## 실행 환경 — 도커 컨테이너 전용
+## 실행 환경 — 원래는 도커 컨테이너 전용, 지금 이 PC는 상태가 다르다 ⚠️
 
-`ultralytics`/`torch` 는 **호스트 시스템 파이썬에 없다.** 설치하면 numpy 가 1.21.5 →
-1.26 으로 올라가 apt `cv_bridge` 를 덮는다(`~/.claude/CLAUDE.md` §3). GPU 컨테이너에서만 돈다.
+**설계 의도는 GPU 컨테이너 전용이다**: `ultralytics`/`torch` 를 호스트에 pip 설치하면 numpy 가
+apt `cv_bridge` 빌드 버전을 덮어써 깨질 수 있다(`~/.claude/CLAUDE.md` §3, 과거 실패 규칙).
 
+**하지만 2026-08-06 이 PC를 직접 확인한 결과, 그 전제 두 가지가 이미 깨져 있다** (아래는 실제로
+빌드·실행해서 확인한 것— README 옛 버전의 "도커 전용" 서술과 다르다):
+
+| 확인 | 실측 |
+|---|---|
+| 컨테이너 이름 | `od_kimkh` 없음. 있는 건 `object_detection` 하나뿐이고 **5일 전 종료 상태**(`Exited 130`) |
+| 그 컨테이너의 GPU 연결 | `DeviceRequests` 비어 있음 — **GPU 패스스루 설정이 안 돼 있다** |
+| 호스트에 `nvidia-smi` / `lspci` GPU | **둘 다 없음** — 이 PC 자체에 인식되는 NVIDIA GPU가 없다 |
+| 호스트 파이썬에 `ultralytics`/`torch` | **이미 설치돼 있다** (`~/.local`, torch 2.7.1+cu126, ultralytics 8.4.76) — `~/.claude/CLAUDE.md` "pip install을 `~/.local`에 하지 않는다" 규칙 위반 상태 |
+| 그 상태에서 `cv_bridge` + `numpy`(1.24.4, apt 1.21.5 아님) 왕복 변환 | **깨지지 않음** (직접 테스트) — 다만 이건 우연히 안 깨진 것이지 승인된 구성이 아니다 |
+
+**즉 지금 이 PC는 "컨테이너 없이도 host에서 import 는 다 되지만 GPU 는 어디에도 없는" 상태다.**
+`~/.local` 오염을 누가·왜 설치했는지는 확인 못 했다 — 지우는 건 하지 않았다(다른 도구가 물려
+쓸 수 있어 사용자 판단이 필요하다, `pip show torch` 의 `Required-by: openai-whisper` 참고).
+
+컨테이너를 되살리려면 (이름이 바뀌었을 수 있으니 실제 이름을 먼저 확인할 것):
 ```bash
-docker exec -it od_kimkh bash
+docker start object_detection && docker exec -it object_detection bash
 source /opt/ros/humble/setup.bash && source /home/kimkh/cobot2_ws/install/setup.bash \
   && export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml
-ros2 run yolo_seg yolo_seg_node
+ros2 run graspgenx_perception yolo_seg_node
 ```
+GPU 패스스루가 없으므로 컨테이너 안에서도 `-p device:=cpu` 로 띄워야 한다(아래 "이 PC에서
+테스트 가능한가" 참고).
 
 `FASTRTPS_DEFAULT_PROFILES_FILE` 은 **호스트 터미널에도** 걸어야 한다. rqt 를 띄우는
 터미널도 포함이다. 없으면 토픽 탐색은 되는데 데이터가 안 흐른다(FastDDS 공유메모리가
@@ -30,11 +51,35 @@ ros2 run yolo_seg yolo_seg_node
 오버레이까지 보려면 (컨테이너에서 노드, **호스트에서 rqt**):
 ```bash
 # 컨테이너
-ros2 run yolo_seg yolo_seg_node --ros-args -p publish_overlay:=true
+ros2 run graspgenx_perception yolo_seg_node --ros-args -p publish_overlay:=true
 # 호스트 — 위 export 를 이 터미널에도 건 뒤
 ros2 run rqt_image_view rqt_image_view
 #   토픽 드롭다운에서 /yolo_seg/overlay 를 고르고 transport 를 compressed 로 둔다
 ```
+
+## 이 PC에서 지금 테스트 가능한가
+
+**2026-08-06, 이 세션에서 직접 빌드·실행해 확인한 결과다.**
+
+| 하고 싶은 것 | 지금 이 PC에서 | 근거 |
+|---|---|---|
+| `colcon build --packages-select graspgenx_perception` | **가능** | 실행함 — PASS |
+| `build_label_map` 등 순수 함수 유닛테스트 | **가능** | `pytest ... -p no:anyio` 로 10개 PASS. 기본 `pytest` 는 죽는다(아래) |
+| `ros2 run graspgenx_perception yolo_seg_node` 를 호스트에서 바로 | **뜨긴 뜨는데 가중치가 없어 즉시 종료** | 실행함 — `FileNotFoundError`, README "가중치" 절대로 |
+| 그 위에서 실제 YOLO 추론 | **지금 당장은 불가** | 가중치 파일이 이 PC에 없다(`*.pt` 는 `.gitignore`) — 받아오거나 컨테이너에서 복사해야 함 |
+| GPU(`device:=0`)로 추론 | **불가** | 이 호스트에 `nvidia-smi`/GPU 자체가 없다. 컨테이너도 GPU 패스스루 미설정 |
+| CPU(`device:=cpu`)로 추론 | 가중치만 있으면 **가능할 것** (미검증 — 가중치가 없어 여기까지 못 감) | README 자체 벤치마크로는 848×480 기준 63.6ms/frame 수준 |
+| 도커 컨테이너 안에서 돌리기 | **컨테이너가 꺼져 있다** | `object_detection` 컨테이너, 5일 전 Exited(130). `docker start object_detection` 로 되살려야 함 |
+
+**기본 `pytest` 가 죽는 이유**: `~/.local/lib/python3.10/site-packages` 에 `anyio` 가 깔려 있고
+그 pytest 플러그인이 apt `python3-pytest` 와 안 맞아 `ModuleNotFoundError: No module named
+'_pytest.scope'` 로 죽는다 — `~/.claude/CLAUDE.md` §3 에 이미 기록된 실패 유형과 같다.
+`-p no:anyio` 로 그 플러그인 자동 로드만 끄면 정상 통과한다. 근본 해결(=`~/.local` 정리)은
+다른 도구가 그 경로에 의존할 수 있어 사용자 판단 없이 건드리지 않았다.
+
+**추론까지 실기로 확인하려면** 다음이 필요하다: (1) 가중치 `.pt` 를 이 PC에 받아오거나 컨테이너
+에서 복사, (2) `-p device:=cpu` (GPU 없음), (3) 실제 카메라 토픽이거나
+`test/manual_roundtrip.py` 프로브. 이번 세션에서는 (1)이 없어 여기까지 확인하지 못했다.
 
 ## 토픽
 
@@ -100,16 +145,16 @@ ros2 run rqt_image_view rqt_image_view
 ## graspx 와 함께 띄우기
 
 ```bash
-ros2 launch yolo_seg graspx.launch.py
+ros2 launch graspgenx_perception graspx.launch.py
 ```
 
 `scripts/grasp_bridge_node.py` 와 `scripts/capture_graspgenx_scene.py` 를 이 패키지의 실행
 파일로 심어뒀다 — 파일은 `scripts/` 에 그대로 두고(기존 테스트가 거기를 import 한다) 경로만
-`yolo_seg` 로 통일했다.
+`graspgenx_perception` 으로 통일했다.
 
 ```bash
-ros2 run yolo_seg grasp_bridge_node.py
-ros2 run yolo_seg capture_graspgenx_scene.py
+ros2 run graspgenx_perception grasp_bridge_node.py
+ros2 run graspgenx_perception capture_graspgenx_scene.py
 ```
 
 **두 노드는 같은 머신에서 못 돈다.** `yolo_seg_node` 는 ultralytics 때문에 **컨테이너 전용**
@@ -117,10 +162,10 @@ ros2 run yolo_seg capture_graspgenx_scene.py
 런치 인자로 반씩 나눠 띄운다:
 
 ```bash
-# 컨테이너 (od_kimkh)
-ros2 launch yolo_seg graspx.launch.py run_bridge:=false
+# 컨테이너 (object_detection — 이름 확인은 `docker ps -a`)
+ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false
 # 호스트
-ros2 launch yolo_seg graspx.launch.py run_yolo:=false
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false
 ros2 service call /grasp/compute std_srvs/srv/Trigger
 ```
 
@@ -162,8 +207,11 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 않는다.** 다른 PC 에서 `git pull` 만 하면 파일이 없어 노드가 뜨자마자 죽는다:
 
 ```bash
-docker exec -it od_kimkh bash -lc \
+# 컨테이너 이름은 `docker ps -a` 로 먼저 확인할 것 (2026-08-06 기준 od_kimkh 없음, object_detection 뿐)
+docker exec -it object_detection bash -lc \
   'cd /home/kimkh/cobot2_ws/src/object_detection/resource && python3 -c "from ultralytics import YOLO; YOLO(\"yolo11n-seg.pt\")"'
+# 호스트에도 ultralytics 가 이미 있으므로 (README "실행 환경" 참고) 컨테이너 없이 아래로도 받을 수 있다 — ⚠️ 미검증:
+python3 -c 'from ultralytics import YOLO; YOLO("/home/kimkh/cobot2_ws/src/object_detection/resource/yolo11n-seg.pt")'
 ```
 
 노드는 시작 시 두 번 막는다:
@@ -177,20 +225,21 @@ docker exec -it od_kimkh bash -lc \
 
 | 항목 | 상태 |
 |---|---|
-| `colcon build --symlink-install --packages-select yolo_seg` | **PASS** |
-| `pytest src/yolo_seg/test/test_yolo_seg.py` (호스트, ultralytics 없이) | **PASS** 10개 |
+| `colcon build --symlink-install --packages-select graspgenx_perception` | **PASS** (2026-08-06, `graspgenx_perception` 로 개명 후 재확인) |
+| `pytest src/graspgenx_perception/test/test_yolo_seg.py` (호스트) | **PASS** 10개 — 기본 `pytest` 는 `~/.local` 의 `anyio` 플러그인이 apt pytest 와 충돌해 죽는다. `-p no:anyio` 로 우회해야 돈다(2026-08-06 확인, 아래 "이 PC에서 테스트 가능한가" 참고) |
 | 컨테이너 통합 — 194×259 입력 → `labels` 194×259, `mask` `[0,255]` | **검증됨** |
 | `classes:="[1,16]"` 필터 — 4개 검출이 2개(`[0,101,102]`)로 | **검증됨** |
 | 입력 없을 때 5초 watchdog 경고 · SIGTERM 시 스택트레이스 없이 종료 | **검증됨** |
 | 호스트 수신율 `labels` 4.995Hz / `overlay` 5.002Hz (프로브 5Hz) | **검증됨** — 무손실 |
 | **실기 카메라** 848×480 → `overlay/compressed` 11.7~12.3Hz, 44KB/프레임 | **검증됨** |
 | 컨테이너가 호스트 카메라 raw 를 받는 속도 12.3Hz / compressed 15.0Hz | **검증됨** |
-| `ros2 launch yolo_seg graspx.launch.py run_bridge:=false` (컨테이너) | **검증됨** |
+| `ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false` (컨테이너) | **검증됨** (개명 전 `yolo_seg` 기준. 개명 후 재확인 안 함 — 컨테이너가 꺼져 있어 이번 세션에서 못 돌렸다) |
+| `ros2 run graspgenx_perception yolo_seg_node` 실행 파일 해석·기동 (호스트, `device:=cpu`) | **검증됨** — 가중치 없어 `FileNotFoundError` 로 정상 종료(2026-08-06) |
 | `... run_yolo:=false` (호스트) — bridge 기동 | **검증됨** |
 | `seg_source=yolo` 경로 (`segment_from_labels`) | **검증됨** — 라벨 압축·박스·반경 크롭·실패 메시지 |
 | 기존 graspx 테스트 2종 회귀 | **PASS** (`test_capture_graspgenx_scene`, `test_grasp_bridge`) |
 | 기본 가중치 자동 해석(`object_detection` share) | **검증됨** (노드 로그) |
-| GPU 추론 `device=0` | **검증됨** (RTX 4060) |
+| GPU 추론 `device=0` | **검증됨** (RTX 4060 — 과거 세션/다른 구성. 2026-08-06 이 PC엔 GPU가 없다, 위 "이 PC에서 지금 테스트 가능한가" 참고) |
 | **`/grasp/compute` 실기 호출** (`geometric`) | **성공** — obj_1 score=0.703, 후보 46개 |
 | **`/grasp/compute` 실기 호출** (`yolo`) | **실패** — 후보는 나오나 충돌 필터 0/29·0/28 통과 |
 
@@ -212,8 +261,8 @@ docker exec -it od_kimkh bash -lc \
 ## 수동 통합 확인
 
 ```bash
-ros2 run yolo_seg yolo_seg_node --ros-args -p image_topic:=/yolo_seg_probe/image &
-python3 src/yolo_seg/test/manual_roundtrip.py corecode/OD_Tutorial/YOLO_SIMPLE/sample2.jpg
+ros2 run graspgenx_perception yolo_seg_node --ros-args -p image_topic:=/yolo_seg_probe/image &
+python3 src/graspgenx_perception/test/manual_roundtrip.py corecode/OD_Tutorial/YOLO_SIMPLE/sample2.jpg
 ```
 
 프로브는 기본적으로 `/yolo_seg_probe/image` 로 쏜다. 실제 카메라 토픽에 주입하면

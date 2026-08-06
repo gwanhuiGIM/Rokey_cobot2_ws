@@ -21,6 +21,8 @@ task_manager:
     joint_tolerance: 0.001
     ik_timeout_sec: 0.2
     ik_avoid_collisions: true   # false 로 두면 도달성만 따로 볼 수 있다(디버깅용)
+    planning_pipeline: ompl     # ompl | isaac_ros_cumotion (scripts/bench_planning_time.py 와 같은 이름)
+    planner_id: ''              # 비우면 파이프라인 기본 플래너
     replan: true
     replan_attempts: 3
     replan_delay: 0.5

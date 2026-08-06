@@ -8,7 +8,7 @@ ultralytics 는 도커 컨테이너에만 있으므로 노드 모듈이 호스�
 import numpy as np
 import pytest
 
-from yolo_seg.yolo_seg_node import LABEL_OBJ_BASE, MAX_OBJECTS, build_label_map
+from graspgenx_perception.yolo_seg_node import LABEL_OBJ_BASE, MAX_OBJECTS, build_label_map
 
 
 def test_empty_masks_gives_zero_label_map():

@@ -16,18 +16,21 @@
    실기에서 움직이려면 두 개를 명시적으로 꺼야 한다. 사고는 기본값에서 나온다.
 """
 
+import threading
+
 import rclpy
 from geometry_msgs.msg import PoseArray, PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import String
+from std_msgs.msg import Int8, String
 from std_srvs.srv import Trigger
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import SUCCESS, MoveItBridge, err_name, merge_acm
 from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client
+from pick_fsm.robot_safety_node import UNSAFE_STATES
 from pick_fsm.states import HOLDING_STATES, State, is_allowed
 
 try:                                    # pick_fsm_msgs 가 없어도 legacy/manual 경로는 돌게 한다
@@ -90,6 +93,11 @@ class TaskManager(Node):
                                  callback_group=cb)
         self.create_subscription(PoseArray, p['grasp_candidates_topic'], self._on_candidates,
                                  10, callback_group=cb)
+        # robot_safety_node 가 별도 프로세스로 Doosan 로봇상태를 폴링해 발행한다
+        # (충돌 등으로 SAFE_STOP/EMERGENCY_STOP 에 들어가면 여기가 값을 받는다).
+        # 이 노드는 안 떠 있어도 된다 — 그러면 그냥 이 감시 기능만 빠진다.
+        self.create_subscription(Int8, '/pick/robot_state_code', self._on_robot_state, 10,
+                                 callback_group=cb)
 
         # ── 관측·조작 인터페이스 ───────────────────────────
         self.state_pub = self.create_publisher(String, '/pick/state', 10)
@@ -107,6 +115,11 @@ class TaskManager(Node):
         self._start_req = False
         self._approved = False
         self._abort_req = None      # 사유 문자열
+        # _abort_req 는 /pick/abort(서비스 콜백)와 _on_robot_state(구독 콜백) 양쪽에서
+        # 쓰고 _tick(타이머 콜백)이 읽어서 비운다 — 셋 다 ReentrantCallbackGroup 이라 다른
+        # 스레드에서 동시에 돌 수 있다. 락 없이 두면 robot_state 트리거가 조용히
+        # 유실될 수 있다(2026-08-07 cross-review 지적).
+        self._abort_lock = threading.Lock()
         self._octomap_cleared = False
         self._acm = None
         self.target = ''
@@ -150,6 +163,10 @@ class TaskManager(Node):
             'joint_tolerance': 0.001,
             'ik_timeout_sec': 0.2,
             'ik_avoid_collisions': True,
+            # 'ompl' | 'isaac_ros_cumotion' (scripts/bench_planning_time.py 와 같은 이름).
+            # IK 는 이 값과 무관 — move_group 의 GetPositionIK 는 파이프라인을 안 탄다.
+            'planning_pipeline': 'ompl',
+            'planner_id': '',
             'replan': True,                  # 실행 중 씬이 바뀌면 move_group 이 다시 계획한다
             'replan_attempts': 3,
             'replan_delay': 0.5,
@@ -218,6 +235,19 @@ class TaskManager(Node):
     def _on_candidates(self, msg):
         self._candidates = [(msg.header, pose) for pose in msg.poses]
 
+    def _on_robot_state(self, msg):
+        """충돌 등으로 로봇이 자체적으로 안전정지에 들어가면 하던 작업을 즉시 ABORT.
+
+        IDLE/ABORT/SAFE_STOP/SPEAK_FAIL 에서는 중단할 작업이 없으니 다시 안 건드린다 —
+        안 그러면 이미 SAFE_STOP 인데 폴링될 때마다 로그만 쌓인다.
+        """
+        if int(msg.data) not in UNSAFE_STATES:
+            return
+        if self.state in (State.IDLE, State.ABORT, State.SAFE_STOP, State.SPEAK_FAIL):
+            return
+        with self._abort_lock:
+            self._abort_req = f'로봇 안전정지 감지 (robot_state={int(msg.data)})'
+
     def _srv_start(self, _req, res):
         if self.state is not State.IDLE:
             res.success, res.message = False, f'IDLE 이 아니다 (현재 {self.state.name})'
@@ -238,7 +268,8 @@ class TaskManager(Node):
         if self.state in (State.IDLE, State.ABORT, State.SAFE_STOP):
             res.success, res.message = False, f'중단할 게 없다 (현재 {self.state.name})'
             return res
-        self._abort_req = '사용자 abort'
+        with self._abort_lock:
+            self._abort_req = '사용자 abort'
         res.success, res.message = True, '중단 요청'
         return res
 
@@ -289,8 +320,10 @@ class TaskManager(Node):
     # 메인 루프
     # ────────────────────────────────────────────────────────
     def _tick(self):
-        if self._abort_req and self.state not in (State.ABORT, State.SAFE_STOP):
-            why, self._abort_req = self._abort_req, None
+        with self._abort_lock:
+            why = self._abort_req
+            self._abort_req = None
+        if why and self.state not in (State.ABORT, State.SAFE_STOP):
             self._abort(why)
             return
         timeout = DEFAULT_TIMEOUTS.get(self.state)
@@ -562,7 +595,8 @@ class TaskManager(Node):
                 planning_time=self.p('planning_time'), attempts=self.p('planning_attempts'),
                 tolerance=self.p('joint_tolerance'),
                 replan=bool(self.p('replan')), replan_attempts=self.p('replan_attempts'),
-                replan_delay=self.p('replan_delay'))
+                replan_delay=self.p('replan_delay'),
+                pipeline=self.p('planning_pipeline'), planner_id=self.p('planner_id'))
             return
         done, result = self._call.poll()
         if not done:

@@ -31,6 +31,10 @@ IDLE → LISTENING → PERCEIVE → SCENE_PREP → PLAN → WAIT_APPROVAL ✋
            어디서든 → ABORT → SAFE_STOP → (사용자 리셋) → IDLE
 ```
 
+`어디서든 → ABORT`는 `/pick/abort` 서비스 호출 말고 **한 가지 경로가 더 있다**: 로봇이
+충돌 등으로 자체 안전정지에 들어가면(`robot_safety_node`가 감지, §8) `task_manager`가
+같은 경로로 자동 ABORT 한다 — 사람이 먼저 부르지 않아도 하던 이동은 멈춘다.
+
 문서 대비 **의도적으로 다르게 만든 곳 2가지**:
 
 | 문서 | 구현 | 이유 |
@@ -58,11 +62,16 @@ ros2 launch m0609_rg2_bringup camera.launch.py
 # 4) grasp 공급원 (지금은 아직 패키지가 아니다 — scripts/ 단독 실행)
 python3 scripts/grasp_bridge_node.py
 
-# 5) 상태머신
+# 5) 상태머신 + robot_safety_node (같은 launch 로 같이 뜬다, §8)
 ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
+# cuMotion 파이프라인으로 계획하려면 (2번에서 move_group 에 cuMotion 이 떠 있어야 한다):
+ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger planning_pipeline:=isaac_ros_cumotion
+
+# 6) (선택) 상태 감시 + 승인/안전 조작 UI — 언제 껐다 켜도 된다, §9
+rqt --standalone pick_fsm
 ```
 
-조작:
+조작 — 터미널로 직접 하거나, 6번의 rqt 패널 버튼으로:
 
 ```bash
 ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서만)
@@ -70,6 +79,9 @@ ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인
 ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
 ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → IDLE
 ros2 topic echo /pick/state                               # 현재 상태
+ros2 service call /safety/stop            std_srvs/srv/Trigger {}   # 즉시 정지 (§8)
+ros2 service call /safety/enter_backdrive std_srvs/srv/Trigger {}   # 사람이 팔을 손으로 밀 수 있게
+ros2 service call /safety/exit_backdrive  std_srvs/srv/Trigger {}   # 정상 모드로 복귀
 ```
 
 로봇 없이 상태 흐름만 보려면:
@@ -100,6 +112,7 @@ ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 승인은 여전히
 | `/pick/approve` | `std_srvs/Trigger` | `WAIT_APPROVAL` 에서만 받는다 |
 | `/pick/abort` | `std_srvs/Trigger` | 진행 중 goal 을 취소하고 SAFE_STOP |
 | `/pick/reset` | `std_srvs/Trigger` | SAFE_STOP → IDLE |
+| `/pick/robot_state_code` | `std_msgs/Int8` | **`robot_safety_node`가 발행** — `task_manager`는 이 값이 안전정지류(§8)면 자동으로 abort 한다 |
 
 ### 이 노드가 쓰는 것
 
@@ -214,7 +227,7 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 | 그룹 | 파라미터 | 비고 |
 |---|---|---|
 | 안전 | `dry_run`, `require_approval`, `approval_timeout_sec` | 기본값이 안전 쪽 |
-| MoveIt | `planning_group`, `ee_link`, `base_frame`, `joint_names`, `vel_scale`, `acc_scale`, `planning_time`, `planning_attempts`, `joint_tolerance`, `ik_timeout_sec`, `ik_avoid_collisions`, `replan*`, `motion_retries` | `base_frame` 은 `world` 가 아니라 `base_link` |
+| MoveIt | `planning_group`, `ee_link`, `base_frame`, `joint_names`, `vel_scale`, `acc_scale`, `planning_time`, `planning_attempts`, `joint_tolerance`, `ik_timeout_sec`, `ik_avoid_collisions`, `planning_pipeline`, `planner_id`, `replan*`, `motion_retries` | `base_frame` 은 `world` 가 아니라 `base_link`. `planning_pipeline`: `ompl`(기본) \| `isaac_ros_cumotion` — IK 는 파이프라인을 안 타므로 영향 없음, `_move()`(관절목표 계획)에만 적용됨. 그 파이프라인이 `move_group`에 떠 있어야 한다 |
 | 자세 | `approach_offset_m`, `lift_offset_m`, `tcp_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환 |
 | 씬 | `object_id`, `object_radius_m`, `clear_octomap_before_descend`, `allow_gripper_octomap_collision`, `gripper_links` | 뒤 둘은 §4 읽고 켤 것 |
 | 그리퍼 | `gripper_backend`, `grip_clearance_m`, `max_grip_width_m`, `force_down_steps`, `gripper_settle_sec`, `verify_required`, `grip_retries` | |
@@ -295,3 +308,75 @@ colcon test --packages-select pick_fsm && colcon test-result --verbose
 못하고, 한 `ament_cmake` 패키지에서 `rosidl_generate_interfaces` 와
 `ament_python_install_package` 를 같이 쓰면 생성된 `<pkg>/__init__.py` 와 우리 모듈이
 같은 설치 경로에서 충돌한다.
+
+## 8. `robot_safety_node` — 안전정지·backdrive
+
+```bash
+ros2 run pick_fsm robot_safety_node          # pick_fsm.launch.py 를 쓰면 자동으로 같이 뜬다
+```
+
+`task_manager` 와 **별도 프로세스**다. FSM이 에러 루프에 갇히거나 죽어도 안전 조작은 계속
+먹어야 한다는 원칙 — 안전 기능을 복잡한 상위 로직의 건강 상태에 기대게 하지 않는다.
+
+| 이름 | 타입 | 설명 |
+|---|---|---|
+| `/pick/robot_state_code` | `std_msgs/Int8` (pub) | `GetRobotState.srv` 원본 정수, 2 Hz |
+| `/pick/robot_state_text` | `std_msgs/String` (pub) | 사람이 읽는 이름 (`SAFE_STOP` 등) |
+| `/safety/stop` | `std_srvs/Trigger` | `MoveStop(DR_HOLD)` — 즉시 정지 |
+| `/safety/enter_backdrive` | `std_srvs/Trigger` | `SetSafetyMode(BACKDRIVE)` — 사람이 손으로 팔을 밀 수 있게 |
+| `/safety/exit_backdrive` | `std_srvs/Trigger` | `SetSafetyMode(AUTONOMOUS)` + 필요하면 `SetRobotControl(RESET_SAFET_STOP/OFF)` |
+
+세 서비스 다 **fire-and-forget**이다 — `/pick/start`와 같은 계약으로, 응답은 "요청 보냈다"
+뿐이고 실제 결과는 로그와 `/pick/robot_state_text`로 나중에 드러난다. 서비스 콜백 안에서
+`spin_until_future_complete`를 쓰면 재진입으로 엉킨다는 게 이 워크스페이스에서 이미 겪은
+함정이라(`task_manager.py`의 `_service()` 주석) 아예 블로킹을 피했다.
+
+### ⚠️ backdrive는 두 가지가 있고, 하나는 위험하다
+
+`SetSafetyMode(safety_mode=BACKDRIVE)` 만 쓴다. **`SetRobotControl(robot_control=
+CONTROL_RECOVERY_BACKDRIVE)`(값 6)는 절대 안 쓴다** — 이름이 비슷해서 헷갈리기 쉬운데,
+그건 `STATE_SAFE_OFF2` 전용 H/W 복구 경로라 쓰면 **컨트롤러 전원을 재부팅해야
+STATE_STANDBY로 돌아온다**(`dsr_msgs2/srv/system/SetRobotControl.srv:15` 주석 원문). `robot_safety_node.py`
+는 이 값을 아예 안 쓰지만, 나중에 이 파일을 손대는 사람을 위해 여기 적어둔다.
+
+### ⚠️ 실기 미검증
+
+이 워크스페이스에서 `/safety/enter_backdrive`·`/safety/exit_backdrive`를 실제 로봇으로
+눌러본 적이 없다(2026-08-07 작성). `dsr_controller2.cpp`의 `OnMonitoringStateCB`가
+`STATE_SAFE_STOP`에서는 스스로 복귀를 시도한다는 것도 **소스를 읽고 판단한 것**이지
+실기로 관측한 게 아니다. 처음 쓸 때는:
+- 비상정지 버튼을 손 닿는 곳에 둘 것
+- 저속·저위험 자세(팔이 사람이나 장애물에서 먼 자세)에서 먼저 `enter_backdrive` 눌러
+  실제로 손으로 밀리는지, `exit_backdrive`가 정상 모드로 정말 돌아오는지 확인할 것
+- 안 되면 티치펜던트로 개입할 수 있는 상태를 유지할 것 (이 서비스들이 펜던트를
+  대체하는 게 아니라, 대체 안 되는 순간을 위해 펜던트가 항상 그 자리에 있어야 한다)
+
+## 9. 상태/제어 UI — rqt 패널
+
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+rqt --standalone pick_fsm
+```
+
+`pick_fsm.launch.py`와 **별개로** 뜬다 — UI는 껐다 켰다 해도 자동중단(§8)은 항상 동작해야
+하고, 반대로 UI만 열어서 상태를 구경하고 싶을 때 로봇 쪽 launch를 다시 켤 필요가 없어야
+하기 때문이다. `rqt`는 여러 패널을 한 창에 도킹할 수 있다 — 로그를 같이 보고 싶으면
+`rqt_console`을 같은 창에 추가하면 된다(따로 로그 뷰어를 만들지 않았다).
+
+패널 구성:
+- FSM 상태(`/pick/state`) · 로봇 상태(`/pick/robot_state_code`, 안전정지류면 빨간 글씨) 표시
+- 작업: 시작 / 승인 / 리셋
+- 정지: 중단(ABORT, `/pick/abort`) / 즉시정지(`/safety/stop`) — 빨간 버튼
+- 안전모드: 진입(backdrive) / 해제 — 누르면 확인창이 뜬다(§8 "실기 미검증" 참고)
+
+버튼은 전부 `call_async()`로 쏘고 바로 리턴한다. Qt 위젯은 GUI 스레드에서만 만지고,
+ROS 콜백은 값만 변수에 써두면 200ms 타이머가 라벨에 반영한다 — ROS 콜백 스레드에서
+Qt 위젯을 직접 건드리면 크래시할 수 있어서다.
+
+### 검증
+
+`rclpy` + `python_qt_binding`으로 오프스크린(`QT_QPA_PLATFORM=offscreen`) 위젯 생성·구독
+콜백·버튼 클릭(서비스 없을 때 "서비스 없음" 메시지로 안전하게 처리)까지는 직접 실행해
+확인했다(2026-08-07). **rqt_gui 플러그인 탐색 메커니즘으로 실제 `rqt` 프로세스 안에서
+로드되는 것 자체는 이 세션에서 디스플레이가 없어 확인 못 했다** — 처음 띄울 때
+`rqt --standalone pick_fsm`가 목록에 뜨는지부터 볼 것.

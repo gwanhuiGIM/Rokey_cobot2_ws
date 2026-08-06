@@ -1,6 +1,6 @@
-"""yolo_seg + graspx 를 한 번에 띄운다.
+"""graspgenx_perception + graspx 를 한 번에 띄운다.
 
-    ros2 launch yolo_seg graspx.launch.py
+    ros2 launch graspgenx_perception graspx.launch.py
 
 카메라(`realsense2_camera`)와 로봇 bringup 은 **여기서 띄우지 않는다.** 로봇 bringup 은
 실기 모션이라 사람이 직접 실행해야 하고, 카메라는 다른 파이프라인과 공유하기 때문이다.
@@ -13,7 +13,7 @@
 
 seg_source:
   geometric — 작업공간 박스 + connectedComponents. 신경망 0개. **기본값**
-  yolo      — yolo_seg 노드의 `/yolo_seg/labels` 를 그대로 쓴다
+  yolo      — yolo_seg_node 의 `/yolo_seg/labels` 를 그대로 쓴다
 """
 
 from launch import LaunchDescription
@@ -39,7 +39,7 @@ def generate_launch_description():
     cfg = {k: LaunchConfiguration(k) for k in ARGS}
 
     yolo = Node(
-        package='yolo_seg', executable='yolo_seg_node', name='yolo_seg_node',
+        package='graspgenx_perception', executable='yolo_seg_node', name='yolo_seg_node',
         output='screen',
         condition=IfCondition(cfg['run_yolo']),
         parameters=[{
@@ -54,7 +54,7 @@ def generate_launch_description():
     # scripts/grasp_bridge_node.py 를 yolo_seg 의 실행 파일로 심어뒀다 (setup.py 참고).
     # 이 노드는 로봇을 움직이지 않는다 — grasp 포즈를 계산해 발행할 뿐이다.
     bridge = Node(
-        package='yolo_seg', executable='grasp_bridge_node.py', name='grasp_bridge_node',
+        package='graspgenx_perception', executable='grasp_bridge_node.py', name='grasp_bridge_node',
         output='screen',
         condition=IfCondition(cfg['run_bridge']),
         parameters=[{
