@@ -1,0 +1,28 @@
+# 목표 물체 하나에 대해 "실행 가능한 grasp 1개 + 대안들"을 돌려준다.
+# 기존 od_msg/SrvDepthPosition(float64[] depth_position = 3D 점 하나)의 격상판이다.
+# 점 하나로는 그립을 못 만든다 — 어느 방향에서 어떤 자세로 접근할지가 빠지기 때문.
+#
+# 설계 출처: md/voice-pick-statemachine.md §2
+
+# ── Request ──────────────────────────────────────────────
+string  target           # "apple". get_keyword 출력을 그대로 넣는다. 빈 문자열이면 점수 최고 물체
+float32 min_confidence   # 이 값 미만 후보는 버린다. 0이면 서버 기본값
+
+---
+# ── Response ─────────────────────────────────────────────
+bool    success
+string  message          # 실패 사유 (검출 0 / 후보 0 / 도달 불가 …). 성공해도 요약을 채운다
+
+# ⚠️ 이름이 grasp_tcp가 아니라 grasp_pose인 것은 의도적이다.
+#    GraspGenX가 내는 4x4의 원점은 **그리퍼 base**이고 손끝(TCP)은 거기서 +Z로 0.18 m 떨어져 있다
+#    (md/context/constraints.md "GraspGenX grasp 4x4 = tool0 목표 자세").
+#    그리고 우리 URDF에서 tool0 -> rg2_base_link 오프셋이 0이라 **이 포즈가 곧 tool0의 목표 자세**다.
+#    이걸 "손끝 좌표"로 읽고 IK를 걸면 18 cm를 더 밀어넣는다. frame_id는 base_link.
+geometry_msgs/PoseStamped grasp_pose
+
+float64 width_m          # 잡을 때 벌릴 개구 폭 [m]. 1/10 mm 변환은 **호출자(FSM)**가 한다
+float32 confidence
+
+# 1등이 IK/계획에 실패했을 때 쓸 다음 후보들. 같은 규약(ee_link 목표 자세, base_link).
+# 이걸 같이 주는 게 핵심이다 — 실패할 때마다 GPU 추론을 다시 돌리면 수십 초가 날아간다.
+geometry_msgs/PoseStamped[] alternatives

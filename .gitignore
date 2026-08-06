@@ -2,6 +2,10 @@
 build/
 install/
 log/
+# Isaac ROS 컨테이너 안에서 빌드한 것. install/setup.bash에 절대경로가 박히는데
+# 컨테이너는 /workspaces/cobot2_ws, 호스트는 /home/kimkh/cobot2_ws라 서로 못 쓴다.
+build_container/
+install_container/
 
 # Python
 __pycache__/
@@ -68,6 +72,10 @@ docs/
 #  **/.git/ 규칙 때문에 pull한 쪽에서는 태그·히스토리를 알 수 없게 된다)
 isaac_ros-dev/
 isaas_ros-dev/
+
+# 위 isaac_ros-dev/의 docker 이미지 tar.gz 내보내기(19GB+, 2026-08-06 확인).
+# 커밋 대상 아님 — VCS 패널·git add -A로 통째로 잡히면 안 된다.
+isaac_ros-dev_export/
 
 # GPU 벤치 측정치는 머신 종속 — 커밋하지 않는다 (corecode/bench.py)
 corecode/bench_*.json

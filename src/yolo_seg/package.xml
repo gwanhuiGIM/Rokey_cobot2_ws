@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>yolo_seg</name>
+  <version>0.0.0</version>
+  <description>YOLO 인스턴스 세그멘테이션 노드 (GPU·도커 컨테이너 전용)</description>
+  <maintainer email="wook9980@gmail.com">kimkh</maintainer>
+  <license>TODO: License declaration</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- 기본 가중치(resource/yolo11n-seg.pt)를 이 패키지 share 에서 찾는다 -->
+  <exec_depend>object_detection</exec_depend>
+  <!-- ultralytics·torch 는 rosdep 키가 없고 apt 로 설치하지 않는다.
+       도커 이미지에만 들어 있다 — README "실행 환경" 참고. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

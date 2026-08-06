@@ -1,0 +1,78 @@
+# task_manager 파라미터. 값의 정본은 이 파일이다 — 런치/alias 에 숫자를 하드코딩하지 않는다.
+#
+# ⚠️ 아래 값 중 **실측으로 확정되지 않은 것**에는 UNVERIFIED 를 붙였다. 지우지 말 것.
+task_manager:
+  ros__parameters:
+
+    # ── 안전 ─────────────────────────────────────────────
+    dry_run: true               # true = plan_only. 궤적만 만들고 로봇은 안 움직인다
+    require_approval: true      # /pick/approve 없이는 APPROACH 로 못 넘어간다
+    approval_timeout_sec: 300.0
+
+    # ── MoveIt ───────────────────────────────────────────
+    planning_group: manipulator
+    ee_link: tool0              # grasp 포즈가 지정하는 링크. tool0 -> rg2_base_link 오프셋이 0이다
+    base_frame: base_link       # ⚠️ world 아님 (planning scene 은 world 를 모른다)
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+    vel_scale: 0.1              # 실기 첫 시도는 느리게. 익숙해지면 올린다
+    acc_scale: 0.1
+    planning_time: 5.0
+    planning_attempts: 10
+    joint_tolerance: 0.001
+    ik_timeout_sec: 0.2
+    ik_avoid_collisions: true   # false 로 두면 도달성만 따로 볼 수 있다(디버깅용)
+    replan: true
+    replan_attempts: 3
+    replan_delay: 0.5
+    motion_retries: 2
+
+    # ── 자세 ─────────────────────────────────────────────
+    approach_offset_m: 0.10     # UNVERIFIED: 접근 여유. 물체 주변 혼잡도에 따라 조정
+    lift_offset_m: 0.15         # UNVERIFIED
+    tcp_offset_m: 0.18          # GraspGenX onrobot_RG2/config.json fingertip[2]
+    max_reach_m: 0.900          # M0609 URDF 실측 (shoulder 기준 flange 까지)
+    home_joints_deg: [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]      # robot_control.py JReady
+    place_joints_deg: [4.0, 38.0, 64.0, -0.1, 78.0, 4.0]   # robot_control.py BUCKET_POS
+
+    # ── 씬 ───────────────────────────────────────────────
+    object_id: pick_target
+    object_radius_m: 0.04       # UNVERIFIED: 대상 근사 구 반지름. 사과 기준 대충
+    # 아래 둘은 **켤 때 무엇을 포기하는지 알고 켜야 한다.** README "SCENE_PREP" 절 참고
+    clear_octomap_before_descend: false
+    allow_gripper_octomap_collision: false
+    gripper_links:
+      - rg2_base_link
+      - rg2_left_outer_knuckle
+      - rg2_left_inner_knuckle
+      - rg2_left_inner_finger
+      - rg2_right_outer_knuckle
+      - rg2_right_inner_knuckle
+      - rg2_right_inner_finger
+
+    # ── 그리퍼 ───────────────────────────────────────────
+    gripper_backend: real       # real | virtual. 숫자 명령의 의미가 서로 다르다
+    gripper_service: /onrobot/sendCommand
+    grip_detected_topic: /onrobot/grip_detected
+    grip_clearance_m: 0.008     # UNVERIFIED: 도면값 아님. 실측 튜닝 필요
+    max_grip_width_m: 0.102     # GraspGenX sweep_volume 기준(하드웨어 0.110보다 좁은 쪽)
+    force_down_steps: 0         # 'd' 반복 횟수. 0이면 드라이버 기본 = 40 N (RG2 최대!)
+    gripper_settle_sec: 1.5     # UNVERIFIED
+    verify_required: false      # grip_detected 를 못 받아도 진행 (가상 그리퍼 대응)
+    grip_retries: 1
+
+    # ── 인식 ─────────────────────────────────────────────
+    grasp_source: compute_grasp   # compute_grasp | legacy_trigger | manual
+    grasp_service: /grasp/compute_grasp
+    grasp_trigger_service: /grasp/compute
+    grasp_best_topic: /grasp/best
+    grasp_candidates_topic: /grasp/candidates
+    min_confidence: 0.5
+    default_width_m: 0.06       # UNVERIFIED: legacy/manual 경로 전용 임시 폭
+    max_alternatives: 5
+
+    # ── 음성 ─────────────────────────────────────────────
+    voice_enabled: true
+    keyword_service: /get_keyword
+    target: ''                  # voice_enabled=false 일 때 쓸 고정 타겟
+
+    tick_hz: 10.0

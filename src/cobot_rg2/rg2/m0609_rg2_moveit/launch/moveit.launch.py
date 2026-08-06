@@ -5,7 +5,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 
 
 def load_yaml(package_name, file_path):
@@ -41,6 +41,16 @@ def generate_launch_description():
         # (octomap이 조용히 비어 있는다). 실기에서는 false 그대로 둔다.
         DeclareLaunchArgument('use_sim_time', default_value='false',
                               description='true: /clock을 따른다 (rosbag play --clock과 한 짝)'),
+        # Isaac ROS cuMotion을 두 번째 플래닝 파이프라인으로 등록한다.
+        # true로 켜도 default_planning_pipeline은 ompl 그대로다 — RViz MotionPlanning
+        # Context 탭 드롭다운에서 골라야 바뀐다. 같은 목표로 둘을 번갈아 계획해
+        # 시간을 비교하는 것이 이 스위치의 목적이다.
+        # ⚠️ isaac_ros_cumotion_moveit가 설치된 환경(= Isaac ROS 컨테이너)에서만 켤 수 있다.
+        # ⚠️ 플러그인은 액션 클라이언트일 뿐이다 — cumotion_planner_node를 따로 띄우지 않으면
+        #    계획 요청이 응답 없이 걸린다.
+        DeclareLaunchArgument('cumotion', default_value='false',
+                              description='true: planning_pipelines에 isaac_ros_cumotion 추가 '
+                                          '(Isaac ROS 컨테이너 전용)'),
     ]
     is_standalone = IfCondition(LaunchConfiguration('standalone'))
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
@@ -100,11 +110,31 @@ def generate_launch_description():
     # -----------------------------------------------------------------------
     # planning_pipelines: ompl을 기본 파이프라인으로 명시적 등록
     # -----------------------------------------------------------------------
-    planning_pipelines = {
-        'planning_pipelines': ['ompl'],
-        'default_planning_pipeline': 'ompl',
-        'ompl': ompl_planning_yaml,
-    }
+    # cumotion:=true면 여기에 isaac_ros_cumotion이 하나 더 붙는다. 인자 값을 읽어야 해서
+    # 실제 조립은 OpaqueFunction 안(make_nodes)에서 한다 — 호스트처럼 패키지가 없는
+    # 환경에서 import 시점에 죽지 않게 하려는 것도 이유다.
+    def make_planning_pipelines(context):
+        pipelines = {
+            'planning_pipelines': ['ompl'],
+            'default_planning_pipeline': 'ompl',
+            'ompl': ompl_planning_yaml,
+        }
+        if LaunchConfiguration('cumotion').perform(context).lower() != 'true':
+            return pipelines
+        # isaac_ros_cumotion_moveit/config/isaac_ros_cumotion_planning.yaml 을 그대로 쓴다.
+        # 우리 config/로 복사하지 않는다 — 복사본은 업스트림이 바뀌어도 조용히 낡는다.
+        try:
+            cumotion_yaml = load_yaml('isaac_ros_cumotion_moveit',
+                                      'config/isaac_ros_cumotion_planning.yaml')
+        except PackageNotFoundError:
+            cumotion_yaml = None
+        if not cumotion_yaml:
+            raise RuntimeError(
+                'cumotion:=true 인데 isaac_ros_cumotion_moveit 의 planning yaml을 못 읽었다. '
+                'Isaac ROS 컨테이너 안에서 install/setup.bash 를 source 했는지 확인할 것.')
+        pipelines['planning_pipelines'] = ['ompl', 'isaac_ros_cumotion']
+        pipelines['isaac_ros_cumotion'] = cumotion_yaml
+        return pipelines
 
     # -----------------------------------------------------------------------
     # moveit_controllers: 컨트롤러 설정 로드
@@ -179,7 +209,10 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
-        parameters=[robot_description, use_sim_time],
+        # publish_default_velocities: cuMotion이 /joint_states의 velocity 길이를 position과
+        # 대조해서 안 맞으면 계획을 포기한다. 기본값 False면 velocity가 비어 있다.
+        # 근거·실측은 bringup.launch.py의 같은 파라미터 주석 참조.
+        parameters=[robot_description, use_sim_time, {'publish_default_velocities': True}],
         condition=is_standalone,
     )
 
@@ -206,13 +239,19 @@ def generate_launch_description():
     )
 
     # -----------------------------------------------------------------------
-    # MoveGroup: 경로 계획 핵심 노드
+    # MoveGroup + RViz — 둘 다 인자 값에 의존해서 OpaqueFunction 안에서 만든다
     # -----------------------------------------------------------------------
     # octomap 파라미터는 "넣느냐 마느냐"라서 IfCondition으로 못 가른다(조건은 노드 전체에만
-    # 걸린다). 인자 값이 필요한 시점이 LaunchDescription 생성 이후이므로 OpaqueFunction으로
-    # 감싼다 — 이 한 노드 때문에 파일 전체를 OpaqueFunction으로 바꾸지는 않는다.
-    def make_move_group(context, *_args, **_kwargs):
-        params = [
+    # 걸린다). planning_pipelines도 cumotion 인자에 따라 내용이 달라진다. 인자 값을 읽으려면
+    # LaunchDescription 생성 이후여야 하므로 OpaqueFunction으로 감싼다.
+    # RViz도 같은 딕셔너리를 받아야 한다 — 안 그러면 MotionPlanning 패널 드롭다운에
+    # cuMotion이 안 뜬다(move_group만 알고 RViz는 모르는 상태가 된다).
+    rviz_config_file = os.path.join(moveit_pkg, 'launch', 'moveit.rviz')
+
+    def make_nodes(context, *_args, **_kwargs):
+        planning_pipelines = make_planning_pipelines(context)
+
+        move_group_params = [
             robot_description,
             robot_description_semantic,
             robot_description_kinematics,
@@ -223,43 +262,38 @@ def generate_launch_description():
             use_sim_time,
         ]
         if LaunchConfiguration('octomap').perform(context).lower() == 'true':
-            params.append(octomap_params)
-        return [Node(
-            package='moveit_ros_move_group',
-            executable='move_group',
-            name='move_group',
-            output='screen',
-            parameters=params,
-        )]
+            move_group_params.append(octomap_params)
 
-    move_group_node = OpaqueFunction(function=make_move_group)
-
-    # -----------------------------------------------------------------------
-    # RViz: MoveIt 플러그인 포함한 시각화
-    # -----------------------------------------------------------------------
-    rviz_config_file = os.path.join(moveit_pkg, 'launch', 'moveit.rviz')
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        output='log',
-        arguments=['-d', rviz_config_file],
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            robot_description_kinematics,
-            planning_pipelines,
-            joint_limits,
-            use_sim_time,
-        ],
-        condition=IfCondition(LaunchConfiguration('rviz')),
-    )
+        return [
+            Node(
+                package='moveit_ros_move_group',
+                executable='move_group',
+                name='move_group',
+                output='screen',
+                parameters=move_group_params,
+            ),
+            Node(
+                package='rviz2',
+                executable='rviz2',
+                name='rviz2',
+                output='log',
+                arguments=['-d', rviz_config_file],
+                parameters=[
+                    robot_description,
+                    robot_description_semantic,
+                    robot_description_kinematics,
+                    planning_pipelines,
+                    joint_limits,
+                    use_sim_time,
+                ],
+                condition=IfCondition(LaunchConfiguration('rviz')),
+            ),
+        ]
 
     return LaunchDescription(args + [
         static_tf,
         robot_state_publisher,
         joint_state_publisher,
         dsr_moveit_controller_spawner,
-        move_group_node,
-        rviz_node,
+        OpaqueFunction(function=make_nodes),
     ])

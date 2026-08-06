@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:00
+updated: 2026-08-06 12:40
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -37,6 +37,38 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 
 > 📁 **문서 전체 지도는 [[ws/cobot2/README]]에 있다.** 어느 문서가 무엇의 단일 출처인지 거기서 본다.
 
+## 🟢 cuMotion + nvblox 실기 파이프라인 전 구간 관통 (2026-08-06) — 로봇은 아직 안 움직였다
+
+> 📌 **실행 명령어·노드 지도·단계별 검증은 [[ws/cobot2/testcommand]]가 단일 출처다.**
+> 여기서 명령을 다시 적지 않는다.
+
+```
+카메라 ─▶ robot_segmenter ─▶ nvblox(esdf_mode:=3d) ─(서비스)─▶ cumotion_planner ─▶ move_group
+         (로봇 몸 지움)                                        (read_esdf_world:=True)
+```
+
+실기 실측 (로봇+카메라+nvblox 전부 살아 있는 상태, 관절목표, 각 10회):
+
+| | server 중앙값 | 성공 |
+|---|---|---|
+| OMPL | 42.4 ms | 10/10 |
+| cuMotion | 110.6 ms | **10/10** |
+
+cuMotion이 쥔 장애물 복셀 **27,646개**(`/curobo/voxels`) — nvblox 세계가 실제로 실렸다.
+
+🔴 **이 숫자로 cuMotion을 판정하지 말 것.** 관절공간 목표는 OMPL(RRTConnect)에 가장 유리하다.
+(a)/(b) 결정 근거는 **장애물이 궤적을 실제로 막는 씬**에서의 재측정이다.
+
+**하루에 걸린 함정 6개(전부 [[ws/cobot2/context/constraints]]에 기록):**
+`/joint_states` velocity 필수 · XRDF 구 과대추정 6쌍 · nvblox `esdf_mode` 기본값 2d가 프로세스를
+죽임 · **`robot_segmenter_node` 없으면 로봇이 자기 몸을 장애물로 봄** · 이미지 numpy 2.2.6이 cv2를
+깸 · `run_dev.sh`가 컨테이너를 새로 만들어 pip 설치 유실(→ `scripts/container_setup.sh`).
+공통점: **OMPL은 멀쩡한데 cuMotion만 죽는다.**
+
+- ⛔ **미해결**: ① 장애물이 궤적을 실제로 바꾸는지 미검증(계획 성공까지만) ② XRDF에서
+  `link_4 ↔ rg2_base_link` 자기충돌 검사를 껐다 — 실기 모션 전 재검토 필수 ③ 세그멘터 3.7 Hz 병목
+  ④ 그리퍼 Modbus 연결 실패 ⑤ depth가 요청 15 Hz 대비 9.65 Hz.
+
 ## 계정/환경
 - 공유 랩탑(`rokey`)의 `kimkh` 계정, `cobot2_ws`.
 - git: remote 이름 `personal` = `https://github.com/gwanhuiGIM/0730_cobo2_personal` (**HTTPS**), 브랜치 `init_sett`(main보다 앞섬, 아직 미머지).
@@ -50,8 +82,9 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 
 - **GPU PC (지금 이 머신)**: **RTX 4060 Laptop 8GB**, 드라이버 595.84. 로봇(`192.168.1.100`)·D435i **직결**.
   ⚠️ VRAM이 계획서들이 가정한 12GB가 아니라 **8GB**다 — `--num_grasps`를 64로 시작한다.
-  ⚠️ `kimkh`가 **docker 그룹에 없고**(멤버는 `rokey`) `nvidia-container-toolkit`도 미설치 →
-  Isaac ROS 컨테이너 경로(`run_dev.sh`)는 지금 못 쓴다. GraspGenX만 하면 docker 불필요.
+  ✅ **Isaac ROS 컨테이너 경로 열림(2026-08-06)** — `kimkh`가 docker 그룹 멤버이고 컨테이너에서
+  `nvidia-smi`가 RTX 4060을 본다. 기동: `./run_dev.sh -a "-v $HOME/cobot2_ws:/workspaces/cobot2_ws"`.
+  ⚠️ **컨테이너를 새로 만들면 `pip3 install 'warp-lang==1.5.0'`을 다시 해야 한다**(이미지 밖 변경).
 - **개인PC(노트북)**: NVIDIA GPU 없음. rosbag으로 개발.
 - 상세 하드웨어 실측표는 [[ws/cobot2/context/constraints]] "🔴 이 랩탑 하드웨어".
 - 역할 분담·시뮬레이션 범위·동기화 방법은 [[ws/cobot2/plans/2026-08-01-pc-role-split]] 참조.
@@ -79,8 +112,8 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
-- **GPU PC 도커 경로가 막혀 있다** — `kimkh`가 docker 그룹 비멤버(멤버는 `rokey`) +
-  `nvidia-container-toolkit` 미설치. Isaac ROS 컨테이너(`run_dev.sh`) 경로는 지금 못 연다.
+- ~~GPU PC 도커 경로가 막혀 있다~~ ⤴ **해소.** `kimkh`는 이제 docker 그룹 멤버이고
+  (`id`로 확인, 2026-08-06) 컨테이너 안에서 `nvidia-smi`가 RTX 4060을 본다.
   GPU 사양의 단일 출처는 [[ws/cobot2/context/constraints]](RTX 4060 Laptop 8GB).
 - ~~D435i depth rosbag 미확보~~ ⤴ **해소(2026-08-04).** `rosbag/bag_0803calibed/` 4개 검증 통과.
   남은 건 장면 2개(빈 테이블 / 장애물 여러 개) 추가 뿐이다 → [[ws/cobot2/rosbag-d435i]] "다시 찍어야 하는 것".
@@ -127,7 +160,12 @@ code .                                          # 이후 VS Code Source Control�
    ([[ws/cobot2/plans/2026-08-05-foundationpose-graspgenx-pick]] §1).
    ⚠️ **FoundationPose는 마스크를 만들어주지 않는다** — 마스크를 **입력으로 요구**하고 CAD 메시도 필요하다.
    ROI/마스크 출처는 여전히 검출기(YOLO-seg 또는 RT-DETR)다.
-0-c. **RG2 개구 폭(`rgwd`) 계산** — grasp에서 폭을 뽑아 그리퍼 명령으로. 아직 미구현.
+0-c. **RG2 개구 폭(`rgwd`) 계산** — grasp에서 폭을 뽑아 그리퍼 명령으로.
+   ~~아직 미구현~~ → **정정(2026-08-06 코드 감사)**: 알고리즘은 이미 있다
+   (`corecode/GraspSelection/grasp_selector.py`, 442줄, 테스트 통과). 못 한 건 **배선**이다 —
+   `grasp_bridge_node.py`가 이 파일을 안 쓰고 폭 계산 없는 자체 `select()`를 따로 쓴다.
+   남은 일(import 교체 · `/grasp/best` width_m 추가 · `OnRobotRGOutput` 퍼블리시)은
+   [[ws/cobot2/detect_graspx]] §7-10이 단일 출처.
 
 1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).

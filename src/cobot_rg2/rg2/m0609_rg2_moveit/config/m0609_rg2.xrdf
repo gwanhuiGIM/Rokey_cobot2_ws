@@ -90,19 +90,41 @@ self_collision:
     rg2_right_outer_knuckle: 0.005
     rg2_right_inner_knuckle: 0.005
     rg2_right_inner_finger: 0.005
-  # SRDF disable_collisions를 그대로 옮긴 것이다. SRDF를 고치면 여기도 고친다.
+  # SRDF disable_collisions를 그대로 옮긴 것 + 아래 "구 과대추정 보정" 6쌍.
+  # SRDF를 고치면 여기도 고친다.
+  #
+  # 🔴 구 과대추정 보정 6쌍 (2026-08-06, 게이트 E에서 실측하고 추가) — ⚠️ SRDF에는 없다
+  # 증상: cuMotion이 all-zeros 시작자세에서 계획 10/10 실패
+  #       (`MotionGenStatus.INVALID_START_STATE_SELF_COLLISION`).
+  # 진단: `scripts/diag_self_collision.py`가 링크쌍별 침투량을 찍는다. 겹친 25쌍 중
+  #       ignore에 없던 6쌍이 아래다(all-zeros 기준 침투량):
+  #         base_link ↔ link_2                            77.7 mm
+  #         link_4 ↔ rg2_base_link                        49.2 mm
+  #         rg2_left_outer_knuckle ↔ rg2_right_inner_knuckle  28.2 mm
+  #         rg2_left_inner_knuckle ↔ rg2_right_outer_knuckle  28.2 mm
+  #         rg2_base_link ↔ rg2_left_inner_finger         11.9 mm
+  #         rg2_base_link ↔ rg2_right_inner_finger        11.1 mm
+  # 근거: **같은 자세를 OMPL은 10/10 통과했다.** OMPL은 실제 메시로 충돌을 보고
+  #       cuMotion은 이 파일의 구로 본다 → 링크가 겹친 게 아니라 구가 뚱뚱한 것이다.
+  #       아래 geometry: 절 주석이 이미 "팔 링크는 실제 단면보다 1.5~2.1배 뚱뚱하다"고 적고 있다.
+  # 뒤 4쌍은 전부 그리퍼 내부다. RG2 관절은 cuMotion에서 lock이라 서로 움직이지 않는다 —
+  #   검사할 이유 자체가 없다.
+  # ⚠️ 앞 2쌍은 실제로 움직이는 쌍이라 보호를 하나 포기한 것이다. 특히
+  #   `link_4 ↔ rg2_base_link`(joint_5/6을 접으면 그리퍼가 팔뚝으로 돌아온다)는
+  #   **실기 모션 전에 다시 봐야 한다.** 정공법은 ignore가 아니라
+  #   base_link·link_2·link_4·rg2_base_link의 구를 다시 피팅하는 것이다(scripts/fit_spheres.py).
   ignore:
-    base_link: ["link_1"]
+    base_link: ["link_1", "link_2"]
     link_1: ["link_2", "link_3"]
     link_2: ["link_3", "link_5", "link_6"]
     link_3: ["link_4", "link_5", "link_6"]
-    link_4: ["link_5", "link_6"]
+    link_4: ["link_5", "link_6", "rg2_base_link"]
     link_5: ["link_6", "rg2_base_link"]
     link_6: ["rg2_base_link", "rg2_left_outer_knuckle", "rg2_left_inner_knuckle", "rg2_right_outer_knuckle", "rg2_right_inner_knuckle"]
     tool0: ["rg2_base_link"]
-    rg2_base_link: ["rg2_left_outer_knuckle", "rg2_left_inner_knuckle", "rg2_right_outer_knuckle", "rg2_right_inner_knuckle"]
-    rg2_left_outer_knuckle: ["rg2_left_inner_knuckle", "rg2_left_inner_finger", "rg2_right_outer_knuckle", "rg2_right_inner_finger"]
-    rg2_left_inner_knuckle: ["rg2_left_inner_finger", "rg2_right_inner_knuckle"]
+    rg2_base_link: ["rg2_left_outer_knuckle", "rg2_left_inner_knuckle", "rg2_right_outer_knuckle", "rg2_right_inner_knuckle", "rg2_left_inner_finger", "rg2_right_inner_finger"]
+    rg2_left_outer_knuckle: ["rg2_left_inner_knuckle", "rg2_left_inner_finger", "rg2_right_outer_knuckle", "rg2_right_inner_finger", "rg2_right_inner_knuckle"]
+    rg2_left_inner_knuckle: ["rg2_left_inner_finger", "rg2_right_inner_knuckle", "rg2_right_outer_knuckle"]
     rg2_left_inner_finger: ["rg2_right_outer_knuckle", "rg2_right_inner_finger"]
     rg2_right_outer_knuckle: ["rg2_right_inner_knuckle", "rg2_right_inner_finger"]
     rg2_right_inner_knuckle: ["rg2_right_inner_finger"]

@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:00
+updated: 2026-08-06 12:40
 status:  live
 owns:    실기·현장에서 확인된 사실 (하드웨어, TF, MoveIt, QoS, 리소스)
 -->
@@ -269,6 +269,169 @@ world_objects = scene.world.collision_objects        # ← collision_objects "�
 
 ---
 
+## 🔴 cuMotion은 `/joint_states`에 **velocity 배열을 요구한다** (2026-08-06, 실측)
+
+요청의 `start_state`가 비어 있으면(RViz "current" 시작자세나 우리 스크립트가 그렇다)
+`cumotion_planner_node`는 `/joint_states`를 **직접** 읽는다. 이때 velocity 길이가
+position과 다르면 **계획을 아예 포기한다** (`cumotion_planner.py:698-704`):
+
+```
+start joint position shape is torch.Size([1, 12]) start velocity shape is torch.Size([1, 0]),
+both should match. JointState was read from /joint_states
+```
+
+- `joint_state_publisher`의 `publish_default_velocities` **기본값이 False**라 velocity가 아예 안 실린다
+  → 길이 0 vs 12로 불일치 → 게이트 E 첫 측정에서 **계획 10/10 실패**(`ERROR(-1)`)
+- **OMPL은 멀쩡히 됐다.** OMPL은 planning scene의 current state를 쓰고 이 토픽을 직접 안 읽는다.
+  → "OMPL 되는데 cuMotion만 안 되면 `/joint_states`의 velocity부터 본다."
+- 조치: `bringup.launch.py` / `moveit.launch.py`의 joint_state_publisher에
+  `publish_default_velocities: True` 추가(커밋됨). 소스가 velocity를 주면 그대로 전달되고,
+  안 주는 관절(그리퍼)은 0.0으로 채워진다
+- ⚠️ **`ros2 topic info /joint_states`로 publisher가 1개인지 먼저 확인할 것.**
+  옛 launch가 안 죽고 남아 있으면 velocity 있는 메시지와 없는 메시지가 **번갈아** 오고,
+  계획이 산발적으로만 실패해서(2026-08-06: 20회 중 3회) 원인 추적이 훨씬 어려워진다
+
+---
+
+## 🔴 nvblox 경로에는 `robot_segmenter_node`가 **필수다** — 없으면 로봇이 자기 몸을 장애물로 본다 (2026-08-06, 실측)
+
+증상: cuMotion 계획이 **전부** 실패하고 사유가
+
+```
+MotionGenStatus.INVALID_START_STATE_WORLD_COLLISION
+```
+
+= "지금 자세가 이미 세계와 충돌". 로봇을 어디에 두든 똑같이 실패한다.
+
+**원인**: nvblox는 RealSense **원본 depth**를 먹는다. MoveIt octomap 경로에 있는 self-filter
+(`sensors_3d.yaml`의 `padding_offset`/`padding_scale`)를 **안 거친다.** 그래서 카메라에 보이는
+로봇 팔·그리퍼가 그대로 TSDF/ESDF에 장애물로 들어간다. RViz에서 그리퍼 주변에 점이 찍히면 이것이다.
+
+**조치**: NVIDIA가 이걸 위해 만든 노드가 `isaac_ros_cumotion`에 들어 있다.
+파이프라인 사이에 끼운다 — **depth → `robot_segmenter_node` → nvblox**:
+
+```bash
+ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \
+  -p robot:=m0609_rg2.xrdf \
+  -p urdf_path:=/workspaces/isaac_ros-dev/m0609/m0609_kinematics.urdf \
+  -p distance_threshold:=0.15 \
+  -p depth_image_topics:="[/camera/camera/aligned_depth_to_color/image_raw]" \
+  -p depth_camera_infos:="[/camera/camera/aligned_depth_to_color/camera_info]" \
+  -p robot_mask_publish_topics:="[/cumotion/camera_1/robot_mask]" \
+  -p world_depth_publish_topics:="[/cumotion/camera_1/world_depth]"
+```
+
+그리고 nvblox의 depth 입력을 `/cumotion/camera_1/world_depth`로 바꾼다
+(**camera_info와 color는 원본 그대로** — 세그멘터는 depth만 만든다).
+⚠️ **nvblox를 재시작해야 한다.** 기존 지도에 이미 로봇이 박혀 있으면 입력만 바꿔도 안 지워진다.
+
+- `distance_threshold`(m)는 로봇 구에서 얼마나 여유를 두고 지울지. 0.15로 통과 확인
+- 결과(2026-08-06): cuMotion 계획 **5/5 성공**, `/curobo/voxels`에 점유 복셀 정상 적재
+
+---
+
+## 🔴 이미지의 numpy 2.2.6이 `cv2`를 깨서 `robot_segmenter_node`가 못 뜬다 (2026-08-06, 실측)
+
+```
+File ".../robot_segmenter.py", line 19, in <module>
+    import cv2
+ImportError: numpy.core.multiarray failed to import
+```
+
+- Isaac ROS 3.2 이미지: `/usr/local/.../numpy 2.2.6`이 apt numpy 1.21.5를 가린다.
+  그런데 `cv2`는 apt판(`/usr/lib/python3/dist-packages/cv2...so`)이라 numpy 1.x 빌드다 → 깨진다
+- 조치: `pip3 install "numpy==1.26.4"` (컨테이너 안, `~/.local`에 깔려 `/usr/local`을 가린다).
+  검증: `cv2 4.5.4 OK` / `torch 2.13.0+cu130 cuda=True` / `warp 1.5.0` / `curobo` 전부 정상
+- ⚠️ **대가**: `cupy-cuda12x`가 numpy≥2.0을 요구해서 깨진다. 우리 파이프라인에서 cupy를 쓰는 건
+  `isaac_ros_cumotion_object_attachment`뿐이고(전수 grep) 그 노드는 안 띄우므로 무해하다.
+  **object_attachment를 쓰게 되면 이 결정을 다시 봐야 한다.**
+- ⚠️ **`.claude/hooks/guard.sh:13`이 이 조치를 오탐으로 막는다.** 패턴 `numpy[=><]*2`가
+  `numpy<2`에도 걸린다 — 금지하려던 건 `>=2`인데 **해결책까지 차단한다.**
+  지금은 `numpy==1.26.4`처럼 명시 핀으로 우회한다.
+
+---
+
+## 🔴 `run_dev.sh`는 컨테이너를 **재사용하지 않고 새로 만든다** → pip 설치가 매번 날아간다 (2026-08-06)
+
+2026-08-06 하루에 같은 자리에서 **두 번** 막혔다 — `AttributeError: module 'warp' has no attribute 'torch'`.
+`docker inspect`의 `StartedAt`이 갱신되고 `/usr/local/.../warp` mtime이 이미지 빌드 시각으로 돌아가 있으면 재생성된 것이다.
+
+- 살아남는 것: 바인드 마운트 안의 모든 것 — curobo 패치(`isaac_ros-dev/src/...`), colcon 산출물
+- 날아가는 것: `pip3 install`로 넣은 warp 1.5.0, numpy 1.26.4
+- 조치: **컨테이너에 들어갈 때마다 `bash /workspaces/cobot2_ws/scripts/container_setup.sh`**
+
+---
+
+## ⚠️ RealSense 드라이버를 두 번 띄우면 depth가 절반 이하로 떨어진다 (2026-08-06, 실측)
+
+`ros2 node list`에 `/camera/camera`가 **2개** 보이면 이것이다(`ros2 topic info`가 아니라 node list로 본다).
+한 D435i를 두 드라이버가 물면 USB 경합으로 `aligned_depth_to_color`가 15 Hz → **5.6 Hz**로 떨어졌다.
+드라이버 하나를 죽이니 7.3 Hz로 회복(여전히 15 Hz 미달 — 별개 미해결).
+→ **카메라를 띄우기 전에 `ros2 node list | grep camera`로 먼저 확인한다.**
+
+---
+
+## 🔴 nvblox `esdf_mode` 기본값 `2d`가 cuMotion의 첫 ESDF 요청에 **프로세스째 죽는다** (2026-08-06, 실측)
+
+```
+[FATAL] nvblox_node: The ESDF service is only intended for mapping with 3D ESDFs.
+        You're in 2D mode. To use this function set esdf_mode: 3d. Exiting.
+```
+
+- 기본값 출처: `nvblox_examples_bringup/config/nvblox/nvblox_base.yaml:33` → `esdf_mode: "2d"`
+- 조치: `nvblox_node`에 **`-p esdf_mode:=3d`**. 그러면 `static_mapper.esdf_slice_*`는 의미가 없어진다(2d 슬라이스용)
+- ⚠️ **증상이 엉뚱한 데를 가리킨다.** cuMotion 로그에는 `Calling ESDF service` 뒤에 계획 실패만
+  남고, 정작 죽은 건 nvblox다. → **cuMotion 계획이 실패하면 `pgrep -f nvblox_node`부터 본다.**
+- "노드가 뜬다"는 검증으로는 안 잡힌다. **서비스를 실제로 한 번 불러봐야** 드러난다:
+  `ros2 service call /nvblox_node/get_esdf_and_gradient nvblox_msgs/srv/EsdfAndGradients "{update_esdf: true, use_aabb: true, frame_id: base_link, aabb_min_m: {x: -1.0, y: -1.0, z: -1.0}, aabb_size_m: {x: 2.0, y: 2.0, z: 2.0}}"`
+  → 정상이면 41×41×41 그리드 반환(`voxel_size_m: 0.05`, 미관측 voxel은 `-1000.0`)
+
+---
+
+## ✅ 컨테이너 RMW는 **기본값(Fast DDS)** 그대로 둔다 (2026-08-06, 실측 정정)
+
+nvblox·cuMotion을 굳이 `rmw_cyclonedds_cpp`로 띄울 이유가 없다 — 기본 RMW로
+서비스 조회·파라미터 조회·ESDF 서비스 호출이 전부 정상 동작했다.
+
+🔴 **오히려 cyclonedds를 켜면 실기가 깨진다.** `moveit.launch.py standalone:=false`의
+`dsr_moveit_controller` spawner가 **호스트** `/dsr01/controller_manager` **서비스**를 부르는데,
+교차 벤더에서 **토픽은 되고 서비스는 안 된다**(2026-08-06 실측). 호스트가 기본 Fast DDS이므로
+컨테이너도 기본값이어야 spawner가 산다. → `RMW_IMPLEMENTATION`을 **설정하지 않는다.**
+
+---
+
+## 🔴 XRDF 충돌 구가 뚱뚱해서 all-zeros가 자기충돌로 잡혔다 (2026-08-06, 실측)
+
+게이트 E에서 velocity를 고친 뒤 다음 벽:
+`MotionGenStatus.INVALID_START_STATE_SELF_COLLISION` — all-zeros 시작자세에서 계획 전부 실패.
+
+`scripts/diag_self_collision.py`(링크쌍별 침투량을 이름으로 찍는다)로 확인:
+겹친 링크쌍 25개 중 **XRDF `self_collision.ignore`에 없던 6쌍**이 원인.
+
+| 링크쌍 | all-zeros 침투 | 성격 |
+|---|---|---|
+| `base_link ↔ link_2` | 77.7 mm | 실제로 움직이는 쌍 ⚠️ |
+| `link_4 ↔ rg2_base_link` | 49.2 mm | 실제로 움직이는 쌍 ⚠️ |
+| `rg2_left_outer_knuckle ↔ rg2_right_inner_knuckle` | 28.2 mm | 그리퍼 내부(lock) |
+| `rg2_left_inner_knuckle ↔ rg2_right_outer_knuckle` | 28.2 mm | 그리퍼 내부(lock) |
+| `rg2_base_link ↔ rg2_left_inner_finger` | 11.9 mm | 그리퍼 내부(lock) |
+| `rg2_base_link ↔ rg2_right_inner_finger` | 11.1 mm | 그리퍼 내부(lock) |
+
+**링크가 겹친 게 아니라 구가 뚱뚱한 것이다** — 근거는 **같은 자세를 OMPL이 10/10 통과**했다는 것.
+OMPL은 실제 메시로, cuMotion은 XRDF 구로 충돌을 본다. XRDF `geometry:` 절 주석이 이미
+"팔 링크는 실제 단면보다 1.5~2.1배 뚱뚱하다"고 적고 있었다.
+
+- 조치: 6쌍을 `m0609_rg2.xrdf`의 `self_collision.ignore`에 추가 → 계획 **20/20 성공**
+- ⚠️ **SRDF에는 이 6쌍이 없다.** MoveIt/OMPL은 계속 검사하고 cuMotion만 안 본다
+- ⚠️ **앞 2쌍은 보호를 포기한 것이다.** 특히 `link_4 ↔ rg2_base_link`는 joint_5/6을 접으면
+  그리퍼가 팔뚝으로 돌아오는 실제 경로다. **실기 모션 전 재검토 필수.**
+  정공법은 ignore가 아니라 `base_link`·`link_2`·`link_4`·`rg2_base_link` 구 재피팅(`scripts/fit_spheres.py`)
+- XRDF 정본은 `src/cobot_rg2/rg2/m0609_rg2_moveit/config/m0609_rg2.xrdf`.
+  고치면 `isaac_ros-dev/m0609/`와 `isaac_ros_cumotion_robot_description/xrdf/`에 **다시 복사**한다
+  (후자는 build/install이 symlink 체인이라 재빌드는 불필요 — 2026-08-06 확인)
+
+---
+
 ## ~~octomap_server — 이 랩탑 리소스로는 기본 설정이 안 돌아간다 (2026-08-02)~~ ← 다른 랩탑 기록
 
 > 🔴 **2026-08-05 확인: 아래 하드웨어 사양은 이 실기 랩탑(`rokey`)이 아니라 개인PC에서 측정된 것이다.**
@@ -437,6 +600,31 @@ octree를 두 번 만들어 CPU를 이중으로 먹는다(이 랩탑에선 치�
 > **교훈: TF에 프레임이 있는 것과 planning scene이 그 프레임을 아는 것은 별개다.**
 > 그리고 "정당화 문장을 쓰기 전에 명령을 한 번 돌려라" — 이때 필요했던 건 발행 한 번이었다.
 
+### 🔴 PlanningScene diff의 `allowed_collision_matrix`는 **병합이 아니라 전체 교체**다 (2026-08-06, 실측)
+
+`is_diff=true`로 보내도 ACM은 덧붙지 않고 **통째로 갈린다.** `world.collision_objects`가
+diff로 동작하는 것과 규칙이 다르다 — 같은 메시지 안인데 필드마다 의미가 다르다.
+
+- 증상: 그리퍼 링크 7개짜리 ACM만 diff로 보냈더니 SRDF의 `disable_collisions` 34개가 사라져
+  `rg2_base_link ↔ rg2_left_outer_knuckle` 같은 **인접 링크가 자기충돌**로 잡혔다.
+  → `/compute_ik`가 `avoid_collisions=true`에서 **모든 포즈에 대해** `NO_IK_SOLUTION(-31)`.
+- **오진 유도**: 증상이 "그 포즈는 도달 불가"로 보인다. 실제로는 씬을 내가 망가뜨린 것이다.
+- 가르는 순서 (위에서 갈리면 아래로 안 내려간다):
+  1. 같은 포즈를 `avoid_collisions=false`로 → 풀리면 **도달성 문제가 아니다**
+  2. `/check_state_validity`의 `contacts` → 전부 인접 링크쌍이면 ACM이 범인
+  3. `/get_planning_scene`(`components=ALLOWED_COLLISION_MATRIX`)로 `entry_names` 확인
+- **규칙: ACM은 반드시 `/get_planning_scene`으로 읽어서 얹어 되돌린다.**
+  구현·회귀테스트는 `src/pick_fsm/pick_fsm/moveit_bridge.py: merge_acm()`.
+
+### 대상 물체를 CollisionObject로 등록해도 octomap 복셀은 안 사라진다 (2026-08-06)
+
+그리퍼 링크 ↔ 대상 물체를 ACM에서 허용하는 건 **필수**다(안 하면 grasp pose에서 손가락이
+물체와 겹쳐 IK가 collision으로 실패). 하지만 그걸로 그 자리의 octomap 복셀은 안 없어진다.
+남은 선택지는 둘 다 대가가 있다 — `clear_octomap`(사람 팔까지 같이 사라짐) 또는
+그리퍼 링크 ↔ `<octomap>` 허용(그 링크의 octomap 충돌검사가 통째로 꺼짐).
+**둘 다 기본 off로 두고, 계획 실패(=안 움직임)라는 안전한 실패를 기본값으로 삼는다.**
+ACM에서 octomap을 부르는 이름은 `<octomap>`(`collision_detection::World::OCTOMAP_NS`).
+
 ### 캘리브 npy의 정본은 `corecode/` 쪽이다 — symlink로 해결 (2026-08-03)
 - **정본**: `corecode/Calibration_Tutorial/T_cam2base.npy` — 재캘리브 결과가 나오는 위치가 여기로 고정돼 있다.
 - `m0609_rg2_bringup/config/T_cam2base.npy`는 이제 **상대경로 symlink**(`../../../../../corecode/...`)다.
@@ -533,8 +721,17 @@ base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 �
 
 `corecode/Calibration_Tutorial/T_cam2base.npy`
 - 이름은 cam2base지만 **내용은 `T_base←cam`** (`eye2hand_calibration.py:696` 주석에 명시)
-- **병진이 mm 단위** (norm 1683.6). GraspGenX/FoundationPose는 m를 쓴다.
+- **병진이 mm 단위**. GraspGenX/FoundationPose는 m를 쓴다.
   → `T[:3,3] /= 1000.0` 없이 쓰면 1000배 어긋난다.
+  (norm 값은 여기 적지 않는다 — 위 "현행 카메라 위치를 문서에 적지 않는다" 정책과 같은 이유다.
+  이 줄에 박혀 있던 "1683.6"이 실제로 낡아 있었다: 2026-08-06 코드 감사로 다시 읽으니 1481.3이었다.)
+- ⚠️ **`report_residuals()`(같은 파일 `:318`)는 잔차를 stdout에만 찍고 파일로 남기지 않는다**
+  (2026-08-06 코드 감사로 확인). 그래서 지금 커밋된 `T_cam2base.npy`가 어느 세션·몇 mm 병진잔차로
+  나온 결과인지 코드베이스 어디에도 안 남는다 — npy는 바이너리라 `git log`로도 못 찾는다.
+  **재캘리브할 때마다 이 정보 공백이 반복된다.** 고치려면 `report_residuals()` 끝에
+  `{timestamp, data_dir, n_images, translation_residual_median_mm, verdict}`를
+  `calib_report.json`으로 옆에 남기면 된다(5줄) — `T_cam2base.npy`와 함께 커밋되므로 이후엔
+  `git log`로 "이 커밋이 어떤 잔차 근거로 나왔는지"가 추적된다. **다음 재캘리브 전에 넣을 것을 권장.**
 - `data_recording.py:77`의 "결과 부모 프레임도 flange"는 **틀린 주석**이다.
   eye-to-hand AX=XB에서 TCP 오프셋은 `A_i` 계산에서 소거되므로 부모는 항상 base
   (같은 파일 `:44-46`이 맞다).

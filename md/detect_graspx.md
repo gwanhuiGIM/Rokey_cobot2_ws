@@ -1,7 +1,7 @@
 <!-- meta
-updated: 2026-08-06 12:00
+updated: 2026-08-06 12:40
 status:  live
-owns:    GraspGenX 출력 규약(§3) · 그리퍼 폭 계산·1/10mm 함수(§5) · 상류 버그(§6)
+owns:    GraspGenX 출력 규약(§3) · 그리퍼 폭 계산·1/10mm 함수(§5) · 상류 버그(§6) · grasp_selector.py 연결 상태(§7-10)
 -->
 
 # GraspGenX 통합 설계 — Detect → Grasp → Execute
@@ -318,6 +318,11 @@ rgwd = int(round(width_m * 10000))   # m → 1/10 mm.  0.048 m → 480
 `onrobot_rg_control/_OnRobotRGIsaacSimController.py:131` `widthToJointValue()`
 (RViz/Isaac 시각화용. 실기 명령에는 `rgwd`를 그대로 쓴다.)
 
+> ✅ **위 절차 자체는 이미 구현·테스트돼 있다** — `corecode/GraspSelection/grasp_selector.py`
+> (442줄, 2026-08-06 코드 감사로 확인). `compute_grasp_width()`가 §5-3 그대로이고, `GraspCandidate.rgwd`
+> 프로퍼티가 §5-4 1/10mm 변환이며, 신뢰도→도달범위→접근축→폭→재충돌(GPU cdist) 5단계 필터에
+> `assert c.rgwd == 500` 같은 자체 테스트도 있다. **여기 남은 문제는 알고리즘이 아니라 배선이다 — §7 참고.**
+
 ---
 
 ## 6. 알려진 상류 버그
@@ -357,6 +362,15 @@ eye-to-hand AX=XB에서 TCP 오프셋은 `A_i` 계산에서 소거되므로 **`:
 - [ ] **7.** TCP 0.18m 오프셋 부호 검증 — **RViz에서. 실기 아님** (§3-2)
 - [ ] **8.** SAM 마스크 → `seg.png` 포맷 어댑터 작성
 - [ ] **9.** (A안 동작 후) CAD 확보된 물체에 한해 B안 검토
+- [ ] **10.** `scripts/grasp_bridge_node.py`의 자체 `select()`(L93~124, 폭 계산·`rgwd`·재충돌 필터
+      없음)를 `corecode/GraspSelection/grasp_selector.py`의 `select_grasps()`로 교체
+      (2026-08-06 코드 감사로 발견). **알고리즘은 이미 있다(§5-3 위 박스) — 새로 짤 게 아니라
+      import 배선만 하면 된다.** 남은 세 조각:
+      ① `from grasp_selector import select_grasps` (지금 없는 import)
+      ② `/grasp/best` 응답에 `width_m` 필드 추가 (지금은 `PoseStamped`뿐이라 폭이 어디에도 안 남는다)
+      ③ `OnRobotRGOutput` 퍼블리시 — 지금 `grasp_bridge_node.py`에 그리퍼 관련 코드가 0줄이다
+      (드라이버 쪽 `rgfr`/`rgwd` 송신·상태 피드백은 `OnRobotRGControllerServer.py`에 이미 있다 — §5-4).
+      [[ws/cobot2/state]] "0-c"가 이 항목을 가리킨다.
 
 ---
 

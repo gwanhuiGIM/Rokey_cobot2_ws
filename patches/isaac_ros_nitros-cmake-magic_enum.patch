@@ -1,0 +1,336 @@
+diff --git a/isaac_ros_gxf_extensions/gxf_isaac_utils/CMakeLists.txt b/isaac_ros_gxf_extensions/gxf_isaac_utils/CMakeLists.txt
+index 3f9d91a..ca44da3 100644
+--- a/isaac_ros_gxf_extensions/gxf_isaac_utils/CMakeLists.txt
++++ b/isaac_ros_gxf_extensions/gxf_isaac_utils/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # Dependencies
+ find_package(CUDAToolkit REQUIRED)
+diff --git a/isaac_ros_managed_nitros_examples/custom_nitros_dnn_image_encoder/CMakeLists.txt b/isaac_ros_managed_nitros_examples/custom_nitros_dnn_image_encoder/CMakeLists.txt
+index 77cb31f..1b4fdc0 100644
+--- a/isaac_ros_managed_nitros_examples/custom_nitros_dnn_image_encoder/CMakeLists.txt
++++ b/isaac_ros_managed_nitros_examples/custom_nitros_dnn_image_encoder/CMakeLists.txt
+@@ -26,6 +26,7 @@ endif()
+ find_package(ament_cmake_auto REQUIRED)
+ 
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # image Encoder node
+ ament_auto_add_library(image_encoder_node SHARED src/image_encoder_node.cpp)
+diff --git a/isaac_ros_managed_nitros_examples/custom_nitros_image/CMakeLists.txt b/isaac_ros_managed_nitros_examples/custom_nitros_image/CMakeLists.txt
+index 1658899..9e24e1b 100644
+--- a/isaac_ros_managed_nitros_examples/custom_nitros_image/CMakeLists.txt
++++ b/isaac_ros_managed_nitros_examples/custom_nitros_image/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # GPU Image Builder node
+ ament_auto_add_library(gpu_image_builder_node SHARED src/gpu_image_builder_node.cpp)
+diff --git a/isaac_ros_managed_nitros_examples/custom_nitros_message_filter/CMakeLists.txt b/isaac_ros_managed_nitros_examples/custom_nitros_message_filter/CMakeLists.txt
+index 8c96cbc..8e0a5d0 100644
+--- a/isaac_ros_managed_nitros_examples/custom_nitros_message_filter/CMakeLists.txt
++++ b/isaac_ros_managed_nitros_examples/custom_nitros_message_filter/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # CameraInfo + Image synchronizer node
+ ament_auto_add_library(synchronizer_node SHARED src/synchronizer_node.cpp)
+diff --git a/isaac_ros_managed_nitros_examples/custom_nitros_string/CMakeLists.txt b/isaac_ros_managed_nitros_examples/custom_nitros_string/CMakeLists.txt
+index 0469b05..d977d36 100644
+--- a/isaac_ros_managed_nitros_examples/custom_nitros_string/CMakeLists.txt
++++ b/isaac_ros_managed_nitros_examples/custom_nitros_string/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # String Encoder node
+ ament_auto_add_library(string_encoder_node SHARED src/string_encoder_node.cpp)
+diff --git a/isaac_ros_nitros/CMakeLists.txt b/isaac_ros_nitros/CMakeLists.txt
+index 11a2fa9..3d7b7bd 100644
+--- a/isaac_ros_nitros/CMakeLists.txt
++++ b/isaac_ros_nitros/CMakeLists.txt
+@@ -75,6 +75,7 @@ ament_index_register_resource(cuapriltags CONTENT share/${PROJECT_NAME}/cuaprilt
+ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+ find_package(vpi REQUIRED)
+ find_package(yaml-cpp)
++find_package(magic_enum REQUIRED)
+ 
+ # NitrosNode
+ ament_auto_add_library(${PROJECT_NAME} SHARED
+diff --git a/isaac_ros_nitros_bridge/isaac_ros_nitros_bridge_ros2/CMakeLists.txt b/isaac_ros_nitros_bridge/isaac_ros_nitros_bridge_ros2/CMakeLists.txt
+index c08dc5e..8a8a87b 100644
+--- a/isaac_ros_nitros_bridge/isaac_ros_nitros_bridge_ros2/CMakeLists.txt
++++ b/isaac_ros_nitros_bridge/isaac_ros_nitros_bridge_ros2/CMakeLists.txt
+@@ -30,6 +30,7 @@ endif()
+ find_package(ament_cmake_auto REQUIRED)
+ find_package(CUDAToolkit REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # Image converter node
+ ament_auto_add_library(image_converter_node SHARED src/image_converter_node.cpp)
+diff --git a/isaac_ros_nitros_topic_tools/CMakeLists.txt b/isaac_ros_nitros_topic_tools/CMakeLists.txt
+index 7d4e2ac..e5a9a82 100644
+--- a/isaac_ros_nitros_topic_tools/CMakeLists.txt
++++ b/isaac_ros_nitros_topic_tools/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ ament_auto_add_library(isaac_ros_nitros_camera_drop_node SHARED
+   src/isaac_ros_nitros_camera_drop_node.cpp
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_battery_state_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_battery_state_type/CMakeLists.txt
+index f3637c5..516a88a 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_battery_state_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_battery_state_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_camera_info_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_camera_info_type/CMakeLists.txt
+index 96de8c0..054711b 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_camera_info_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_camera_info_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_compressed_image_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_compressed_image_type/CMakeLists.txt
+index a6a8d50..42bb69e 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_compressed_image_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_compressed_image_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_compressed_video_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_compressed_video_type/CMakeLists.txt
+index c9d7a27..c2babd3 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_compressed_video_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_compressed_video_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_correlated_timestamp_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_correlated_timestamp_type/CMakeLists.txt
+index e9358c6..c43a767 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_correlated_timestamp_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_correlated_timestamp_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_detection2_d_array_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_detection2_d_array_type/CMakeLists.txt
+index 1968016..8ef1258 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_detection2_d_array_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_detection2_d_array_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_detection3_d_array_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_detection3_d_array_type/CMakeLists.txt
+index 9555768..c797499 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_detection3_d_array_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_detection3_d_array_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_disparity_image_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_disparity_image_type/CMakeLists.txt
+index fd61fdf..97e4f56 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_disparity_image_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_disparity_image_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_encoder_ticks_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_encoder_ticks_type/CMakeLists.txt
+index fbd98d5..ab294ab 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_encoder_ticks_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_encoder_ticks_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_flat_scan_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_flat_scan_type/CMakeLists.txt
+index e87a2a7..c91d4c4 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_flat_scan_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_flat_scan_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_image_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_image_type/CMakeLists.txt
+index 1656974..fa6f1f6 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_image_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_image_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_imu_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_imu_type/CMakeLists.txt
+index 4d72423..74b402c 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_imu_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_imu_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_occupancy_grid_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_occupancy_grid_type/CMakeLists.txt
+index 9ba6447..8624c7a 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_occupancy_grid_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_occupancy_grid_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_odometry_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_odometry_type/CMakeLists.txt
+index cf48c49..ee2b32e 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_odometry_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_odometry_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_point_cloud_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_point_cloud_type/CMakeLists.txt
+index cc6599c..4bb81d8 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_point_cloud_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_point_cloud_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_pose_array_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_pose_array_type/CMakeLists.txt
+index fa20977..1d955ae 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_pose_array_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_pose_array_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_pose_cov_stamped_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_pose_cov_stamped_type/CMakeLists.txt
+index 869a4dd..b204d68 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_pose_cov_stamped_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_pose_cov_stamped_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_std_msg_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_std_msg_type/CMakeLists.txt
+index 902506d..e9f58db 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_std_msg_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_std_msg_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_tensor_list_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_tensor_list_type/CMakeLists.txt
+index d669273..51c813c 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_tensor_list_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_tensor_list_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+ 
+diff --git a/isaac_ros_nitros_type/isaac_ros_nitros_twist_type/CMakeLists.txt b/isaac_ros_nitros_type/isaac_ros_nitros_twist_type/CMakeLists.txt
+index 833e808..dd3d283 100644
+--- a/isaac_ros_nitros_type/isaac_ros_nitros_twist_type/CMakeLists.txt
++++ b/isaac_ros_nitros_type/isaac_ros_nitros_twist_type/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ 
+ find_package(ament_cmake_auto REQUIRED)
+ ament_auto_find_build_dependencies()
++find_package(magic_enum REQUIRED)
+ 
+ # NVTX
+ option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)

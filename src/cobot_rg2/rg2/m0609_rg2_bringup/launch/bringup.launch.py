@@ -176,7 +176,16 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
-        parameters=[{'source_list': ['/dsr01/joint_states', '/gripper_joint_states']}],
+        parameters=[{
+            'source_list': ['/dsr01/joint_states', '/gripper_joint_states'],
+            # ⚠️ cuMotion 전제조건. isaac_ros_cumotion의 cumotion_planner_node는 요청의
+            # start_state가 비어 있으면 /joint_states를 직접 읽는데, velocity 배열 길이가
+            # position과 다르면 계획을 포기한다(cumotion_planner.py:698-704).
+            # 이 파라미터 기본값은 False라 velocity가 아예 안 실린다 → 길이 0 vs 12로 불일치.
+            # 2026-08-06 게이트 E에서 계획 10회 전부 실패(ERROR(-1))로 실측 확인.
+            # OMPL은 planning scene의 current state를 쓰므로 이 값과 무관하게 잘 됐다.
+            'publish_default_velocities': True,
+        }],
     )
 
     # ── robot_state_publisher ─────────────────────────────────────────

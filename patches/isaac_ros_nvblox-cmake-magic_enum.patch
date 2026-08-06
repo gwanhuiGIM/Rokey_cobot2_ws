@@ -1,0 +1,24 @@
+diff --git a/nvblox_ros/CMakeLists.txt b/nvblox_ros/CMakeLists.txt
+index 302259e..b3040b1 100644
+--- a/nvblox_ros/CMakeLists.txt
++++ b/nvblox_ros/CMakeLists.txt
+@@ -90,6 +90,7 @@ find_package(isaac_ros_managed_nitros REQUIRED)
+ find_package(isaac_ros_nitros_image_type REQUIRED)
+ find_package(isaac_ros_nitros_camera_info_type REQUIRED)
+ find_package(isaac_ros_gxf REQUIRED)
++find_package(magic_enum REQUIRED)
+ 
+ #############
+ # LIBRARIES #
+diff --git a/nvblox_ros/test/unit_tests/CMakeLists.txt b/nvblox_ros/test/unit_tests/CMakeLists.txt
+index e5d4a43..7029786 100644
+--- a/nvblox_ros/test/unit_tests/CMakeLists.txt
++++ b/nvblox_ros/test/unit_tests/CMakeLists.txt
+@@ -16,6 +16,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ 
+ find_package(ament_cmake_gtest REQUIRED)
++find_package(magic_enum REQUIRED)
+ 
+ function(add_nvblox_ros_unit_test test_name)
+     # Switch between .cpp and .cu tests.
