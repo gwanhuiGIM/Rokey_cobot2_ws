@@ -1,0 +1,7 @@
+# target: 특정 클래스만 필터링하고 싶을 때 클래스명 지정. 빈 문자열("")이면 탐지된 전체 객체 반환
+string target
+---
+bool success                        # 유효한 세그멘테이션이 1개 이상 반환되면 true
+std_msgs/Header header               # 프레임 캡처 시각/기준 좌표계 (graspgenx의 depth 정합용)
+sensor_msgs/Image color_image        # 탐지에 사용된 원본 컬러 이미지
+SegmentationResult[] segments        # 탐지된 객체들의 세그멘테이션 결과 배열
