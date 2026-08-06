@@ -1,8 +1,14 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    GPU 대여 절차(§1~5) · 밟은 지뢰 목록(§6) · 확정 명령어(§7)
+-->
+
 # GPU 대여 준비/작업 체크리스트
 
 **작성일:** 2026-08-04
 **성격:** 부가 문서. 본 계획은 [[ws/cobot2/M0609_perception_motion_sprint_plan]] §6-2, [[ws/cobot2/plans/2026-08-03-gpu-dependent-candidates]]에 있음. 이 문서는 "GPU를 어떻게 확보하느냐"의 실행 절차만 다룬다 — 무엇을 테스트할지는 위 두 문서가 기준.
-**배경:** 팀 실물 GPU(RTX 4070)를 팀원들과 공유 중이라 자리를 못 잡을 때, 대여 GPU로 FoundationPose/GraspGenX 소프트웨어 스택(빌드·노드 구동·알고리즘 플로우)을 먼저 검증해두는 용도. 최종 시연은 여전히 로컬 RTX 4070에서 진행.
+**배경:** 팀 실물 GPU(RTX 4070)를 팀원들과 공유 중이라 자리를 못 잡을 때, 대여 GPU로 FoundationPose/GraspGenX 소프트웨어 스택(빌드·노드 구동·알고리즘 플로우)을 먼저 검증해두는 용도. **최종 시연은 이 랩탑의 로컬 RTX 4060 Laptop 8GB에서 진행**([[ws/cobot2/context/constraints]] — 2026-08-05 확인. 이전 판의 "4070" 가정은 낡았다).
 
 > ⛔ **인스턴스에 붙으면 §6 「밟은 지뢰 목록」부터 읽는다.** 여기 있는 10건은 전부 실제로 한 번씩 당한 것이고,
 > 대부분 **에러 메시지가 원인을 안 가리킨다**. 새 세션의 나는 이 대화를 기억하지 못한다.
@@ -12,7 +18,7 @@
 ## 0. 이 방식으로 확인되는 것 / 안 되는 것 (매번 되새길 것)
 
 ✅ 패키지 빌드, 노드 기동, 인터페이스(토픽/메시지) 정합성, 알고리즘 플로우
-❌ 정확도 DoD(실측 좌표 오차), 실기 그립/모션, self-occlusion 같은 동적 장면, 4070 실물 성능
+❌ 정확도 DoD(실측 좌표 오차), 실기 그립/모션, self-occlusion 같은 동적 장면, RTX 4060 8GB 실물 성능
 
 원격 GPU와는 **실시간 통신을 하지 않는다.** rosbag 파일을 통째로 복사해 원격 머신 안에서 혼자 재생·처리하는 방식이다 (네트워크가 개입하는 지점은 파일 전송 시점뿐).
 
@@ -49,7 +55,7 @@ docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
 두 번째 명령이 실패하면 (컨테이너 안에서 docker 중첩 불가) → **Docker/Isaac ROS 워크플로우는 이 인스턴스에서 불가**, ROS 없이 순수 PyTorch(YOLO 등)만 가능하거나 서비스를 바꿔야 함.
 
 **✅ 검증됨 (2026-08-04, Lightning AI 무료 티어, Tesla T4):** 두 명령 모두 통과. `nvidia-smi`에서 Tesla T4 15360MiB 인식, `docker run --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi`도 컨테이너 안에서 정상적으로 같은 GPU를 잡음 — nested docker 문제 없음. Isaac ROS Day4 P0 블록(`run_dev.sh` 포함) 그대로 진행 가능.
-**주의:** T4는 Turing 아키텍처(4070=Ada Lovelace와 세대 다름) — 빌드·노드 구동·알고리즘 플로우 검증엔 문제 없으나, TensorRT 엔진은 4070 실물에서 반드시 재빌드해야 함(§0 원칙 그대로).
+**주의:** T4는 Turing 아키텍처(로컬 RTX 4060=Ada Lovelace와 세대 다름) — 빌드·노드 구동·알고리즘 플로우 검증엔 문제 없으나, TensorRT 엔진은 RTX 4060 실물에서 반드시 재빌드해야 함(§0 원칙 그대로). VRAM도 T4 15GB보다 **좁다**(8GB) — `num_grasps` 등은 로컬 실행 시 낮춰야 한다.
 
 ---
 
@@ -211,62 +217,11 @@ bag play ──┬─ /clock ─────────────────
 환경: Lightning AI Studio(`ip-10-192-15-146`) 위 Isaac ROS 3.2 dev 컨테이너,
 `/workspaces/isaac_ros-dev` 바인드 마운트. **카메라 없음 — 전부 rosbag 재생으로 검증한다.**
 
-### ⚠️ Fast DDS가 848x480 depth를 못 흘린다 (실측, 원인 확정)
+### Fast DDS / nvblox `global_frame` / `bag play -l` / 매퍼 파라미터 접두사 — 대여 GPU와 무관한 보편 사실
 
-`/camera/camera/depth/image_rect_raw`(814 KB/샘플)가 **0.2~0.7 Hz**로 떨어졌다.
-`camera_info`(작은 메시지)는 같은 bag에서 14 Hz로 멀쩡했다 — **메시지 크기 의존**이 지문이다.
-
-```bash
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp   # → 15.2 Hz 회복 (bag 실제값 1706프레임/115.3s = 14.8 Hz)
-```
-
-- 배제된 원인: `/dev/shm` 16G, `net.core.rmem_max` 2G, CPU 유휴. **셋 다 아니다.**
-- **`docker exec`로 새로 여는 셸마다 초기화된다.** 한 터미널만 CycloneDDS면 그 노드만 안 보인다
-  → 컨테이너 `~/.bashrc`에 넣을 것.
-- ⛔ 미해결: 파라미터 서비스 경로에서만
-  `Fast CDR exception deserializing ... rcl_interfaces::srv::GetParameters_Response_`가 뜬다.
-  `Fast CDR`은 rmw_fastrtps의 직렬화기라 **전 프로세스가 CycloneDDS면 나오면 안 되는 로그다.**
-  foxglove_bridge의 파라미터 폴링과 상관관계가 있다. 진단 안 함.
-
-### nvblox — `global_frame` 기본값이 `odom`이다
-
-`nvblox_ros/include/nvblox_ros/node_params.hpp:45` → `"global_frame", "odom"`.
-우리 bag TF는 `world → base_link → camera_link`라 **`odom`이 없다.**
-
-```
-[WARN] Tried to clear map outside of radius but couldn't look up frame: base_link
-[WARN] Lookup transform failed for frame base_link. Layer pointclouds not published
-```
-→ **에러 문구가 원인을 안 가리킨다.** 로그가 이름을 대는 `base_link`는 `map_clearing_frame_id`이고,
-없는 건 목적지 `odom` 쪽이다. `-p global_frame:=base_link` 하나로 해결.
-
-**안 주면 depth가 전량 조용히 버려진다** — `nvblox_node.cpp:1004`의 TF 조회 실패가
-`return false`라 `ros/depth/integrate` 타이머 자체가 안 생긴다. "콜백은 도는데 적분 타이머가 없다"가 지문.
-
-### `ros2 bag play -l`(루프)은 TF를 망가뜨린다 (실측)
-
-sim time이 뒤로 점프 → `[WARN] [tf2_buffer]: Detected jump back in time. Clearing TF buffer.`
-결과: `ros/depth_image_callback` **15641** 대 `ros/depth/integrate` **633** — 96% 폐기.
-
-→ **루프 대신 감속을 쓴다.** `-r 0.25`(115 s → 7분 40초). Foxglove 화면도 안 끊긴다.
-```bash
-ros2 bag play rosbag/... --clock -r 0.25 --disable-keyboard-controls   # -l 금지
-```
-`--clock`은 노드 쪽 `use_sim_time:=true`와 **반드시 짝**이다.
-
-### nvblox 파라미터 — 매퍼 파라미터엔 접두사가 붙는다
-
-`nvblox_base.yaml`이 `static_mapper:` / `dynamic_mapper:` / `multi_mapper:`로 **중첩**돼 있다.
-`-p esdf_slice_height:=0.0` → `cannot be set because it was not declared`.
-```bash
--p static_mapper.esdf_slice_min_height:=-0.3
--p static_mapper.esdf_slice_max_height:=0.5
--p static_mapper.esdf_slice_height:=0.0
-```
-- `use_lidar`는 yaml 기본이 `true`다(`:40`). LiDAR 없으면 `-p use_lidar:=false`.
-- **`--params-file`이 먹었는지는 타이밍 표로 확인한다.** `ros/update_esdf`가 10 Hz가 아니라 5.0,
-  `ros/tick`이 100 Hz가 아니라 400이면 **params-file이 안 실린 것이다**(yaml `update_esdf_rate_hz: 10.0`,
-  `tick_period_ms: 10`). 이걸로 remap 유실을 한 번 놓쳤다.
+> 📤 **2026-08-05에 [[ws/cobot2/context/constraints]] "nvblox / DDS"로 이관했다.** 어느 머신에서
+> nvblox를 돌리든 재현되는 소프트웨어 속성이라 대여 GPU 전용 문서에 둘 이유가 없다.
+> `use_lidar` 기본값(`true`)과 `--params-file` 타이밍 검증법도 그쪽에 함께 있다.
 
 ### `static_esdf_pointcloud`가 안 나오는 두 가지 이유
 

@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    Day1~5 스프린트 원본 계획 (PC 배치·GPU 의존 항목 분리는 하위 plans/ 문서가 소유)
+-->
+
 # Sprint Plan: M0609 Perception-Guided 6DoF 모션 제어 (nvblox + TAMP-lite)
 
 > 📁 문서 지도: [[ws/cobot2/README]] · **어느 PC에서 하느냐**는 [[ws/cobot2/plans/2026-08-01-pc-role-split]]이 나눈다.

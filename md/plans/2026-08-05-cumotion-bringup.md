@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    cuMotion/nvblox 브링업 게이트·빌드 절차 · nvblox 실행 절차 본체(§6)
+-->
+
 # cuMotion / nvblox 브링업 명령서 (2026-08-05)
 
 > 목적: Isaac ROS 3.2 컨테이너에서 cuMotion을 M0609+RG2로 띄우고, **OMPL 대비 계획 시간**을 잰다.

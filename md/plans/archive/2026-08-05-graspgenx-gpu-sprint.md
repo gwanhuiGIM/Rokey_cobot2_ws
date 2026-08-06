@@ -1,4 +1,12 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  archived
+owns:    없음 — 폐기된 GPU 세션 계획(전제였던 팀 공유 RTX 4070 좌석 폐기), 이력 보존용
+-->
+
 # Plan: GraspGenX GPU 세션 — 분 단위 실행 계획
+
+> ⚠️ 이 문서의 4070/12GB 언급은 낡았다. 실제 로컬 GPU는 RTX 4060 Laptop 8GB — 단일 출처는 [[ws/cobot2/state]].
 
 **작성:** 2026-08-05
 **전제:** 팀 공유 **RTX 4070** 좌석을 곧 확보. 시간이 제한적이므로 GPU에서만 되는 일만 GPU에서 한다.

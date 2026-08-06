@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  frozen
+owns:    없음 — NotebookLM 소스용 스냅샷(08-03 시점, 값 갱신 안 함)
+-->
+
 # 2026-08-03 세션 다이제스트 — eye-to-hand 캘리브 · TF · MoveIt2 Octomap 충돌회피
 
 > **이 문서의 용도**: NotebookLM 소스로 넣어 로보틱스 전공지식(핸드아이 캘리브레이션, 좌표 규약,

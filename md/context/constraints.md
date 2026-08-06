@@ -1,8 +1,28 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    실기·현장에서 확인된 사실 (하드웨어, TF, MoveIt, QoS, 리소스)
+-->
+
 # 실기/현장 제약 (실측 사실만 기록. 추측 금지)
 
 > 📁 문서 지도: [[ws/cobot2/README]] · 현재 상태: [[ws/cobot2/state]] · 오류 이력: [[ws/cobot2/errors-log]]
 > **이 문서가 소유하는 것: "무엇이 참인가".** 지금 뭘 할지는 `state.md`, 틀린 이력은 `errors-log.md`.
 > 튜닝값은 **파일이 정본이다**(`sensors_3d.yaml` 등) — 여기 표는 변경 이력이지 현재값 조회용이 아니다.
+
+## 카메라 마운트 강성 (2026-08-01, `archive/2026-08-01-session.md` §3에서 이관)
+- 캘리브 정확도는 마운트 강성에 통째로 종속된다. 헐거우면 mm 단위 정확도는 못 얻는다. 다만:
+  - Octomap·OMPL·상태머신·인식 로직 **개발**에는 대충 맞는 TF로 충분 — 영향 없음.
+  - **인식 정확도 실측**은 의미 없다. 마운트가 확정될 때까지 미룰 것 — 헐거운 마운트에서 오차 재고 코드 부호를 만지는 건 시간 낭비.
+- 그래서 마운트 미확정 상태에서는 "잠정 캘리브"로 찍고 넘어간다. 대신:
+  1. 마운트 위치를 마스킹테이프로 표시 + 사진 (나중에 재현·비교 가능하게)
+  2. bag 녹화와 캘리브는 같은 세션에서, 카메라를 안 건드리고 연속으로 한다 — 둘 사이에 움직이면 짝이 안 맞는다
+
+## doosan-robot2 / 토픽 (2026-08-01 실측, `state.md`에서 이관)
+- **doosan-robot2 launch의 `model` 기본값이 `m1013`** — M0609 쓸 때마다 `model:=m0609` 명시 필요. `dsr_bringup2_{rviz,gazebo,mujoco,moveit}.launch.py` 모두 해당.
+- 시뮬 경로 3종 존재: virtual 모드(DRCF 에뮬레이터, `install_emulator.sh` 선행 필요), Gazebo(`dsr_gazebo2`), MuJoCo(`dsr_mujoco`).
+- **D435i 토픽 네임스페이스는 `/camera/camera/...`** (2026-08-01 `ros2 topic list` 실측). 계획서 초안의 `/d435i/...`는 오기다. 토픽 이름은 **런치 명령이 정하지 마운트 방식(eye-in-hand/eye-to-hand)이 정하지 않는다** — 마운트를 바꿔도 이름은 그대로고 TF 부모 프레임만 바뀐다.
+- `align_depth.enable:=true`일 때 `aligned_depth_to_color`의 해상도는 **depth가 아니라 color 프로파일을 따른다.** 대역폭 계산 시 주의.
 
 ## RealSense D435I (2026-08-01)
 - ⚠️ **`reals` alias가 2026-08-03 기준 `ros2 launch m0609_rg2_bringup camera.launch.py`로 바뀌었다**(사용자 확인). 아래 08-01 기록의 `rs_align_depth_launch.py` 설명은 **낡았다** — 이 낡은 줄을 근거로 공식 런치를 써서 `base_link→camera_link` 없는 bag 4.8GB를 찍은 사고가 있었다([[ws/cobot2/rosbag-d435i]] §4). 두 런치는 **다른 것을 준다**: ws 런치만 `camera_calib_tf`(캘리브 TF)와 IMU를 준다.
@@ -521,6 +541,9 @@ base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 �
 
 ## GraspGenX 관련
 
+> **이 절이 소유하는 건 실측 사실(체크포인트 sha256, VRAM 측정치)뿐이다.**
+> 출력 규약·폭 계산 함수·상류 버그·설계 결정은 [[ws/cobot2/detect_graspx]]가 단일 출처다 — 여기 옮겨 적지 않는다.
+
 - **LFS 포인터 문제는 로컬 체크아웃 한정.** Lightning AI 원격에서는 RG2 데모 정상 동작(2026-08-04).
   로컬에서 메시 로드/시각화할 때만 `git lfs pull` 필요.
 - `uv sync`가 CPython 3.14를 잡으면 torch 휠이 없다 → `uv sync --python 3.12`.
@@ -604,8 +627,32 @@ depth 마스크 픽셀의 평균은 **보이는 표면**의 무게중심이다. 
 
 ---
 
+## nvblox / DDS — 대여 GPU와 무관한 보편 사실 (2026-08-04 실측, `gpu-rental-checklist.md` §8에서 이관)
+
+> 아래 4가지는 **어느 머신에서 nvblox를 돌리든 재현되는 소프트웨어 속성**이라 여기로 옮겼다.
+> 대여 절차·밟은 지뢰 목록·확정 명령어 자체는 여전히 [[ws/cobot2/plans/2026-08-04-gpu-rental-checklist]] §1~§7이 단일 출처다.
+
+- **Fast DDS가 848×480 depth(814 KB/샘플)를 못 흘린다.** 14~15 Hz여야 할 게 0.2~0.7 Hz로 떨어진다 —
+  `camera_info`(작은 메시지)는 같은 bag에서 14 Hz로 멀쩡해 **메시지 크기 의존**이 지문이다.
+  `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`로 회복(15.2 Hz). `/dev/shm`·`rmem_max`·CPU는 배제됨.
+  **`docker exec`로 새로 여는 셸마다 초기화된다** — 컨테이너 `~/.bashrc`에 넣어야 전 노드에 적용된다.
+- **nvblox `global_frame` 기본값이 `odom`이다**(`nvblox_ros/include/nvblox_ros/node_params.hpp:45`).
+  `world → base_link → camera_link`뿐인 TF엔 `odom`이 없어 depth가 조용히 전량 버려진다
+  (`Lookup transform failed for frame base_link`처럼 **엉뚱한 프레임 이름이 로그에 찍혀 오진을 유발**한다 —
+  실제로 없는 건 목적지 `odom` 쪽). `-p global_frame:=base_link`로 해결.
+- **`ros2 bag play -l`(루프)이 TF 버퍼를 깬다.** sim time이 뒤로 점프해
+  `[WARN] [tf2_buffer]: Detected jump back in time. Clearing TF buffer.` → 프레임 96%가 폐기된다.
+  **루프 대신 감속**(`-r 0.25`)을 쓴다. `--clock`은 소비 노드의 `use_sim_time:=true`와 반드시 짝이다.
+- **nvblox 매퍼 파라미터는 `static_mapper.`/`dynamic_mapper.` 접두사가 붙는다**(yaml이 중첩 구조라).
+  `-p esdf_slice_height:=0.0`은 `cannot be set because it was not declared`로 죽는다 —
+  `-p static_mapper.esdf_slice_height:=0.0`처럼 접두사를 붙여야 한다. `use_lidar`는 yaml 기본값이
+  **`true`**다 — LiDAR 없으면 `-p use_lidar:=false`를 빠뜨리지 말 것.
+- **`--params-file`이 실제로 실렸는지는 타이밍 표로 확인한다** — 이름이 맞아도 경로가 틀리면
+  조용히 기본값으로 되돌아간다. `ros/update_esdf`가 10 Hz가 아니라 5.0, `ros/tick`이 100 Hz가
+  아니라 400이면 **params-file이 안 실린 것이다**(yaml `update_esdf_rate_hz: 10.0`, `tick_period_ms: 10`).
+
 ## Isaac ROS 컨테이너 (Lightning AI / AWS EC2 GPU)
 
 > 📤 **2026-08-04에 [[ws/cobot2/plans/2026-08-04-gpu-rental-checklist]]로 전부 옮겼다.**
 > 대여 GPU(클라우드) 환경의 사실은 **실기 제약이 아니다** — 이 문서는 로컬 실물 하드웨어만 소유한다.
-> Fast DDS/CycloneDDS, nvblox 파라미터, Foxglove, FoundationPose 걸림돌은 전부 그쪽 §6~§8에 있다.
+> Foxglove, FoundationPose 걸림돌은 그쪽 §6~§8에 있다. nvblox/DDS 보편 사실은 위 절로 옮겼다.

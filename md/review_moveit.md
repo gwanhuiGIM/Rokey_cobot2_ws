@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    MoveIt2 OMPL+Octomap 수행 기록 · 채택 설정값 스냅샷 · cuRobo 비교 설계
+-->
+
 # MoveIt2 OMPL + Octomap 충돌회피 — 과정 리뷰 & cuRobo 비교 설계
 
 **작성:** 2026-08-03 | **대상 스택:** `m0609_rg2_moveit` (MoveIt2 OMPL + `occupancy_map_monitor/PointCloudOctomapUpdater`)
@@ -8,6 +14,37 @@
 
 > ⚠️ 이 문서의 "수행 과정"은 사용자 구두 보고 + 이 세션에서 `git diff`로 확인한 설정 변경을 근거로 재구성했다.
 > `ros2 topic hz` / `tf2_echo` / RViz 스크린샷 등을 **이 턴에서 직접 실행해 확인한 것은 아니므로** 3절에 검증 상태를 분리해 표시한다.
+
+---
+
+## 0. 여기까지 온 경위 (2026-08-02, `state.md`에서 이관)
+
+- ✅ 캘리브 결과 → static TF 연결 성공: `base_link → camera_link`, `tf2_echo base_link camera_depth_optical_frame` 정상.
+  (이 줄에 처음 적혀 있던 993.4 mm는 좌표 규약 버그 수정 **전**의 값이라 폐기.)
+  ⚠️ **여기 적혀 있던 `[1.148, 0.640, 0.678]` (약 1.48 m)는 2026-08-03 재캘리브로 폐기.**
+  값의 출처는 `T_cam2base.npy` 하나뿐이다 — **거리 수치를 문서에 베껴 적지 말 것.**
+  읽는 법과 사고 이력은 [[ws/cobot2/context/constraints]].
+- ✅ **`base_0`는 TF에 존재하지 않는 프레임임을 확인** — `base_link`가 맞다. 계획서 전체를 `base_0`→`base_link`, `link6`→`link_6`으로 수정 완료. 근거·표는 [[ws/cobot2/context/constraints]].
+- ✅ **좌표 규약 버그 수정 후 육안 검증 통과** — 클라우드 속 로봇 팔이 모델에 정확히 포개짐. 캘리브 잠정값 사용 가능.
+- ✅ **`octomap_server`는 이 파이프라인에서 불필요하다고 결론.** MoveIt은 `/octomap_binary`를 구독하지 않고
+  `move_group` 내부에서 octree를 직접 만든다. 둘 다 돌리면 CPU 이중 소모 — 정식 경로는 `sensors_3d.yaml`이다.
+- ✅ **`m0609_rg2_moveit/config/sensors_3d.yaml` 작성 완료** + `moveit.launch.py`에서 주입(`octomap:=true` 기본).
+  실제 채택값: **`octomap_frame: base_link`**, **`octomap_resolution: 0.02`**(계획은 `0.03`),
+  토픽 `/camera/camera/depth/color/points`(계획은 `/depth/points_xyz`), 센서명 `realsense_pointcloud`.
+  `ros2 param get /move_group`으로 주입까지 확인. ✅ `moveit-ros-perception` 설치·플러그인 로드 확인(2026-08-03).
+  ※ 한때 `world`로 적혀 있었으나 **틀렸다**(2026-08-02 실측): SRDF에 `virtual_joint(fixed, parent_frame="world")`가
+  있어도 MoveIt은 fixed 타입으로는 모델 프레임을 만들지 않아 플래닝 프레임이 루트 링크(`base_link`)로 남는다.
+  `frame_id='world'`로 CollisionObject를 발행하면 `Unknown frame: world` 에러와 함께 **조용히 무시**된다.
+  RViz Scene Objects도 같은 규칙. 경위는 [[ws/cobot2/context/constraints]].
+- ✅ **캘리브 결과를 launch가 npy에서 직접 계산** — `m0609_rg2_bringup/config/T_cam2base.npy` →
+  `camera.launch.py`가 매 실행 `calib_npy_to_tf.py`로 static TF 생성. **하드코딩된 `static_transform_publisher`
+  명령을 다시 만들지 말 것** (낡은 값으로 340 mm 어긋난 이력 있음).
+- ✅ **런치 3분할 확정**: `bringup`(로봇 전용) / `camera`(RealSense + 캘리브 TF) / `moveit`(move_group + JTC spawner + RViz).
+  `bringup_camera.launch.py`는 **eye-in-hand 전용**(URDF가 camera_link를 tool0에 붙임) — 현재 리그와 섞으면 TF가 깨진다.
+- ✅ **MoveIt 실기 Plan·Execute 성공** — Execute ABORTED의 원인은 두 개였다: bringup이 `dsr_moveit_controller`를
+  안 띄움 + 네임스페이스 불일치. `moveit.launch.py`에 spawner 추가 + `moveit_controllers.yaml`의 컨트롤러 이름을
+  절대경로 `/dsr01/dsr_moveit_controller`로. **`dsr_controller2`와 동시 active 가능**(인터페이스를 claim하지 않는 서비스 래퍼).
+- ✅ **팀원용 통합 `README.md` 작성**(ws 루트) — 3터미널 실행 절차·인자표·기능확인 체크1~3·알려진 함정.
 
 ---
 

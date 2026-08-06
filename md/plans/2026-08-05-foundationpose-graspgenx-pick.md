@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    음성 지정 pick 아키텍처 · Phase별 실행 계획 (같은 날 3차 개정)
+-->
+
 # Plan: 음성 지정 협동 pick — YOLO 타겟팅 + GraspGenX + MoveIt 동적 회피
 
 **작성:** 2026-08-05 (같은 날 3차 개정 — 음성 지정·동적 회피 요구 반영)
@@ -224,6 +230,7 @@ RViz에 두 궤적을 겹쳐 띄우면 "피했다"가 설명 없이 보인다
 
 GraspGenX 서버 → `--fake` 해제 → 추론 시간 측정.
 **판정선은 절대값이 아니라 총 체감 지연에서의 비중이다**(§4).
+⚠️ 이 랩탑 GPU는 RTX 4060 Laptop **8GB**([[ws/cobot2/context/constraints]]) — `num_grasps`는 **64**로 시작한다(12GB 가정 아님).
 
 ### Phase 2 · 실기 — 회피 검증 (로봇 필요, 사용자 승인 필수)
 

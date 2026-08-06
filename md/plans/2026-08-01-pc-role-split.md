@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    개인PC(CPU) vs GPU PC 작업 배치표
+-->
+
 # PC 역할 분담 계획 — 개인PC(노트북) vs GPU PC
 
 **작성:** 2026-08-01 | **관련:** [[ws/cobot2/M0609_perception_motion_sprint_plan]]
@@ -40,7 +46,7 @@
 | **Day3** 장애물 회피 모션 | 개인PC(SIM) → 실기 | SIM 후 실기 | Gazebo/virtual에서 먼저 |
 | **Day3** OMPL 플래너 튜닝 비교 | **개인PC** | SIM | 플래너 성공률·계획시간은 시뮬로 충분, 실기 시간 낭비 |
 | **Day4** FoundationPose 6D pose 추정 | **GPU PC 전용** | **실기** | TensorRT/CUDA 필수. ray-plane 방식을 대체(2026-08-02 변경) — 개인PC에서 불가 |
-| **Day4** GraspGenX 그립 생성 | **GPU PC 전용** | SIM | 동일. 단 저장소 실재 미확인 — Day0 확인 항목 |
+| **Day4** GraspGenX 그립 생성 | **GPU PC 전용** | SIM | ✅ 저장소 실재 확인 완료. 2026-08-05 실기 파이프라인 관통 → [[ws/cobot2/state]] |
 | **Day4** 인식 노드 **인터페이스**(토픽·msg 타입) 확정 | **개인PC** | SIM | GPU 없이 가능. 껍데기만 먼저 만들고 나중에 알맹이 교체 |
 | **Day4** TAMP-lite 상태머신 작성 | **개인PC** | SIM | 상태 전이 로직, 로봇 불필요 |
 | **Day4** VoiceProcess 퍼블리셔 작성 | **개인PC** | — | 마이크만 있으면 됨 |

@@ -1,9 +1,16 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    nvblox 워크스페이스·udev·Docker 컨테이너 셋업 (§1~§5만. §6 이후는 cumotion-bringup.md 소유)
+-->
+
 # Phase 1: Isaac ROS + nvblox 셋업 가이드 (D435i, RTX 4050/4060 노트북)
 
-> ⏸ **GPU PC 전용 문서다.** 이 랩탑(i7-10510U, Intel UHD)엔 NVIDIA GPU가 없어 실행 불가 —
-> 제목의 "RTX 4050/4060 노트북"은 이 머신이 아니다. 착수 조건은
-> [[ws/cobot2/plans/2026-08-03-gpu-dependent-candidates]] §0. 충돌 회피는 이미 Octomap이 담당 중이라
-> nvblox는 **시각화 전용·우선순위 낮음**이다. 문서 지도: [[ws/cobot2/README]]
+> ⏸ **보류 — GPU는 있으나(RTX 4060 Laptop 8GB) 도커 경로가 막혀 있다.**
+> `kimkh`가 docker 그룹 비멤버(멤버는 `rokey`) + `nvidia-container-toolkit` 미설치 — 이 둘이 풀려야 §4 이후를 진행할 수 있다.
+> 충돌 회피는 이미 Octomap이 담당 중이라 nvblox는 여전히 **시각화 전용·우선순위 낮음**이다.
+> **nvblox 실행 절차 본체(§6 이후)는 이 문서가 아니라 [[ws/cobot2/plans/2026-08-05-cumotion-bringup]] §6이 단일 출처다** — 가장 최신이고 실패 이력(`std::lerp`, `warp.torch`)까지 있다.
+> 이 문서는 §1~§5(워크스페이스·udev·Docker 컨테이너 셋업)만 유효하다. 문서 지도: [[ws/cobot2/README]]
 
 목표: 로봇 없이, D435i만으로 nvblox의 실시간 3D 재구성을 눈으로 확인한다.
 
@@ -87,40 +94,12 @@ colcon build --symlink-install --packages-up-to isaac_ros_nvblox
 source install/setup.bash
 ```
 
-## 6. nvblox 실시간 실행 (D435i 라이브 데이터)
+## 6. nvblox 실행 · 검증 · 다음 단계 — 여기서부터는 이 문서가 아니라 다른 문서를 본다
 
-```bash
-ros2 launch nvblox_examples_bringup realsense_example.launch.py
-```
-
-RViz가 뜨면서 3D 메시가 실시간으로 쌓이는 걸 확인할 수 있습니다.
-카메라를 들고 방 안을 천천히 훑으면 재구성되는 과정이 보입니다.
-
-### (선택) 사람 인식 모드로 실행
-
-```bash
-ros2 launch nvblox_examples_bringup realsense_example.launch.py \
-  mode:=people_segmentation \
-  people_segmentation:=peoplesemsegnet_shuffleseg
-```
-
----
-
-## 검증 체크리스트
-
-- [ ] RViz에서 3D 메시가 실시간으로 갱신되는가
-- [ ] `ros2 topic hz /nvblox_node/esdf_slice` (또는 유사 토픽)로 갱신 주기 확인
-- [ ] 이전 `vision_latency_bench.py`로 측정했던 지연시간과 비교
-- [ ] 손이나 물체를 카메라 앞에 넣었을 때 재구성에 실시간으로 반영되는지 확인
-
----
-
-## 다음 단계 (Phase 2 예고)
-
-여기서 나온 ESDF(Euclidean Signed Distance Field) 출력을 MoveIt의
-플래닝 씬 충돌 객체로 변환하는 커스텀 노드를 작성하는 게 다음 단계입니다.
-nvblox 토픽 구조(특히 ESDF slice, mesh 메시지 타입)를 이 단계에서
-확인해두면 Phase 2 설계가 수월해집니다.
+> 이 문서가 작성된 뒤(release-4.4 가정, rosbag 대신 라이브 카메라 가정) 실제 환경이 갈렸다:
+> `release-3.2` 고정, 카메라 없이 rosbag 재생 기반 검증. 그 최신 상태·확정 명령어·지뢰 목록은
+> **[[ws/cobot2/plans/2026-08-05-cumotion-bringup]] §6이 단일 출처다.**
+> 검증 체크리스트·ESDF→PlanningScene 다음 단계도 그 문서 이후 절에서 다룬다.
 
 ## 참고 문서
 

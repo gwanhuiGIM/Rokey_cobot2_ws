@@ -4,7 +4,7 @@
 
 - 대상: `m0609_rg2_bringup`, `m0609_rg2_moveit` (둘 다 `src/cobot_rg2/rg2/`)
 - 전제: **환경(카메라 위치·조명)이 바뀌지 않는다.** 카메라를 옮기면 캘리브부터 다시 해야 한다 → [재캘리브](#재캘리브-카메라를-옮겼다면)
-- 최종 갱신: 2026-08-02
+- 최종 갱신: 2026-08-05
 
 ---
 
@@ -173,46 +173,16 @@ RViz MotionPlanning 패널에서:
 | 로봇 bringup (real) | ✅ 검증됨 | 실기 연결 후 MoveIt Plan/Execute까지 확인 (2026-08-02) |
 | 카메라 드라이버 (`reals` alias) | ✅ 검증됨 | `/camera/camera/...` 토픽 실측 (2026-08-01) |
 | 카메라 드라이버 (`camera.launch.py`) | ✅ 검증됨 | 실기 D435i로 기동 (2026-08-03). `/camera/camera` + `/camera_calib_tf` 노드 기동, `/camera/camera/depth/color/points` 18~20 Hz 발행, `/tf_static`의 `base_link→camera_link`가 `calib_npy_to_tf.py` 출력과 소수점까지 일치 |
-| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. TF 발행 자체는 검증됨(위). 현행 캘리브(2026-08-03, `data/` 34장)는 **자체 진단에서 불합격** — AX=XB 병진잔차 중앙값 40.1 mm, 31쌍 중 21쌍이 30 mm 초과. octomap voxel(20 mm)의 2배라 **octomap 정밀도를 캘리브가 지배한다.** 개발용 TF로는 쓸 수 있으나 인식 정확도 실측의 근거로 삼지 말 것 |
+| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. TF 발행 자체는 검증됨(위). 현행 캘리브(2026-08-03, `data/` 34장)는 **자체 진단에서 불합격** — AX=XB 병진잔차 중앙값 40.1 mm, 31쌍 중 21쌍이 30 mm 초과. octomap voxel(20 mm)의 2배라 **octomap 정밀도를 캘리브가 지배한다.** 개발용 TF로는 쓸 수 있으나 인식 정확도 실측의 근거로 삼지 말 것 (단일 출처: `md/state.md`) |
 | MoveIt 경로 계획 | ✅ 검증됨 | RRTConnect, 0.019 s |
 | MoveIt 궤적 실행(Execute) | ✅ **실기 검증됨** | 실제 로봇으로 Plan → Execute 확인 (2026-08-02) |
 | RViz 수동 장애물 회피 | ✅ 설정 완료 | `publish_geometry_updates` 등 4개 활성. [8절](#8-시뮬레이션에서-장애물-놓고-회피-디버깅) |
-| **3D 장애물 감지 (octomap)** | ⚠️ **설정 완료 · 미검증** | 파라미터 주입까지 확인. **`moveit-ros-perception` 설치 후 실측 필요** |
+| **3D 장애물 감지 (octomap)** | ✅ **실기 검증됨** (2026-08-03) | `moveit-ros-perception` 설치·self-filter·장애물 회피 확인. 상세 근거는 `md/review_moveit.md`가 단일 출처 |
 | 그리퍼 MoveIt 제어 | ❌ 미지원 | RG2는 `/onrobot/sendCommand` 서비스로 직접 제어. MoveIt 컨트롤러 없음 |
 
 ### 3D 장애물 감지 (octomap) — 상태
 
-배선은 끝났다. `config/sensors_3d.yaml`이 RealSense 포인트클라우드를 octomap에 물리고,
-`moveit.launch.py`가 `octomap:=true`(기본)일 때 move_group에 주입한다.
-
-**남은 것은 플러그인 패키지 설치 하나뿐이다:**
-```bash
-sudo apt install ros-humble-moveit-ros-perception
-```
-
-설치 전 상태에서 파라미터가 제대로 들어가는 것까지는 확인했다:
-```
-$ ros2 param get /move_group sensors
-String values are: ['realsense_pointcloud']
-$ ros2 param get /move_group realsense_pointcloud.sensor_plugin
-String value is: occupancy_map_monitor/PointCloudOctomapUpdater
-$ ros2 param get /move_group octomap_frame
-String value is: base_link      # 'world' 아님 — planning scene은 world를 모른다 (8절 참고)
-```
-설치 전 로그는 `Failed to load sensor: realsense_pointcloud` — 설정은 읽혔고 클래스만 없다는 뜻이다.
-설치 후에는 이 줄이 사라져야 한다.
-
-**설치 후 확인 방법:**
-1. 세 런치 모두 켠다 (카메라 필수 — 클라우드가 없으면 octomap도 없다)
-2. RViz → Displays → MotionPlanning → **Scene Geometry → Show Scene Geometry** 켜기
-   → 카메라가 보는 물체가 **복셀 덩어리**로 나타나야 한다
-3. 그 복셀을 통과하는 목표 자세를 잡고 Plan → 경로가 **돌아가야** 한다
-
-**튜닝값은 `config/sensors_3d.yaml`에 `[튜닝]` 주석으로 표시해뒀다.**
-자기 팔이 장애물로 잡히면 `padding_offset`을, 뒷벽까지 잡히면 `max_range`를 먼저 본다.
-
-> 🚨 **설치·검증 전까지 이걸 장애물 회피로 믿지 말 것.** 지금 계획은 URDF 자기 충돌과
-> RViz에 직접 놓은 물체만 피한다. 카메라가 보는 실물은 그대로 통과한다.
+> 검증 결과·채택 설정값 스냅샷·cuRobo 비교 설계는 `md/review_moveit.md`가 단일 출처다. 여기서 값을 다시 적지 않는다.
 
 ---
 

@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    GraspGenX 출력 규약(§3) · 그리퍼 폭 계산·1/10mm 함수(§5) · 상류 버그(§6)
+-->
+
 # GraspGenX 통합 설계 — Detect → Grasp → Execute
 
 > 작성 2026-08-04 · 대상 하드웨어 M0609(`dsr01`) + OnRobot RG2 + RealSense

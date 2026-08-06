@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
+-->
+
 # 문서 지도 — `md/` 무엇이 어디에 있나
 
 > **이 파일이 문서의 진입점이다.** 새 문서를 만들면 여기에 한 줄 추가한다.
@@ -21,8 +27,9 @@
 
 | 문서 | 단일 출처 |
 |---|---|
-| [rosbag-d435i.md](rosbag-d435i.md) | **D435i rosbag 녹화·재생 명령 전부.** `state.md`·`Personal_0801`에 두지 않는다 |
+| [rosbag-d435i.md](rosbag-d435i.md) | **D435i rosbag 녹화·재생 명령 전부.** `state.md`·`archive/2026-08-01-session.md`에 두지 않는다 |
 | [review_moveit.md](review_moveit.md) | **MoveIt2 OMPL + Octomap** 파이프라인 수행 기록, 채택 설정 스냅샷, cuRobo 비교 설계 |
+| [detect_graspx.md](detect_graspx.md) | **GraspGenX 설계 원본** — 출력 규약(§3), 폭 계산·1/10mm 함수(§5), 상류 버그(§6). `state.md`는 여기로 포인터만 둔다 |
 
 ## 계획 문서
 
@@ -33,16 +40,22 @@
 | [plans/2026-08-03-octomap-integration.md](plans/2026-08-03-octomap-integration.md) | ✅ **완료(08-03)** — 결과는 `review_moveit.md`. 계획서 자체는 이력으로 보존 |
 | [plans/2026-08-03-c270-webcam-plan.md](plans/2026-08-03-c270-webcam-plan.md) | ⏸ 미착수 — C270 eye-in-hand. GPU 불필요 |
 | [plans/2026-08-03-gpu-dependent-candidates.md](plans/2026-08-03-gpu-dependent-candidates.md) | ⏸ 보류 — GPU 머신 확보 전엔 **어떤 명령도 실행하지 않는다** |
-| [plans/2026-08-04-gpu-rental-checklist.md](plans/2026-08-04-gpu-rental-checklist.md) | 🔴 **진행 중(Lightning AI).** 대여 GPU 환경의 **모든 것**이 여기 있다 — 절차 §1~5, **밟은 지뢰 §6**, 확정 명령어 §7, 실측 사실 §8. 클라우드 얘기는 `constraints.md`에 쓰지 않는다 |
+| [plans/2026-08-04-gpu-rental-checklist.md](plans/2026-08-04-gpu-rental-checklist.md) | 🟢 **종료(2026-08-05, 로컬 GPU PC로 전환).** 대여 GPU 세션은 끝났지만 **밟은 지뢰 §6**과 컨테이너 실측 사실 §8은 로컬 Isaac ROS 작업에서도 계속 유효 |
+| [plans/2026-08-05-foundationpose-graspgenx-pick.md](plans/2026-08-05-foundationpose-graspgenx-pick.md) | 🟢 **현행 원본** — 음성 타겟팅 + GraspGenX + 동적 회피 아키텍처 (같은 날 3차 개정) |
+| [plans/2026-08-05-cumotion-bringup.md](plans/2026-08-05-cumotion-bringup.md) | 🔴 **진행 중** — 게이트 A~F. §4-3 "cuMotion은 MoveIt octomap을 안 본다"가 nvblox 필수화의 근거 |
+| [plans/archive/2026-08-05-graspgenx-gpu-sprint.md](plans/archive/2026-08-05-graspgenx-gpu-sprint.md) | 🗄 **이력** — 2026-08-05 GraspGenX 실기 파이프라인 관통으로 목적 달성. 전제였던 "팀 공유 RTX 4070 좌석"은 폐기(실제는 로컬 RTX 4060 8GB) |
 
 ## 산출물 · 이력
 
 | 문서 | 상태 |
 |---|---|
 | [2026-08-03-notebooklm-digest.md](2026-08-03-notebooklm-digest.md) | 📤 NotebookLM 소스용 다이제스트(08-03 스냅샷). 여기 적힌 값은 갱신되지 않는다 — 정본은 위 상시 문서다 |
-| [isaac_ros_nvblox_setup.md](isaac_ros_nvblox_setup.md) | ⏸ **GPU PC 전용.** 이 랩탑엔 NVIDIA GPU가 없어 실행 불가 |
-| [Personal_0801](Personal_0801) | 🗄 **동결(08-01 세션 기록).** 런치·녹화 명령은 **폐기** — `rosbag-d435i.md`를 볼 것 |
+| [isaac_ros_nvblox_setup.md](isaac_ros_nvblox_setup.md) | ⏸ Docker/udev 셋업(§1~5)만 유효. **nvblox 실행 절차 본체는 [[ws/cobot2/plans/2026-08-05-cumotion-bringup]] §6이 단일 출처** |
+| [archive/2026-08-01-session.md](archive/2026-08-01-session.md) | 🗄 **동결(08-01 세션 기록).** 런치·녹화 명령은 **폐기** — `rosbag-d435i.md`를 볼 것 |
+| [archive/2026-08-03-session-dashboard.html](archive/2026-08-03-session-dashboard.html) | 🗄 08-03 세션 성과 요약(시각화). 값은 갱신 안 됨 — 정본은 `review_moveit.md`·`errors-log.md` |
+| [plans/archive/2026-08-05-graspgenx-gpu-sprint.md](plans/archive/2026-08-05-graspgenx-gpu-sprint.md) | 🗄 (위 계획 문서 표 참고) |
 | `decisions/` | (비어 있음) ADR을 쓰게 되면 `<번호>-<제목>.md` |
+| `journal/` | 그날그날의 시간 진행 로그. §"상시 문서" 옆 참고 |
 
 ## 문서를 쓸 때
 

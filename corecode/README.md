@@ -164,4 +164,4 @@ ros2 launch realsense2_camera rs_align_depth_launch.py \
 | `square_size` 하드코딩 | 코드에서 확인함 |
 | **실제 실행 / 실기 동작** | **미검증** — 이 README는 코드를 읽고 쓴 것이며 돌려보고 쓴 것이 아니다 |
 
-실기로 돌려서 위 내용과 다른 점을 발견하면 `docs/context/constraints.md`에 적는다.
+실기로 돌려서 위 내용과 다른 점을 발견하면 `md/context/constraints.md`에 적는다.

@@ -1,3 +1,9 @@
+<!-- meta
+updated: 2026-08-06 12:00
+status:  live
+owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
+-->
+
 # 세션 상태
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
@@ -24,7 +30,7 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 
 - 파일: `scripts/{capture_graspgenx_scene,graspgen_worker,grasp_bridge_node}.py` + 테스트 3종.
   **아직 ROS 패키지가 아니다**(`scripts/` 단독 실행). 동작이 굳으면 패키지로 올린다.
-- 계약·튜닝값·함정은 [[ws/cobot2/context/constraints]] "GraspGenX 관련"이 단일 출처다.
+- 계약·튜닝값·함정은 [[ws/cobot2/detect_graspx]]가 단일 출처다(출력 규약 §3, 폭 계산·1/10mm 함수 §5, 상류 버그 §6). 실측 사실(체크포인트 sha256, VRAM 측정치)만 [[ws/cobot2/context/constraints]] "GraspGenX 관련"에 있다.
 - ⛔ **실기 모션 전 블로커 1개**: `tool0` 플랜지면 → RG2 손끝 **실측 거리**.
   URDF는 190 mm(어댑터 오프셋 0), 매뉴얼은 220 mm + 브라켓 10 mm.
   차이가 실재하면 MoveIt이 손끝을 **40 mm 더 깊이** 민다. 줄자 한 번이면 갈린다.
@@ -73,12 +79,14 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
-- **GPU PC에 GPU 있음 — 사용자 확인 (2026-08-02).** 스프린트 Day4~5(nvblox·FoundationPose·GraspGenX) 재작성 리스크는 해소됐다.
-  단 **`docker info | grep -i runtime`으로 nvidia-docker 런타임이 잡히는지는 아직 미확인** — nvblox 컨테이너 빌드 전에 확인할 것. GPU 모델·VRAM도 미확인(FoundationPose VRAM 요구량 판단에 필요).
-- 하드웨어(M0609 + RG2 + D435i + C270)는 `.bashrc` alias 추론이며 실기로 재확인되지 않음.
-- **D435i depth rosbag 미확보** — 이게 있어야 개인PC에서 실기 없이 Octomap·플래너·상태머신 개발 가능. 절차는 아래 "출근 후 D435i 세션" 참조.
+- **GPU PC 도커 경로가 막혀 있다** — `kimkh`가 docker 그룹 비멤버(멤버는 `rokey`) +
+  `nvidia-container-toolkit` 미설치. Isaac ROS 컨테이너(`run_dev.sh`) 경로는 지금 못 연다.
+  GPU 사양의 단일 출처는 [[ws/cobot2/context/constraints]](RTX 4060 Laptop 8GB).
+- ~~D435i depth rosbag 미확보~~ ⤴ **해소(2026-08-04).** `rosbag/bag_0803calibed/` 4개 검증 통과.
+  남은 건 장면 2개(빈 테이블 / 장애물 여러 개) 추가 뿐이다 → [[ws/cobot2/rosbag-d435i]] "다시 찍어야 하는 것".
 - **카메라 마운트 강성 미확보** — 견고한 고정이 아직 어려움. 캘리브는 **잠정(provisional)**으로 취급하고, Day4 인식 정확도 실측 검증은 마운트 확정 후로 미룬다. 개발용 TF로는 잠정값으로 충분하다.
-- **Day4 인식 방식 변경(2026-08-02)**: ray-plane intersection → **FoundationPose**(6D pose), 하드코딩 그립 → **GraspGenX**. 평면 가정이 사라지는 건 이득이지만 **GPU 의존이 커졌다** — Day4는 GPU PC 전용이 된다. `GraspGenX` 저장소는 실재 미확인(`NVlabs/GraspGen`은 확인됨).
+- **Day4 인식 방식 변경(2026-08-02)**: ray-plane intersection → **FoundationPose**(6D pose), 하드코딩 그립 → **GraspGenX**. 평면 가정이 사라지는 건 이득이지만 **GPU 의존이 커졌다** — Day4는 GPU PC 전용이 된다.
+- **C270**은 아직 실기 등록·실행 이력이 없다(`.bashrc` alias만 존재). M0609·RG2·D435i는 실기 확인 완료 → [[ws/cobot2/context/constraints]].
 - **캘리브 방식 변경(2026-08-02)**: `easy_handeye2` → `corecode/Calibration_Tutorial`(`eye2hand_calibration.py` / `handeye_calibration.py`). 두 알고리즘 모두 합성 데이터로 정답 복원 확인(오차 ~1e-13). npy(mm) → static TF(m) 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`. ~~미해결: `data_recording.py`가 `set_tcp` 후의 `posx`를 기록하므로 결과의 부모 프레임이 flange가 아니라 TCP다~~ → **해소(2026-08-03).** eye-to-hand에서는 판↔그리퍼 변환 G가 AX=XB 유도에서 소거되므로, "그리퍼"를 flange로 잡든 TCP로 잡든 **`T_cam2base` 결과는 같다**(X는 base·camera 쪽 변환이라 팔 쪽 기준 프레임 선택과 무관). `--selfcheck`가 이걸 합성 데이터로 확인한다. 현재 `RECORD_IN_FLANGE_FRAME = False`(TCP 기준)로 두어도 문제 없다.
 - **Day1.5 압축 경로 신설** — 캘리브·인식 전부 생략하고 "장애물 놓으면 궤적이 바뀐다"만 보여주는 시연용 경로. GPU 불필요, 개인PC 가능. 임시 static TF를 쓰므로 **rosbag 녹화와 절대 겹치면 안 된다.**
 - **좌표 규약 버그 발견·수정 (2026-08-02)** — npy는 OpenCV **optical** 규약인데 ROS `camera_link`(body 규약)로 발행해 클라우드가 로봇 옆으로 90° 튀었다. `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`가 이제 기본 보정한다. **`inv(T)` 문제가 아니었다** — 규약을 먼저 의심할 것. 채점표는 [[ws/cobot2/context/constraints]].
@@ -124,8 +132,8 @@ code .                                          # 이후 VS Code Source Control�
 1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).
    실기 켠 김에 돌려서 기대값과 대조하고 경고를 지운다.
-2. **D435i depth rosbag 녹화** — 개인PC에서 실기 없이 개발하려면 필수.
-   ⚠️ **명령의 단일 출처는 [[ws/cobot2/rosbag-d435i]] §A다.** 아래 "출근 후 D435i 세션"에는 순서만 남겼다.
+2. **D435i depth rosbag 장면 2개 추가 녹화**(빈 테이블 / 장애물 여러 개) — 기존 4개(2026-08-04)는 검증 통과.
+   ⚠️ **녹화 절차의 단일 출처는 [[ws/cobot2/rosbag-d435i]] §6, 재생 절차는 §3이다.** 아래 "출근 후 D435i 세션"에는 순서만 남겼다.
 3. **캘리브 오차 정량 측정** — 알려진 좌표의 물체로 cm 단위. `padding_offset` 해석과 cuRobo 비교의 전제.
 4. **OMPL 플래너 성공률·계획시간 로그** — 스프린트 Day3 P1. cuRobo 비교의 기준선.
 
@@ -142,33 +150,8 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
 ```
 카메라를 재기동하면 이 노드도 같이 죽는다. `ros2 topic list | grep points_xyz`로 먼저 확인할 것.
 
-## Day2 진행 (2026-08-02)
-- ✅ 캘리브 결과 → static TF 연결 성공: `base_link → camera_link`, `tf2_echo base_link camera_depth_optical_frame` 정상.
-  (이 줄에 처음 적혀 있던 993.4 mm는 좌표 규약 버그 수정 **전**의 값이라 폐기.)
-  ⚠️ **여기 적혀 있던 `[1.148, 0.640, 0.678]` (약 1.48 m)는 2026-08-03 재캘리브로 폐기.**
-  값의 출처는 `T_cam2base.npy` 하나뿐이다 — **거리 수치를 문서에 베껴 적지 말 것.**
-  읽는 법과 사고 이력은 [[ws/cobot2/context/constraints]].
-- ✅ **`base_0`는 TF에 존재하지 않는 프레임임을 확인** — `base_link`가 맞다. 계획서 전체를 `base_0`→`base_link`, `link6`→`link_6`으로 수정 완료. 근거·표는 [[ws/cobot2/context/constraints]].
-- ✅ **좌표 규약 버그 수정 후 육안 검증 통과** — 클라우드 속 로봇 팔이 모델에 정확히 포개짐. 캘리브 잠정값 사용 가능.
-- ✅ **`octomap_server`는 이 파이프라인에서 불필요하다고 결론.** MoveIt은 `/octomap_binary`를 구독하지 않고
-  `move_group` 내부에서 octree를 직접 만든다. 둘 다 돌리면 CPU 이중 소모 — 정식 경로는 `sensors_3d.yaml`이다.
-- ✅ **`m0609_rg2_moveit/config/sensors_3d.yaml` 작성 완료** + `moveit.launch.py`에서 주입(`octomap:=true` 기본).
-  실제 채택값: **`octomap_frame: base_link`**, **`octomap_resolution: 0.02`**(계획은 `0.03`),
-  토픽 `/camera/camera/depth/color/points`(계획은 `/depth/points_xyz`), 센서명 `realsense_pointcloud`.
-  `ros2 param get /move_group`으로 주입까지 확인. ⛔ **다만 `moveit-ros-perception` 미설치라 플러그인 로드는 실패 중**(위 1번).
-  ※ 한때 `world`로 적혀 있었으나 **틀렸다**(2026-08-02 실측): SRDF에 `virtual_joint(fixed, parent_frame="world")`가
-  있어도 MoveIt은 fixed 타입으로는 모델 프레임을 만들지 않아 플래닝 프레임이 루트 링크(`base_link`)로 남는다.
-  `frame_id='world'`로 CollisionObject를 발행하면 `Unknown frame: world` 에러와 함께 **조용히 무시**된다.
-  RViz Scene Objects도 같은 규칙. 경위는 [[ws/cobot2/context/constraints]].
-- ✅ **캘리브 결과를 launch가 npy에서 직접 계산** — `m0609_rg2_bringup/config/T_cam2base.npy` →
-  `camera.launch.py`가 매 실행 `calib_npy_to_tf.py`로 static TF 생성. **하드코딩된 `static_transform_publisher`
-  명령을 다시 만들지 말 것** (낡은 값으로 340 mm 어긋난 이력 있음).
-- ✅ **런치 3분할 확정**: `bringup`(로봇 전용) / `camera`(RealSense + 캘리브 TF) / `moveit`(move_group + JTC spawner + RViz).
-  `bringup_camera.launch.py`는 **eye-in-hand 전용**(URDF가 camera_link를 tool0에 붙임) — 현재 리그와 섞으면 TF가 깨진다.
-- ✅ **MoveIt 실기 Plan·Execute 성공** — Execute ABORTED의 원인은 두 개였다: bringup이 `dsr_moveit_controller`를
-  안 띄움 + 네임스페이스 불일치. `moveit.launch.py`에 spawner 추가 + `moveit_controllers.yaml`의 컨트롤러 이름을
-  절대경로 `/dsr01/dsr_moveit_controller`로. **`dsr_controller2`와 동시 active 가능**(인터페이스를 claim하지 않는 서비스 래퍼).
-- ✅ **팀원용 통합 `README.md` 작성**(ws 루트) — 3터미널 실행 절차·인자표·기능확인 체크1~3·알려진 함정.
+## 실기 안전 경고 (상시 유효)
+> 완료된 작업 경위는 [[ws/cobot2/review_moveit]] §0으로 이관했다.
 - ⚠️ **로봇 명령 경로가 두 개 살아 있다**: `dsr_controller2`(서비스 movej/movel → DRFL) 와
   `dsr_moveit_controller` (JTC → `Drfl.servoj_rt`/`Drfl.amovej`, `dsr_hw_interface2.cpp:494-503`).
   **동시에 명령하지 말 것.**
@@ -185,18 +168,10 @@ ros2 run depth_image_proc point_cloud_xyz_node --ros-args \
 4. 결과 `T_cam2base.npy`는 **사본을 만들지 않는다** — 정본은 `corecode/Calibration_Tutorial/`이고
    `m0609_rg2_bringup/config/`는 symlink다. (~~`config/handeye/`에 복사해 커밋~~ 은 폐기된 지시다.)
 
-> ⚠️ **녹화 런치·토픽 목록·재생 절차는 여기 두지 않는다. 단일 출처는 [[ws/cobot2/rosbag-d435i]] §A다.**
+> ⚠️ **녹화 런치·토픽 목록·재생 절차는 여기 두지 않는다. 단일 출처는 [[ws/cobot2/rosbag-d435i]] §6(재녹화 절차), 재생은 §3이다.**
 > 예전 이 자리에 있던 `rs_align_depth_launch.py` 기반 명령은 **폐기됐다** — 그 런치엔 `camera_calib_tf`가
 > 없어 `base_link→camera_link` 없는 bag 4.8GB가 나왔다. 현행은 `camera.launch.py`(= `reals` alias)다.
 > 녹화 중 **임시 static TF를 띄우지 말 것**(bag의 `/tf_static`에 가짜 값이 박힌다)만 여기 남긴다.
 
-## 문서 위치 규칙
-- 작업 문서는 **`md/` 한 곳만** 쓴다 (커밋됨). `docs/`는 PDF 서고 전용이며 ignore.
-- 2026-08-01: `docs/`에 있던 `state.md`·`context/constraints.md` 낡은 사본 삭제. ignore된 위치에 문서가 있으면 git이 갱신 누락을 잡아주지 못한다.
-
-## 이 ws에서 확인된 사실 (실측)
-- **doosan-robot2 launch의 `model` 기본값이 `m1013`** — M0609 쓸 때마다 `model:=m0609` 명시 필요. `dsr_bringup2_{rviz,gazebo,mujoco,moveit}.launch.py` 모두 해당.
-- 시뮬 경로 3종 존재: virtual 모드(DRCF 에뮬레이터, `install_emulator.sh` 선행 필요), Gazebo(`dsr_gazebo2`), MuJoCo(`dsr_mujoco`).
-- RealSense D435I 도메인/지터 이슈는 [[ws/cobot2/context/constraints]]에 기록.
-- **D435i 토픽 네임스페이스는 `/camera/camera/...`** (2026-08-01 `ros2 topic list` 실측). 계획서 초안의 `/d435i/...`는 오기다. 토픽 이름은 **런치 명령이 정하지 마운트 방식(eye-in-hand/eye-to-hand)이 정하지 않는다** — 마운트를 바꿔도 이름은 그대로고 TF 부모 프레임만 바뀐다.
-- `align_depth.enable:=true`일 때 `aligned_depth_to_color`의 해상도는 **depth가 아니라 color 프로파일을 따른다.** 대역폭 계산 시 주의.
+> 문서 위치 규칙은 [[ws/cobot2/README]] "문서를 쓸 때"가 단일 출처다(중복 삭제).
+> 실기 실측 사실(doosan-robot2 launch 기본값, D435i 토픽 네임스페이스 등)은 [[ws/cobot2/context/constraints]]로 이관했다.
