@@ -724,6 +724,25 @@ nvblox는 별도로 띄운다(`isaac_ros_nvblox`, RealSense 입력).
 그 20회를 **전부 `success=True`로 반환**했으므로, 반려한 쪽은 move_group이다
 (궤적 검증 단계). 재현율 10%. 원인 미특정 — 실기 전에 봐야 한다.
 
+### 7-1a. ✅ VRAM 피크 — **2.5 GB / 8 GB. 세 노드 동시 실행 가능** (2026-08-06 실측)
+
+`nvidia-smi --query-compute-apps=pid,used_memory --format=csv`, 실기 파이프라인 full-up 상태:
+
+| 노드 | VRAM |
+|---|---|
+| `cumotion_planner_node` | 1,508 MiB |
+| `robot_segmenter_node` | 660 MiB |
+| `nvblox_node` | 334 MiB |
+| **합계** | **약 2,500 MiB** |
+
+- RTX 4060 Laptop **8 GB**의 31%. 셋을 동시에 띄우는 데 여유가 있다
+  (계획서들이 12 GB를 가정했던 것과 무관하게 이 파이프라인은 8 GB로 충분하다)
+- ⚠️ **GraspGenX는 여기 안 들어 있다.** 그건 호스트 `uv` 트랙이고 `--num_grasps 64` 기준
+  별도 VRAM을 먹는다. **동시 실행은 아직 안 재봤다**
+- ⚠️ **GPU는 팀 공유다.** 다른 계정이 자기 컨테이너로 같은 GPU를 쓴다 →
+  [[ws/cobot2/context/constraints]] "세 계정이 동시에 로그인해..."
+- 모든 노드를 내리면 `memory.used`가 **~33 MiB**로 돌아온다. 이게 "반납 완료" 판정 기준이다
+
 ### 7-2. 남은 측정
 
 | 항목 | 방법 | 왜 |

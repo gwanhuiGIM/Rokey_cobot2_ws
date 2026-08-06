@@ -293,6 +293,50 @@ both should match. JointState was read from /joint_states
 
 ---
 
+## 🔴 이 랩탑은 **세 계정이 동시에 로그인해 같은 ROS 그래프와 같은 GPU를 쓴다** (2026-08-06, 실측)
+
+`state.md`가 "팀 공유 랩탑"이라고만 적어 둔 것의 **구체적 결과**다. 2026-08-06 실측:
+
+```
+$ who
+joonwon  :1   09:33      ← 동시 로그인
+kimkh    :2   09:37
+rokey    :3   12:55
+
+$ docker ps
+cumotion-joonwon                 isaac_ros_dev-x86_64:latest   ← 별개 컨테이너, 같은 GPU
+isaac_ros_dev-x86_64-container   isaac_ros_dev-x86_64          ← kimkh
+od_kimkh / object_detection_x11 / portainer
+```
+
+- 컨테이너가 `--network host` + 다들 `ROS_DOMAIN_ID=93` → **세 계정이 같은 ROS 그래프를 본다.**
+  `joonwon`이 띄운 `move_group`이 내 `ros2 node list`에 그냥 나온다
+- **GPU도 하나다(RTX 4060 8GB).** 상대가 cuMotion을 돌리는 중이면 내 VRAM이 모자란다
+- ⚠️ **"중복 노드"의 상당수가 사실 남의 프로세스다.** 2026-08-06에 `/move_group`이 2개라서
+  한참 헤맸는데 하나가 `joonwon` 것이었다. `kill`이 조용히 실패하면(uid가 달라서) 이걸 의심한다
+
+**누구 프로세스인지 먼저 본다 — `ps`에 `user`를 꼭 넣는다:**
+
+```bash
+ps -eo pid,user,lstart,cmd | grep -E "move_group|nvblox|cumotion|camera" | grep -v grep
+```
+
+**남의 프로세스는 죽이지 않는다.** 내 것만 PID로 지목해 내린다.
+`pkill -f`는 이 환경에서 특히 위험하다 — 패턴이 남의 프로세스와 자기 셸에도 걸린다.
+
+### GPU를 넘길 때 (세션 종료 절차)
+
+```bash
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv   # 누가 쥐고 있나
+ps -o pid,user,cmd -p <pid>                                     # 내 것인지 확인 후에만 kill
+nvidia-smi --query-gpu=memory.used --format=csv,noheader        # 아무도 안 쓰면 ~33 MiB
+```
+
+컨테이너는 **지우지 말고 남긴다**(`docker stop`도 하지 않는다) — 다음에 `run_dev.sh`를 다시 돌리면
+새로 만들어져 `container_setup.sh`를 또 돌려야 한다. GPU는 안의 노드만 내리면 반납된다.
+
+---
+
 ## 🔴 nvblox 경로에는 `robot_segmenter_node`가 **필수다** — 없으면 로봇이 자기 몸을 장애물로 본다 (2026-08-06, 실측)
 
 증상: cuMotion 계획이 **전부** 실패하고 사유가

@@ -259,23 +259,49 @@ cuMotion이 쥔 장애물 복셀: **27,646개** (`/curobo/voxels`)
 
 ---
 
-## 10. 종료 — **순서 반대로, 그리고 반드시 확인**
+## 10. 종료 — GPU를 다음 사람에게 넘기는 절차
 
-오늘 실패의 절반이 **죽은 줄 알았던 노드**였다. `pkill -f`는 `docker exec bash -c`에서
-**자기 명령줄에도 매칭돼 자기 셸을 먼저 죽인다** — 뒤 명령이 조용히 실행되지 않는다.
-
-```bash
-# 컨테이너: T7 → T6 → T5 → T4 순으로 Ctrl+C, 그 다음 반드시 확인
-pgrep -a -f "move_group|cumotion|nvblox|segmenter"
-# 남아 있으면 PID로: kill <pid>
-
-# 호스트: T2 → T1
-ps -eo pid,cmd | grep -E "ros2 launch" | grep -v grep
-```
+🔴 **이 랩탑은 세 계정(`joonwon`·`kimkh`·`rokey`)이 동시 로그인해 같은 GPU와 같은 ROS 도메인(93)을
+쓴다.** 다른 계정도 자기 Isaac ROS 컨테이너(`cumotion-joonwon` 등)를 띄운다.
+→ **`ps`에 `user`를 넣지 않으면 남의 프로세스를 내 것으로 착각한다.** 2026-08-06에 실제로 헤맸다.
 
 ```bash
-nvidia-smi --query-gpu=memory.used --format=csv,noheader   # 정리되면 ~33 MiB
+# ① 누가 GPU를 쥐고 있나
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv
+
+# ② 그 PID가 내 것인지 확인 — 남의 것이면 절대 kill하지 않는다
+ps -o pid,user,cmd -p <pid>
 ```
+
+**종료는 올린 순서의 반대로**: T7 move_group → T6 플래너 → T5 nvblox → T4 세그멘터 →
+T2 bringup → T1 카메라. 각 터미널에서 Ctrl+C.
+
+```bash
+# ③ 정말 죽었는지 확인 — 오늘 실패의 절반이 "죽은 줄 알았던 노드"였다
+ps -eo pid,user,cmd | grep -E "move_group|nvblox|cumotion|segmenter|realsense2_camera_node" | grep -v grep
+# 내 것이 남아 있으면 PID로: kill <pid>   (안 죽으면 kill -9)
+```
+
+⚠️ **`pkill -f`를 쓰지 말 것.** `docker exec bash -c`에서 **자기 명령줄에도 매칭돼 자기 셸을 먼저
+죽인다** — 뒤 명령이 조용히 실행되지 않는데 출력은 깨끗해서 "정리됨"으로 오독한다.
+공유 랩탑에서는 남의 프로세스까지 걸린다.
+
+```bash
+# ④ 반납 확인
+nvidia-smi --query-gpu=memory.used --format=csv,noheader   # 아무도 안 쓰면 ~33 MiB
+```
+
+**컨테이너는 지우지도 stop하지도 않는다.** 안의 노드만 내리면 GPU는 반납된다.
+`run_dev.sh`를 다시 돌리면 컨테이너가 **새로 만들어져** `container_setup.sh`를 또 돌려야 한다.
+
+**VRAM 실측 (2026-08-06, full-up)** — 8 GB의 31%라 셋 동시 실행에 여유가 있다:
+
+| 노드 | VRAM |
+|---|---|
+| `cumotion_planner_node` | 1,508 MiB |
+| `robot_segmenter_node` | 660 MiB |
+| `nvblox_node` | 334 MiB |
+| 합계 | **약 2.5 GB / 8 GB** |
 
 ---
 

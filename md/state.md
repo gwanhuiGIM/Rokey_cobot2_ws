@@ -112,6 +112,11 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
+- 🔴 **세 계정이 동시 로그인해 같은 ROS 도메인(93)과 같은 GPU를 쓴다** (2026-08-06 실측).
+  `joonwon`이 띄운 `move_group`이 내 `ros2 node list`에 그대로 나오고, `kill`은 uid가 달라 실패한다.
+  **`ps`에 `user`를 넣지 않으면 남의 프로세스를 내 것으로 착각한다.**
+  도메인 분리가 협의된 적이 없다 — 정하지 않으면 이 충돌은 계속된다.
+  절차·판별법은 [[ws/cobot2/context/constraints]] "세 계정이 동시에 로그인해…"가 단일 출처.
 - ~~GPU PC 도커 경로가 막혀 있다~~ ⤴ **해소.** `kimkh`는 이제 docker 그룹 멤버이고
   (`id`로 확인, 2026-08-06) 컨테이너 안에서 `nvidia-smi`가 RTX 4060을 본다.
   GPU 사양의 단일 출처는 [[ws/cobot2/context/constraints]](RTX 4060 Laptop 8GB).
