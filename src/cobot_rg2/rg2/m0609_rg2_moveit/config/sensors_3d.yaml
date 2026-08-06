@@ -12,6 +12,22 @@
 #    포인트클라우드가 로봇 자신을 장애물로 잡아먹거나(padding 부족),
 #    반대로 진짜 장애물이 안 잡히면(max_range/resolution) 여기를 먼저 본다.
 
+# ── octomap 자체 설정 (2026-08-06 moveit.launch.py에서 이리로 옮김) ──
+# 이전에는 launch가 dict.update()로 이 두 값을 덮어써서 yaml에 적어도 무시됐다.
+# 지금은 setdefault라 **여기 적은 값이 이긴다** (moveit.launch.py:161-166).
+#
+# [튜닝] octomap 복셀 크기(m). 낮출수록 정밀하고 무겁다.
+#   ⚠️ 비용은 3승으로 는다. 0.02 → 0.01은 8배다.
+#   ⚠️ point_subsample과 짝이다. 0.02 m 복셀 하나를 2 m 거리에서도 약 8 px이 덮으므로
+#      subsample을 낮춰봐야 지도는 거의 안 변한다(그 파라미터 주석 참조).
+octomap_resolution: 0.1
+
+# octomap을 어느 프레임에 쌓을지. **반드시 고정 프레임**이어야 한다.
+# 🔴 `world`가 아니라 `base_link`다. SRDF에 virtual_joint(parent_frame="world")가 있어도
+#    MoveIt의 플래닝 프레임은 루트 링크(base_link)로 남는다. world로 주면 장애물이
+#    "Unknown frame: world"로 조용히 무시된다 (2026-08-02 실측, moveit.launch.py 주석 참조).
+octomap_frame: base_link
+
 sensors:
   - realsense_pointcloud
 
@@ -68,6 +84,6 @@ realsense_pointcloud:
   #   MoveIt은 기본적으로 반응형 재계획을 하지 않는다 — 여기를 올려도 **모션 중인 로봇은 안 멈춘다.**
   # 다음 실기에서 잴 것: 변경 후 `top -o %CPU`의 move_group %, `ros2 topic hz /moveit/filtered_cloud`,
   #   그리고 로그에 "queue is full"이 뜨는지. 견디면 그때 15.0(=카메라 전속)을 검토한다.
-  max_update_rate: 5.0
+  max_update_rate: 10.0
 
   filtered_cloud_topic: /moveit/filtered_cloud

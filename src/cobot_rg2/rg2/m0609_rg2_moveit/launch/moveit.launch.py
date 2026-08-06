@@ -158,12 +158,13 @@ def generate_launch_description():
     #   frame_id='world'  → "[ERROR] moveit_planning_scene: Unknown frame: world", 장애물 무시됨
     #   frame_id='base_link' → /monitored_planning_scene에 정상 등록
     # RViz Scene Objects도 같은 규칙이다. 프레임을 world로 두면 조용히 무시된다.
+    # octomap_frame / octomap_resolution 은 **sensors_3d.yaml에 적는다.** 여기 값은
+    # yaml에 그 키가 없을 때만 쓰이는 최후 기본값이다(setdefault). update()로 덮으면
+    # yaml에 써 넣어도 조용히 무시돼서, 튜닝하는 사람이 "왜 안 먹지"로 시간을 버린다.
     sensors_3d_yaml = load_yaml('m0609_rg2_moveit', 'config/sensors_3d.yaml') or {}
     octomap_params = dict(sensors_3d_yaml)
-    octomap_params.update({
-        'octomap_frame': 'base_link',
-        'octomap_resolution': 0.02,   # [튜닝] m/voxel. 낮출수록 정밀하고 무겁다
-    })
+    octomap_params.setdefault('octomap_frame', 'base_link')
+    octomap_params.setdefault('octomap_resolution', 0.02)
 
     # -----------------------------------------------------------------------
     # Planning Scene Monitor 발행 설정

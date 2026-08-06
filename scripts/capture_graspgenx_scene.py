@@ -73,6 +73,11 @@ DEFAULTS = {
     'frames': 10,             # depth 를 이만큼 모아 픽셀별 중앙값. 정지 장면이라 가능하다
     'min_valid_ratio': 0.5,   # 프레임 중 이 비율 이상에서 유효해야 그 픽셀을 쓴다
     'timeout_sec': 10.0,
+    # 세그멘테이션 백엔드. 'geometric' = 작업공간 박스 + connectedComponents (신경망 0개),
+    # 'yolo' = yolo_seg 노드가 내는 라벨맵을 그대로 쓴다. 라벨 규약(101,102,...)이 같아
+    # 변환이 필요 없다. yolo 는 학습한 클래스만 잡으므로 공구 seg 모델이 없으면 geometric 이 낫다.
+    'seg_source': 'geometric',
+    'label_topic': '/yolo_seg/labels',
 }
 
 # LABEL_TABLE 은 **사람용**이다. GraspGenX 로더는 `obj_` 접두어가 아닌 라벨을 전부 무시하고
@@ -130,9 +135,16 @@ class SceneCapture(Node):
             self._on_color_compressed, qos_profile_sensor_data)
         self.create_subscription(
             CameraInfo, p['info_topic'], self._on_info, qos_profile_sensor_data)
+        # seg_source='yolo' 일 때만 쓴다. 없는 토픽 구독은 무해하므로 항상 걸어둔다.
+        self.yolo_labels = None
+        self.create_subscription(
+            Image, p['label_topic'], self._on_labels, qos_profile_sensor_data)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+    def _on_labels(self, msg):
+        self.yolo_labels = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
 
     def _on_depth(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -247,17 +259,81 @@ def to_base(depth, K, T_base_cam):
     return xyz_cam @ T_base_cam[:3, :3].T + T_base_cam[:3, 3]
 
 
-def segment(depth, K, T_base_cam, p):
-    """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열)."""
-    H, W = depth.shape
+def workspace_mask(depth, K, T_base_cam, p):
+    """base 프레임 작업공간 박스 안의 유효 depth 픽셀 마스크. 기하/yolo 경로가 공유한다."""
     xyz = to_base(depth, K, T_base_cam)
     X, Y, Z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
-
-    valid = depth > 0
-    in_box = (valid
+    in_box = ((depth > 0)
               & (X >= p['x_min']) & (X <= p['x_max'])
               & (Y >= p['y_min']) & (Y <= p['y_max'])
               & (Z >= p['z_min']) & (Z <= p['z_max']))
+    return in_box, X, Y, Z
+
+
+def segment_from_labels(labels, depth, K, T_base_cam, p):
+    """yolo_seg 라벨맵(101,102,...)을 그대로 씬 seg 로 쓴다.
+
+    라벨 규약이 이미 같으므로 하는 일은 두 가지뿐이다:
+      1. **유효 depth 로 마스킹.** GraspGenX 는 depth 역투영으로 점군을 만든다. depth 가 0 인
+         픽셀에 라벨이 붙어 있으면 그 물체의 점 수만 부풀고 점군에는 안 들어간다.
+      2. 남은 라벨을 label_map 으로 정리.
+    기하 경로와 같은 작업공간 박스·반경 크롭을 적용한다. 역할 분담은
+    **YOLO 가 "어느 물체인지", 기하가 "닿을 수 있는 곳인지"** 다.
+    """
+    if labels is None:
+        return None, None, ('seg_source=yolo 인데 라벨맵을 못 받았다. '
+                            'yolo_seg_node 가 떠 있는지, label_topic 이 맞는지 확인할 것')
+    if labels.shape != depth.shape:
+        return None, None, (f'라벨맵 {labels.shape} != depth {depth.shape}. '
+                            'yolo_seg 의 image_topic 이 depth 와 같은 정렬 해상도인지 확인할 것')
+
+    # 유효 depth **와 작업공간 박스**의 교집합만 남긴다.
+    # 박스를 안 걸면 배경(바닥·벽·먼 물체)까지 라벨에 들어가 물체 점군이 폭발한다 —
+    # 2026-08-06 에 GraspGenX 가 41.7GB 를 할당하려다 죽었다.
+    # 역할 분담: **YOLO 는 "어느 물체인지", 기하는 "닿을 수 있는 곳인지"** 를 정한다.
+    in_box, X, Y, _ = workspace_mask(depth, K, T_base_cam, p)
+    if not in_box.any():
+        return None, None, '작업공간 박스 안에 유효 depth 가 0개다 — bounds 나 TF 를 의심한다'
+    seg = np.where(in_box, labels, 0).astype(np.uint8)
+    label_map, kept = {}, []
+    radius = p['obj_radius_m']
+    for v in sorted(int(x) for x in np.unique(seg) if x > LABEL_OBJ_BASE):
+        m = seg == v
+        px = int(m.sum())
+        if np.isfinite(radius) and px >= p['min_pixels']:
+            # 기하 경로와 **같은 반경 크롭**. COCO 라벨은 dining table 처럼 화면의 상당 부분을
+            # 한 인스턴스로 덮는데, 그 점군을 그대로 넘기면 GraspGenX 가 죽는다
+            # (2026-08-06: 67,879 px 라벨에서 41.7GB 할당 시도).
+            # RG2 개구가 0.102 m 라 반경 0.05 m 를 넘는 물체는 어차피 못 잡는다.
+            mx, my = float(np.median(X[m])), float(np.median(Y[m]))
+            m = m & (np.hypot(X - mx, Y - my) <= radius)
+            seg[(seg == v) & ~m] = 0
+            px = int(m.sum())
+        if px < p['min_pixels']:
+            seg[seg == v] = 0
+            continue
+        idx = v - LABEL_OBJ_BASE
+        label_map[f'obj_{idx}'] = v
+        kept.append((idx, px))
+
+    diag = [f'yolo 라벨맵 사용: 박스 안 픽셀 {int(in_box.sum())}, '
+            f'라벨 {len(kept)}개 채택 (min_pixels={p["min_pixels"]})']
+    for idx, px in kept:
+        diag.append(f'  obj_{idx}: {px:5d} px')
+    if not kept:
+        diag.append('  ⛔ 채택 0개 — yolo 가 아무것도 못 잡았거나 depth 와 겹치는 픽셀이 없다')
+    return seg, label_map, '\n'.join(diag)
+
+
+def segment(depth, K, T_base_cam, p, yolo_labels=None):
+    """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열).
+
+    p['seg_source'] == 'yolo' 면 기하 대신 yolo_labels 를 쓴다 (segment_from_labels).
+    """
+    if p.get('seg_source') == 'yolo':
+        return segment_from_labels(yolo_labels, depth, K, T_base_cam, p)
+    H, W = depth.shape
+    in_box, X, Y, Z = workspace_mask(depth, K, T_base_cam, p)
     if not in_box.any():
         return None, None, '작업공간 박스 안에 유효 depth 가 0개다 — bounds 나 TF 를 의심한다'
 
@@ -380,7 +456,7 @@ def run(node):
             f"camera_info.frame_id='{node.info_frame}' 인데 camera_frame 파라미터는 "
             f"'{p['camera_frame']}' 이다 — TF 를 다른 프레임에서 뜨고 있을 수 있다")
 
-    seg, label_map, diag = segment(depth, K, T, p)
+    seg, label_map, diag = segment(depth, K, T, p, getattr(node, 'yolo_labels', None))
     if seg is None:
         node.get_logger().error(diag)
         return 1

@@ -18,6 +18,7 @@ import 되고, 순수 함수 테스트가 GPU 없이 돈다.
 
 import os
 
+import cv2
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -26,7 +27,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 
 # 라벨맵 규약은 scripts/capture_graspgenx_scene.py 와 맞춘다.
 # GraspGenX 로더가 `obj_` 접두어 라벨만 보므로 obj_1 -> 101, obj_2 -> 102 ...
@@ -94,23 +95,37 @@ class YoloSegNode(Node):
         self.declare_parameter('mask_topic', '/yolo_seg/mask')
         self.declare_parameter('label_topic', '/yolo_seg/labels')
         self.declare_parameter('overlay_topic', '/yolo_seg/overlay')
-        self.declare_parameter('publish_overlay', False)
-        self.declare_parameter('conf', 0.25)
-        self.declare_parameter('device', '0')   # 문자열이다. ultralytics 가 'cpu'/'0,1' 도 받는다
+        self.declare_parameter('publish_overlay', False,
+                               ParameterDescriptor(dynamic_typing=True))
+        # 오버레이는 기본으로 JPEG 로 낸다. 848x480 bgr8 은 1.16MB 라 UDP 전용 경로
+        # (fastdds_udp_only.xml)로는 15Hz 를 못 버틴다 — 실측 3.75Hz 까지 떨어졌다.
+        # 같은 화면이 JPEG q80 이면 36KB 다(실제 씬 기준, 33배). 토픽 이름을
+        # `<overlay_topic>/compressed` 로 두면 rqt_image_view 가 compressed 전송으로 인식한다.
+        # dynamic_typing: launch 나 CLI 로 넘어온 값은 YAML 로 파싱된다.
+        # `device:=0` 은 STRING 선언에 INTEGER 가 들어와 InvalidParameterTypeException 이고,
+        # `conf:=1` 은 DOUBLE 선언에 INTEGER 다. 타입은 선언이 아니라 읽을 때 맞춘다
+        # (capture_graspgenx_scene.py:107 과 같은 이유).
+        dyn = ParameterDescriptor(dynamic_typing=True)
+        self.declare_parameter('overlay_compressed', True, dyn)
+        self.declare_parameter('overlay_jpeg_quality', 80, dyn)
+        self.declare_parameter('conf', 0.25, dyn)
+        self.declare_parameter('device', '0', dyn)   # ultralytics 가 'cpu'/'0,1' 도 받는다
         # 빈 리스트를 그냥 넘기면 rclpy 가 BYTE_ARRAY 로 추론해 정수 목록을 못 넣는다
         # (`-p classes:="[0,39]"` -> InvalidParameterTypeException).
         # capture_graspgenx_scene.py:111 이 같은 이유로 dynamic_typing 을 쓴다.
         self.declare_parameter('classes', [], ParameterDescriptor(dynamic_typing=True))
-        self.declare_parameter('max_objects', MAX_OBJECTS)
-        self.declare_parameter('min_pixels', 0)
+        self.declare_parameter('max_objects', MAX_OBJECTS, dyn)
+        self.declare_parameter('min_pixels', 0, dyn)
 
-        self.conf = self.get_parameter('conf').value
-        self.device = self.get_parameter('device').value
+        self.conf = float(self.get_parameter('conf').value)
+        self.device = str(self.get_parameter('device').value)
         classes = self.get_parameter('classes').value
         self.classes = [int(c) for c in classes] if classes else None
         self.max_objects = max(0, min(int(self.get_parameter('max_objects').value), MAX_OBJECTS))
         self.min_pixels = int(self.get_parameter('min_pixels').value)
-        self.publish_overlay = self.get_parameter('publish_overlay').value
+        self.publish_overlay = bool(self.get_parameter('publish_overlay').value)
+        self.overlay_compressed = bool(self.get_parameter('overlay_compressed').value)
+        self.jpeg_quality = int(self.get_parameter('overlay_jpeg_quality').value)
         self._warned_truncate = False
 
         self.bridge = CvBridge()
@@ -118,10 +133,16 @@ class YoloSegNode(Node):
 
         self.mask_pub = self.create_publisher(Image, self.get_parameter('mask_topic').value, 10)
         self.label_pub = self.create_publisher(Image, self.get_parameter('label_topic').value, 10)
-        self.overlay_pub = (
-            self.create_publisher(Image, self.get_parameter('overlay_topic').value, 10)
-            if self.publish_overlay else None
-        )
+        overlay_topic = self.get_parameter('overlay_topic').value
+        self.overlay_pub = None
+        if self.publish_overlay:
+            if self.overlay_compressed:
+                self.overlay_pub = self.create_publisher(
+                    CompressedImage, overlay_topic + '/compressed', 10)
+                self.overlay_topic_name = overlay_topic + '/compressed'
+            else:
+                self.overlay_pub = self.create_publisher(Image, overlay_topic, 10)
+                self.overlay_topic_name = overlay_topic
         self.image_topic = self.get_parameter('image_topic').value
         self.create_subscription(Image, self.image_topic, self.image_callback, IMAGE_QOS)
 
@@ -137,6 +158,8 @@ class YoloSegNode(Node):
             self.get_logger().info(
                 '오버레이는 꺼져 있다 — /yolo_seg/overlay 토픽이 없다. '
                 '보려면 -p publish_overlay:=true')
+        else:
+            self.get_logger().info(f'overlay -> {self.overlay_topic_name}')
 
     def _watchdog(self):
         if self._frames:
@@ -202,7 +225,19 @@ class YoloSegNode(Node):
         self.mask_pub.publish(mask_msg)
 
         if self.overlay_pub is not None:
-            overlay_msg = self.bridge.cv2_to_imgmsg(res.plot(), encoding='bgr8')
+            plotted = res.plot()          # 박스 + 마스크 + 클래스명/점수를 함께 그린다
+            if self.overlay_compressed:
+                ok, buf = cv2.imencode('.jpg', plotted,
+                                       [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+                if ok:
+                    overlay_msg = CompressedImage()
+                    overlay_msg.format = 'jpeg'
+                    overlay_msg.data = buf.tobytes()
+                else:
+                    self.get_logger().warn('JPEG 인코딩 실패 — 오버레이를 건너뛴다')
+                    return
+            else:
+                overlay_msg = self.bridge.cv2_to_imgmsg(plotted, encoding='bgr8')
             overlay_msg.header = msg.header
             self.overlay_pub.publish(overlay_msg)
 

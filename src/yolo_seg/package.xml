@@ -12,6 +12,12 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <!-- graspx 배선 스크립트(scripts/grasp_bridge_node.py)가 쓴다 -->
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <!-- 기본 가중치(resource/yolo11n-seg.pt)를 이 패키지 share 에서 찾는다 -->
   <exec_depend>object_detection</exec_depend>
   <!-- ultralytics·torch 는 rosdep 키가 없고 apt 로 설치하지 않는다.

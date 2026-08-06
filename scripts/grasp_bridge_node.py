@@ -222,7 +222,9 @@ class GraspBridge(SceneCapture):
             return False, f'camera_info {self.info_wh} != depth {depth.shape[::-1]}'
 
         # 2) 세그멘테이션
-        seg, label_map, diag = segment(depth, self.K, T_base_cam, p)
+        # seg_source='yolo' 면 SceneCapture 가 구독해 둔 /yolo_seg/labels 최신값을 쓴다
+        seg, label_map, diag = segment(depth, self.K, T_base_cam, p,
+                                       getattr(self, 'yolo_labels', None))
         if seg is None:
             return False, diag
         self.get_logger().info(diag)
