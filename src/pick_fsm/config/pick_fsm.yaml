@@ -30,7 +30,7 @@ task_manager:
     planner_id: ''              # 비우면 파이프라인 기본 플래너
     replan: true
     replan_attempts: 3
-    replan_delay: 0.5
+    replan_delay: 1
     motion_retries: 2
 
     # ── 자세 ─────────────────────────────────────────────
@@ -74,7 +74,7 @@ task_manager:
     grasp_trigger_service: /grasp/compute
     grasp_best_topic: /grasp/best
     grasp_candidates_topic: /grasp/candidates
-    min_confidence: 0.5
+    min_confidence: 0.2
     default_width_m: 0.06       # UNVERIFIED: legacy/manual 경로 전용 임시 폭
     max_alternatives: 5
 

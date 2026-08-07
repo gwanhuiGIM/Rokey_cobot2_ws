@@ -137,6 +137,7 @@ class SceneCapture(Node):
             CameraInfo, p['info_topic'], self._on_info, qos_profile_sensor_data)
         # seg_source='yolo' 일 때만 쓴다. 없는 토픽 구독은 무해하므로 항상 걸어둔다.
         self.yolo_labels = None
+        self.yolo_labels_history = []   # best_labels() 가 이 중 탐지 품질 최고를 고른다
         self.create_subscription(
             Image, p['label_topic'], self._on_labels, qos_profile_sensor_data)
 
@@ -144,7 +145,12 @@ class SceneCapture(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
     def _on_labels(self, msg):
-        self.yolo_labels = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+        img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+        self.yolo_labels = img
+        self.yolo_labels_history.append(img)
+        # depth 버퍼와 같은 상한을 재사용한다 — 실패 경로에서 무한히 쌓이는 것을 막는 목적이 같다.
+        if len(self.yolo_labels_history) > MAX_DEPTH_BUFFER:
+            del self.yolo_labels_history[:-MAX_DEPTH_BUFFER]
 
     def _on_depth(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -325,6 +331,19 @@ def segment_from_labels(labels, depth, K, T_base_cam, p):
     return seg, label_map, '\n'.join(diag)
 
 
+def best_labels(imgs):
+    """여러 프레임의 yolo 라벨맵 중 물체 픽셀(라벨값 > 100)이 가장 많은 것을 고른다.
+
+    grasp 연산(수십 초)에 비하면 프레임 몇 장 더 보는 비용은 무시할 만하다 — 탐지가
+    한 프레임에서만 흔들려도(조명 반사, 순간 블러) 최선의 컷을 쓰게 한다.
+    ponytail: 프레임을 픽셀별로 합치지 않는다(depth median과 다르게 라벨은 정수 클래스ID라
+    두 프레임을 섞으면 의미 없는 값이 나온다) — "라벨 픽셀 수 최대"인 프레임을 그대로 쓴다.
+    """
+    if not imgs:
+        return None
+    return max(imgs, key=lambda im: int((im > LABEL_OBJ_BASE).sum()))
+
+
 def segment(depth, K, T_base_cam, p, yolo_labels=None):
     """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열).
 
@@ -474,7 +493,11 @@ def run(node):
             f"camera_info.frame_id='{node.info_frame}' 인데 camera_frame 파라미터는 "
             f"'{p['camera_frame']}' 이다 — TF 를 다른 프레임에서 뜨고 있을 수 있다")
 
-    seg, label_map, diag = segment(depth, K, T, p, getattr(node, 'yolo_labels', None))
+    # yolo 는 최신 한 장이 아니라 최근 n_frames 장 중 탐지 픽셀이 가장 많은 프레임을 쓴다
+    # (best_labels 참고) — depth 를 n_frames 만큼 모으는 동안 어차피 라벨도 같이 쌓인다.
+    labels = (best_labels(node.yolo_labels_history[-n_frames:])
+             if p.get('seg_source') == 'yolo' else None)
+    seg, label_map, diag = segment(depth, K, T, p, labels)
     if seg is None:
         node.get_logger().error(diag)
         return 1

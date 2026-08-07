@@ -38,7 +38,7 @@ from rclpy.executors import MultiThreadedExecutor
 from std_srvs.srv import Trigger
 
 from graspgenx_perception.capture_graspgenx_scene import (
-    SceneCapture, default_out_dir, segment, write_scene,
+    SceneCapture, best_labels, default_out_dir, segment, write_scene,
 )
 
 EXTRA_DEFAULTS = {
@@ -204,6 +204,7 @@ class GraspBridge(SceneCapture):
 
         # 1) 최신 프레임만 쓴다 — 이전 요청 때 쌓인 것을 섞지 않는다
         self.depths.clear()
+        self.yolo_labels_history.clear()
         n = max(1, p['frames'])
         # ⚠️ 여기서 rclpy.spin_once 를 부르면 안 된다 — 이미 executor 가 이 노드를 돌리고 있고
         #    콜백 안에서 다시 spin 하면 재진입으로 엉킨다. 구독 콜백은 다른 스레드에서
@@ -224,9 +225,11 @@ class GraspBridge(SceneCapture):
             return False, f'camera_info {self.info_wh} != depth {depth.shape[::-1]}'
 
         # 2) 세그멘테이션
-        # seg_source='yolo' 면 SceneCapture 가 구독해 둔 /yolo_seg/labels 최신값을 쓴다
-        seg, label_map, diag = segment(depth, self.K, T_base_cam, p,
-                                       getattr(self, 'yolo_labels', None))
+        # seg_source='yolo' 면 최신 한 장이 아니라 방금 모은 n장 중 탐지 픽셀이 가장 많은
+        # 프레임을 쓴다(best_labels) — grasp 연산(수십 초)에 비하면 프레임 몇 장 더 보는
+        # 비용은 무시할 만하고, 흔들린 한 컷 때문에 seg 가 통째로 비는 걸 줄인다.
+        labels = best_labels(self.yolo_labels_history) if p.get('seg_source') == 'yolo' else None
+        seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels)
         if seg is None:
             return False, diag
         self.get_logger().info(diag)

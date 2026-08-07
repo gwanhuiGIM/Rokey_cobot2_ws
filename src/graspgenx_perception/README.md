@@ -468,6 +468,31 @@ python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out
 회귀 확인: `pytest test_yolo_seg.py`(10개) + `manual_grasp_bridge.py` + `pick_fsm`
 `pytest`(26개) 전부 PASS(2026-08-07).
 
+**cross-review 로 추가 발견/수정된 것 (2026-08-07)**: (1) 씬 디렉토리명을 초 단위
+타임스탬프로 잡아 빠른 재시도가 충돌·덮어쓰기 할 수 있었다 — `%f`(마이크로초)를 붙여 수정.
+(2) `write_scene()` 이 파일 4개 중 일부만 쓰다 실패하면 반쪽짜리 씬이 영구히 남는다 —
+실패 시 `shutil.rmtree` 로 통째로 지우도록 수정. 정리 정책(오래된 씬 자동 삭제)과
+`scene='00'`(기본값과 같은 문자열이라 "명시"해도 구분 불가) 은 낮은 우선순위로 보고
+그대로 뒀다 — 필요해지면 추가.
+
+### yolo 세그 — 최신 한 프레임 대신 최근 n 장 중 탐지 최선을 쓴다 (2026-08-07)
+
+**요청 배경**: grasp 연산(GPU 워커, 수 초~수십 초)에 비하면 카메라 프레임 몇 장을 더 보는
+시간은 무시할 만하다 — 탐지 정확도를 그 여유로 사도 되는지 확인하고 반영.
+
+`SceneCapture` 가 `/yolo_seg/labels` 최신 한 장(`self.yolo_labels`)만 쓰던 것을, depth 처럼
+최근 프레임을 버퍼(`self.yolo_labels_history`, 상한은 depth 와 같은 `MAX_DEPTH_BUFFER`)에
+쌓아두고 `best_labels()`로 그중 물체 픽셀(라벨 > 100)이 가장 많은 프레임을 골라 쓰도록 바꿨다.
+`capture_graspgenx_scene.run()`은 depth 를 모으는 `frames`(기본 10)장 동안 쌓인 라벨을,
+`grasp_bridge_node.compute()`는 호출마다 지운 뒤 새로 쌓인 라벨 전부를 후보로 본다.
+
+- ponytail: 라벨맵은 픽셀별 정수 클래스ID라 depth처럼 중앙값을 낼 수 없다(서로 다른 프레임을
+  섞으면 의미 없는 값) — "픽셀 수 최대인 프레임 통째로 채택"이 가장 싼 대리 지표다.
+- geometric 경로(기본값)는 원래 depth 만 쓰므로 이 변경과 무관하다.
+- 회귀: `pytest test_best_labels.py`(3개, 신규) 통과 확인(2026-08-07).
+- ⚠️ **미검증**: 실제 카메라로 "흔들린 프레임 하나 때문에 탐지가 비었다가 다른 프레임에서
+  살아나는" 상황을 재현해서 개선을 실측하지는 않았다 — 논리상 개선이지 관측한 적은 없다.
+
 ## graspx 에 YOLO 를 쓰기 전에
 
 배선은 끝났다(`seg_source:=yolo`). 남은 건 하나다.
