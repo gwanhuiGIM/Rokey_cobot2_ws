@@ -37,9 +37,16 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
   이전↔현재 경로 대조표는 `src/graspgenx_perception/README.md` "graspx 와 함께 띄우기" 절에 있다
   (vault 밖이라 위키링크가 아니라 저장소 경로로 적는다).
 - 계약·튜닝값·함정은 [[ws/cobot2/detect_graspx]]가 단일 출처다(출력 규약 §3, 폭 계산·1/10mm 함수 §5, 상류 버그 §6). 실측 사실(체크포인트 sha256, VRAM 측정치)만 [[ws/cobot2/context/constraints]] "GraspGenX 관련"에 있다.
-- ⛔ **실기 모션 전 블로커 1개**: `tool0` 플랜지면 → RG2 손끝 **실측 거리**.
-  URDF는 190 mm(어댑터 오프셋 0), 매뉴얼은 220 mm + 브라켓 10 mm.
-  차이가 실재하면 MoveIt이 손끝을 **40 mm 더 깊이** 민다. 줄자 한 번이면 갈린다.
+- ✅ **`tool0` → RG2 손끝 실측 완료 (2026-08-07)**: 닫힘 240 mm = 브라켓+퀵커넥터 22 mm +
+  그리퍼 자체 218 mm. 개구 70/100 mm 에서 손끝이 17/41 mm 후퇴(힌지 회전, 비선형).
+  실측 근거·두 오차 성분 분리는 [[ws/cobot2/context/constraints]] "GraspGenX 관련"이 단일 출처.
+  - 폭에 따른 가변 성분은 `pick_fsm/pick_fsm/rg2.py`의 `fingertip_length_m(width_m)`로 배선
+    완료 — `tcp_offset_m` 상수(0.18) 대체. `colcon test --packages-select pick_fsm` PASS(21/21).
+  - ✅ **고정 오프셋(브라켓 22 mm)도 xacro에 반영함(2026-08-07, 사용자 승인 후 진행)**.
+    `onrobot_rg2.xacro`의 `has_bracket` 분기 값을 0.004→0.022로, `m0609_with_rg2.urdf.xacro`가
+    그 스위치를 켜도록 수정. 축은 추측 없이 FK 재계산으로 확인(rg2_base_link 접근축 +Z가
+    tool0 프레임의 +X로 매핑됨). `colcon build` PASS. **미검증**: 실기 RViz 육안 확인,
+    self-collision 경계 재검토 — 로봇 세션 필요.
 
 > 📁 **문서 전체 지도는 [[ws/cobot2/README]]에 있다.** 어느 문서가 무엇의 단일 출처인지 거기서 본다.
 
@@ -179,6 +186,8 @@ code .                                          # 이후 VS Code Source Control�
    실제로 2026-08-05에 558 px 노이즈를 고르고 사과는 후보 0이었던 사례가 있다.
    `-p min_pixels:=1000`이 임시 방편이고, 정본은 YOLO-seg + 음성 타겟팅
    ([[ws/cobot2/plans/2026-08-05-foundationpose-graspgenx-pick]] §1).
+   **2026-08-07 코드 감사로 재확인**: 여전히 배선 안 됨(6개 근거·남은 일 3개는
+   [[ws/cobot2/plans/2026-08-07-graspgenx-target-matching]]).
    ⚠️ **FoundationPose는 마스크를 만들어주지 않는다** — 마스크를 **입력으로 요구**하고 CAD 메시도 필요하다.
    ROI/마스크 출처는 여전히 검출기(YOLO-seg 또는 RT-DETR)다.
 0-c. **RG2 개구 폭(`rgwd`) 계산** — grasp에서 폭을 뽑아 그리퍼 명령으로.
@@ -194,6 +203,14 @@ code .                                          # 이후 VS Code Source Control�
 2. **D435i depth rosbag 장면 2개 추가 녹화**(빈 테이블 / 장애물 여러 개) — 기존 4개(2026-08-04)는 검증 통과.
    ⚠️ **녹화 절차의 단일 출처는 [[ws/cobot2/rosbag-d435i]] §6, 재생 절차는 §3이다.** 아래 "출근 후 D435i 세션"에는 순서만 남겼다.
 3. **캘리브 오차 정량 측정** — 알려진 좌표의 물체로 cm 단위. `padding_offset` 해석과 cuRobo 비교의 전제.
+   - 🔴 **여기에 오차예산 판정이 걸려 있다 (2026-08-07 추가).** 계통오차는 TSDF 가중평균·베이즈
+     갱신으로 **원리적으로 제거되지 않는다**(무작위만 상쇄된다). 합성 규칙은 무작위=RSS,
+     계통·양자화=선형 합. 대입하면 `필요 마진 ≳ 40 mm(캘리브) + 25 mm(voxel/2) = 65 mm`인데
+     현재 cuRobo `activation_distance`는 **25 mm**다 → **마진 부족 가능성.**
+     ⚠️ **계산상의 결론이지 실측이 아니다.** 전제 2개가 미검증: ① 40 mm가 정말 bias인지
+     (무작위 성분과 분리 안 됨) ② `activation_distance`가 유일한 마진인지(XRDF 구가 이미
+     부풀려져 6쌍이 겹쳤으므로 실효 마진은 더 클 수 있다).
+     **이 측정이 그 계산의 입력이다.** 근거·유도는 [[ws/cobot2/2026-08-07-nvblox-curobo-digest]] §9-1.
 4. **OMPL 플래너 성공률·계획시간 로그** — 스프린트 Day3 P1. cuRobo 비교의 기준선.
 
 **상시 실행** — ⚠️ **MoveIt octomap 경로에는 더 이상 필요 없다(2026-08-02).**

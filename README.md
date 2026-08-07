@@ -86,7 +86,7 @@ ros2 launch m0609_rg2_bringup camera.launch.py
 # [터미널 3] MoveIt  (※ standalone:=false 필수)
 ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false
 ```
-
+# [터미널 4~7] : cumotion-seg , nvblox , comotion-planner , move_group(moveit)[corubo ] true
 로봇 없이 소프트웨어만 보려면 `mode:=virtual`(Docker DRCF 에뮬레이터가 자동으로 뜬다).
 
 ### 런치 인자
@@ -286,6 +286,87 @@ ros2 topic echo /monitored_planning_scene --once      # 물체가 목록에 있�
 RViz 씬은 재시작하면 없어진다. 같은 장애물 배치를 반복해서 쓰려면 저장이 필요한데,
 MoveIt의 씬 저장은 warehouse(mongodb)에 의존한다. 지금은 안 붙어 있다.
 매번 손으로 놓는 게 번거로워지면 그때 붙이거나, 장애물을 발행하는 작은 노드를 만든다.
+
+---
+
+## 9. 상태머신 + GraspGenX 실행
+
+`pick_fsm`(상태머신)과 `graspgenx_perception`(인식·grasp 계산) 두 패키지만의 실행법이다.
+**로봇·카메라·nvblox/cuMotion GPU 플로우는 여기 없다** — 그건 위 3절(로봇+MoveIt)과
+`config/testcommand.md`(cuMotion+nvblox)가 각각 단일 출처다. 이 절의 전제:
+
+- **터미널 1(로봇)·터미널 3(MoveIt)이 3절 기준으로 이미 떠 있다.**
+  `standalone:=false` 필수 — 안 지키면 TF가 중복 실행되고 원인 로그 없이 실기 관절값이 덮인다.
+- 카메라(터미널 2)는 인식을 실제로 쓸 때만 필요하다. `grasp_source:=manual`로 흐름만
+  확인할 때는 필요 없다(아래 "GPU 없이 흐름만 보기" 참고).
+
+### 9-1. GraspGenX 브리지 (터미널 8)
+# [터미널 8]
+```bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 run graspgenx_perception grasp_bridge_node
+```
+
+⚠️ **GPU 필요.** 이 노드는 `/grasp/compute` 호출마다 GraspGenX GPU 워커(`uv run`, torch)를
+자식 프로세스로 띄운다(`graspgenx_perception/graspgenx_perception/grasp_bridge_node.py`).
+**GPU 없는 이 PC에서는 뜨긴 뜨지만 `/grasp/compute`를 부르면 워커 기동에서 실패한다** — GPU PC
+에서만 의미가 있다. 이 PC에서 흐름만 보려면 아래 "GPU 없이" 참고.
+
+기본 `seg_source:=geometric`(신경망 0개, 작업공간 박스+connectedComponents)라 YOLO 컨테이너
+없이도 도는 경로다. `seg_source:=yolo`로 바꾸는 옵션도 있지만 **2026-08-07 기준 컨테이너→호스트
+데이터가 안 흐르는 미해결 버그**가 있다(`src/graspgenx_perception/README.md` "🔴 미해결" 절) —
+지금은 쓰지 말 것.
+
+### 9-2. 상태머신 (터미널 9)
+
+```bash
+# 계획만(기본, 안전) — 실기 실행은 dry_run:=false 를 명시해야 한다
+ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
+
+# 음성 없이 고정 타겟으로
+ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger voice:=false target:=apple
+```
+
+`task_manager`(FSM)와 `robot_safety_node`(안전정지 감시)가 같은 launch로 함께 뜬다.
+`grasp_source`는 `compute_grasp`(정본 계약이나 서버 노드가 아직 없음) \| `legacy_trigger`
+(지금 실제로 도는 경로, 9-1의 브리지가 필요) \| `manual`(아래 참고) 셋 중 하나다.
+
+### 9-3. (선택) 상태 감시 UI (터미널 10)
+
+```bash
+rqt --standalone pick_fsm
+```
+
+### 9-4. 조작 명령 [ 터미널 11 or rqt]
+
+```bash
+ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서만)
+ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인 (WAIT_APPROVAL 에서만)
+ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
+ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → IDLE
+ros2 topic echo /pick/state                               # 현재 상태
+```
+
+### GPU 없이 흐름만 보기 (이 PC)
+
+GraspGenX 워커도, 로봇도 없이 상태 전이만 확인하려면 `grasp_source:=manual`로 띄우고
+`/grasp/best`를 직접 쏜다 — 9-1(브리지)조차 필요 없다:
+
+```bash
+ros2 launch pick_fsm pick_fsm.launch.py \
+  voice:=false target:=apple grasp_source:=manual gripper_backend:=virtual
+# 그리고 /grasp/best 로 포즈를 직접 쏜다 (base_link 프레임, tool0 목표 자세)
+```
+
+grasp 결과를 Doosan `move_line` 커맨드로 변환해 보기만 하려면(로봇을 움직이지 않는다 — 문자열만
+출력):
+
+```bash
+python3 src/graspgenx_perception/test/manual_grasp_to_movel.py
+```
+
+자세한 설계·상태 전이표·파라미터 표는 `src/pick_fsm/README.md`, GraspGenX 노드 상세는
+`src/graspgenx_perception/README.md`가 각각 단일 출처다 — 여기서 값을 다시 적지 않는다.
 
 ---
 

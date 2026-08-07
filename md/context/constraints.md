@@ -395,6 +395,35 @@ ImportError: numpy.core.multiarray failed to import
 
 ---
 
+## 🔴 `colcon test`가 이 랩탑 전체에서 죽는다 — anyio pytest 플러그인 (2026-08-07, 실측)
+
+```
+ModuleNotFoundError: No module named '_pytest.scope'
+  .../anyio/pytest_plugin.py:15
+```
+
+pytest는 시작할 때 `pytest11` 엔트리포인트를 **전부 자동 로드**한다. anyio의 플러그인이
+pytest ≥7의 `_pytest.scope`를 import하는데 이 머신엔 **apt pytest 6.2.5뿐이다**
+(`~/.local`에 pip pytest 없음 — `sys.path`로 확인). → 테스트를 **수집하기도 전에** 죽고,
+`colcon`에는 `-p no:anyio`를 넣을 자리가 없어 **모든 패키지의 `colcon test`가 같이 막힌다.**
+
+- anyio가 **두 벌** 깔려 있고 둘 다 따로 `pytest11`을 등록한다. **둘 다 꺼야 풀린다**:
+  - `~/.local/lib/python3.10/site-packages/anyio-4.13.0.dist-info` (kimkh 계정) —
+    2026-08-07 `entry_points.txt` → `.disabled`로 **이름 변경해둠**
+  - `/usr/local/lib/python3.10/dist-packages/anyio-4.14.1.dist-info` (**전 계정 공유**, sudo pip 흔적) —
+    **손대지 않음.** 공유 자원이라 팀 합의 없이 안 건드린다
+- 🔴 **anyio 패키지를 지우면 안 된다.** `httpx`·`httpcore`·`openai`·`jupyter_server`·
+  `jupyter_client`·`starlette`·`watchfiles`·`langsmith` 8개가 의존한다 —
+  지우면 `nlm`(notebooklm MCP)·jupyter·uvicorn이 같이 죽는다.
+  꺼야 할 건 `entry_points.txt`의 `[pytest11]` 등록뿐이고, 그 플러그인은 pytest 6.2.5에서 어차피 못 쓴다
+- 같은 이유로 의심되던 다른 `pytest11` 플러그인(`langsmith`, `dash`)은 6.2.5에서 정상 import된다.
+  **anyio 하나만 문제다** (`importlib.metadata`로 등록 12개 전수 확인)
+- ✅ **런타임에는 영향 없다.** `colcon build` PASS, 노드 import 후 `sys.modules`에 anyio 없음.
+  ROS 노드 기동·동작은 무관하고 **테스트만 막힌다**
+- 우회(현재 채택): `python3 -m pytest <경로> -q -p no:anyio`
+
+---
+
 ## 🔴 `run_dev.sh`는 컨테이너를 **재사용하지 않고 새로 만든다** → pip 설치가 매번 날아간다 (2026-08-06)
 
 2026-08-06 하루에 같은 자리에서 **두 번** 막혔다 — `AttributeError: module 'warp' has no attribute 'torch'`.
@@ -831,6 +860,51 @@ cbf3f3bdb2e4c03fca8486ed24de0e6a8a859e6bd22bce2f1434a610335abd3e   dis/epoch_105
   차이가 실재하면 **MoveIt이 손끝을 40 mm 더 깊이 밀어넣는다**(§6 분기 F).
   → 실기 전 **`tool0` 플랜지 면 → 손끝**을 줄자로 실측하고, 차이가 있으면 `tcp_offset_m`이 아니라
   **`onrobot_rg2.xacro`의 `origin xyz`에 어댑터 두께를 넣는다.**
+
+#### ✅ 위 실측 완료 (2026-08-07) — 두 가지가 섞여 있었다
+
+펜던트에서 TCP 설정 후 그리퍼 수직정렬 → 서서히 하강해 접촉 지점까지 측정(`kimkh`):
+
+| 항목 | 실측값 |
+|---|---|
+| tool0 플랜지면 → 손끝(완전히 닫힘, 0 mm) | **240 mm** |
+| 브라켓 + 퀵커넥터 (tool0 → rg2_base_link) | **22 mm** |
+| 그리퍼 자체(rg2_base_link → 손끝, 닫힘) | **218 mm** (=240−22) |
+| 개구 70 mm 일 때 손끝 후퇴량 | **−17 mm** (닫힘 대비) |
+| 개구 100 mm 일 때 손끝 후퇴량 | **−41 mm** |
+
+**두 가지 별개 오차가 섞여 있었다:**
+1. **고정 오프셋(폭 무관)**: URDF의 `tool0 → rg2_base_link` 0 mm 가정 vs 실물 22 mm.
+   이건 위에서 이미 정한 대로 **`onrobot_rg2.xacro`의 `origin xyz`를 고쳐야 하는 몫**이다
+   (2026-08-07 기준 **아직 안 고쳤다** — xacro 수정은 self-collision·SRDF 영향이 있어 사용자 승인 후 진행).
+2. **가변 성분(폭에 따라 비선형)**: `rg2_base_link → 손끝` 거리가 개구 폭에 따라 218→177 mm(100 mm 폭)까지
+   줄어든다(힌지 회전 구조). **MoveIt은 이걸 볼 수 없다** — RG2는 ros2_control 컨트롤러가 없어
+   손가락 관절이 `/joint_states`에 없고 URDF는 고정 자세로만 렌더된다. 그래서 이 성분은
+   **런타임 코드로만 보정 가능**하다 → `pick_fsm/pick_fsm/rg2.py`의 `fingertip_length_m(width_m)`
+   (선형보간, 2026-08-07 추가)가 `tcp_offset_m` 상수 0.18 을 대체했다. **IK 목표(tool0 pose) 자체는
+   안 바뀐다** — grasp 원점=tool0 라 GraspGenX 출력을 그대로 쓰고, 이 함수는 CollisionObject
+   배치·로그 등 손끝 위치 **추정**에만 쓰인다.
+
+#### ✅ 고정 오프셋(브라켓 22mm)도 xacro에 반영함 (2026-08-07)
+
+`onrobot_rg2.xacro`의 `joint0`(`tool0 → rg2_base_link`)에 이미 `has_bracket` 스위치가 있었는데
+① `m0609_with_rg2.urdf.xacro`가 그걸 켜지 않고 있었고(기본 `false`) ② 켰을 때 쓰는 값도
+`0.004`(출처 불명 — git 이력에 근거 없음, 4mm로는 브라켓+퀵커넥터를 설명 못 한다)였다.
+
+**축 확인(추측 아님, xacro 확장 후 FK로 직접 계산)**: `joint0`의 `rpy="1.5708 0 1.5708"`가
+축을 재배치해서 `rg2_base_link`의 접근축(+Z)이 부모(`tool0`) 프레임의 **+X**로 매핑된다
+(`R @ [0,0,1] = [1,0,0]`, 계산 스크립트로 확인). 그래서 브라켓 두께는 `xyz`의 **X 성분**에
+더해야 한다 — Z가 아니다. 처음엔 Z로 넣을 뻔했는데 이 계산으로 걸렀다.
+
+**변경**: `onrobot_rg2.xacro`의 `has_bracket=true` 분기 `xyz="0.004 0 0"` → `xyz="0.022 0 0"`,
+`m0609_with_rg2.urdf.xacro`가 `has_bracket="true"`를 명시하도록 수정. `xacro`로 확장 후
+FK 재계산해 `tool0 → rg2_base_link` 평행이동이 정확히 `[0.022, 0, 0]`(tool0 프레임, =
+`rg2_base_link` 접근축 기준 22mm)임을 확인했다. `colcon build --packages-select
+m0609_rg2_bringup m0609_rg2_moveit` PASS.
+
+**미검증**: 실기 RViz에서 그리퍼 메시가 예상대로 22mm 더 나가 보이는지, self-collision
+경계가 이 변화로 깨지지 않는지는 로봇/RViz 세션에서 확인 필요 — 이 세션은 no-GPU/로봇 없는
+PC라 xacro 확장·FK 계산까지만 했다.
 
 ### ⚠️ 단일 시점 "표면중심"은 물체 중심이 아니다 — 캘리브 오차로 오해하지 말 것 (2026-08-05)
 

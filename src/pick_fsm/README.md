@@ -2,12 +2,35 @@
 
 설계 출처: `md/voice-pick-statemachine.md` (§1 노드 그래프 · §2 노드 간 계약 · §3 상태머신)
 
-```
-get_keyword ──target──▶ [task_manager] ──ComputeGrasp──▶ grasp_bridge ──▶ GraspGenX(GPU)
-                             │  │
-                MoveGroup 액션 │  │ /onrobot/sendCommand
-                             ▼  ▼
-                        move_group   RG2
+```mermaid
+flowchart LR
+    voice["voice_processing"]
+    rqt["rqt 패널<br/>pick_fsm.rqt_panel"]
+    tm["<b>task_manager</b><br/>상태머신 · 로봇 명령 배타권"]
+    bridge["grasp_bridge_node<br/>graspgenx_perception"]
+    gpu["GraspGenX · GPU"]
+    mg["move_group<br/>MoveIt"]
+    rg2["RG2 드라이버<br/>OnRobotRGControllerServer"]
+    safety["robot_safety_node<br/>별도 프로세스"]
+    robot["M0609 · dsr01"]
+
+    voice -->|"/get_keyword · Trigger"| tm
+    rqt -->|"/pick/start · approve · abort · reset"| tm
+    tm -->|"/pick/state · String"| rqt
+
+    tm -->|"/grasp/compute_grasp 또는 /grasp/compute"| bridge
+    bridge --> gpu
+    bridge -->|"/grasp/best · /grasp/candidates"| tm
+
+    tm -->|"/compute_ik · /apply_planning_scene<br/>/move_action 액션"| mg
+    tm -->|"/onrobot/sendCommand"| rg2
+    rg2 -->|"/onrobot/grip_detected · Bool"| tm
+
+    safety -->|"/pick/robot_state_code · Int8<br/>안전정지면 자동 ABORT"| tm
+    rqt -->|"/safety/stop · enter/exit_backdrive"| safety
+    safety --> robot
+    mg -->|"JTC · dsr_moveit_controller"| robot
+    rg2 --> robot
 ```
 
 `task_manager` 는 **로봇 명령 경로의 배타권을 소유하는 노드**다.
@@ -22,14 +45,55 @@ get_keyword ──target──▶ [task_manager] ──ComputeGrasp──▶ gra
 `states.py` 의 `TRANSITIONS` 가 전이표의 단일 출처다. 표에 없는 전이를 시도하면 노드가
 에러를 찍고 ABORT 한다 — 조용히 넘어가면 상태머신이 아니라 그냥 함수 호출이다.
 
-```
-IDLE → LISTENING → PERCEIVE → SCENE_PREP → PLAN → WAIT_APPROVAL ✋
-     → APPROACH → DESCEND → CLOSE → VERIFY → LIFT → PLACE → RELEASE → HOME → IDLE
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
 
-실패 분기:  PLAN ⇄ NEXT_CANDIDATE → SPEAK_FAIL
-           VERIFY → RELEASE_RETRY → PERCEIVE
-           어디서든 → ABORT → SAFE_STOP → (사용자 리셋) → IDLE
+    IDLE --> LISTENING : /pick/start · voice_enabled=true
+    IDLE --> PERCEIVE : /pick/start · 고정 target
+    LISTENING --> PERCEIVE : 키워드 첫 단어를 target 으로
+    LISTENING --> SPEAK_FAIL : 서비스 없음 · 빈 키워드
+    PERCEIVE --> SCENE_PREP : grasp 수신 · 폭 클램프
+    PERCEIVE --> SPEAK_FAIL : grasp 없음 · 프레임 불일치
+    SCENE_PREP --> PLAN : 물체 등록 + ACM 병합
+    PLAN --> WAIT_APPROVAL : IK 3점 성공
+    WAIT_APPROVAL --> APPROACH : /pick/approve ✋
+
+    APPROACH --> DESCEND : pre_grasp 도달
+    DESCEND --> CLOSE : grasp 도달
+    CLOSE --> VERIFY : 그리퍼 닫기 + settle
+    VERIFY --> LIFT : grip 감지 → 물체 attach
+    LIFT --> PLACE
+    PLACE --> RELEASE : place_joints_deg 도달
+    RELEASE --> HOME : 그리퍼 열기 + detach
+    HOME --> IDLE : home_joints_deg 도달
+
+    PLAN --> NEXT_CANDIDATE : IK 실패 · 도달범위 밖
+    APPROACH --> NEXT_CANDIDATE : motion_retries 소진
+    DESCEND --> NEXT_CANDIDATE : motion_retries 소진
+    NEXT_CANDIDATE --> PLAN : alternatives 에서 하나 꺼냄 · GPU 재호출 없음
+    NEXT_CANDIDATE --> SPEAK_FAIL : 후보 소진
+
+    VERIFY --> RELEASE_RETRY : 파지 실패
+    RELEASE_RETRY --> PERCEIVE : 열고 재인식 · grip_retries 이내
+    RELEASE_RETRY --> ABORT : grip_retries 초과
+
+    SPEAK_FAIL --> LISTENING : voice_enabled=true
+    SPEAK_FAIL --> IDLE : voice_enabled=false
+    ABORT --> SAFE_STOP
+    SAFE_STOP --> IDLE : /pick/reset
+
+    note right of ABORT
+        SPEAK_FAIL · ABORT · SAFE_STOP 을 뺀 모든 상태에서 ABORT 로 갈 수 있다.
+        트리거 4가지 — /pick/abort · 상태별 제한시간 초과 ·
+        로봇 자체 안전정지 감지 · 전이표에 없는 전이 시도(버그).
+        MOTION_STATES 에서는 진행 중 goal 을 취소하고,
+        HOLDING_STATES(VERIFY·LIFT·PLACE)에서는 그리퍼를 열지 않는다.
+    end note
 ```
+
+위 그림에 없는 전이가 `TRANSITIONS` 에 하나 있다: `LISTENING → IDLE`. 표에는 허용돼 있지만
+현재 코드에 그 경로가 없다(`_st_listening` 은 PERCEIVE 아니면 SPEAK_FAIL 로만 나간다).
 
 `어디서든 → ABORT`는 `/pick/abort` 서비스 호출 말고 **한 가지 경로가 더 있다**: 로봇이
 충돌 등으로 자체 안전정지에 들어가면(`robot_safety_node`가 감지, §8) `task_manager`가
@@ -101,6 +165,18 @@ ros2 launch pick_fsm pick_fsm.launch.py \
 ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 승인은 여전히 필요
 ```
 
+### 이 랩탑의 `colcon test` 실패는 **실행과 무관하다**
+
+`colcon test` 가 `ModuleNotFoundError: No module named '_pytest.scope'` 로 죽는 건
+anyio 의 pytest 플러그인 문제이고(§7), **위 launch 경로에는 anyio 가 들어오지 않는다** —
+`colcon build` PASS, `import pick_fsm.task_manager` 후 `sys.modules` 에 anyio 없음
+(2026-08-07 확인). 즉 FSM 기동·상태 전이·모션 명령은 이 문제의 영향을 받지 않는다.
+테스트를 돌릴 때만 플래그를 붙인다:
+
+```bash
+python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 23개 통과
+```
+
 ## 3. 인터페이스
 
 ### 이 노드가 제공하는 것
@@ -148,7 +224,9 @@ ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 승인은 여전히
 GraspGenX grasp 4×4 의 원점은 그리퍼 base 이고, 우리 URDF 는 `tool0 → rg2_base_link`
 오프셋이 0이라 그 포즈가 그대로 `tool0` 목표가 된다
 (`md/context/constraints.md` "GraspGenX grasp 4×4 = tool0 목표 자세").
-손끝은 거기서 +Z 로 `tcp_offset_m`(0.18 m) 떨어져 있고, 로그·CollisionObject 배치에만 쓴다.
+손끝은 거기서 +Z 로 `rg2.fingertip_length_m(width_m)`만큼 떨어져 있고, 로그·CollisionObject
+배치에만 쓴다 — 2026-08-07 실측 보정표(닫힘 0.240 m, 개구 폭에 따라 비선형 감소)로,
+GraspGenX 상수 0.18 m를 대체했다. IK 목표(`tool0` pose) 자체는 안 바뀐다(§6 "실기 전 블로커" 1번).
 
 > 문서 §2 의 필드 이름 `grasp_tcp` 를 **`grasp_pose` 로 바꿨다.** 이름이 "TCP"인데 값은
 > 그리퍼 base 라서, 그대로 두면 18 cm 오차를 부르는 이름이다.
@@ -228,7 +306,7 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 |---|---|---|
 | 안전 | `dry_run`, `require_approval`, `approval_timeout_sec` | 기본값이 안전 쪽 |
 | MoveIt | `planning_group`, `ee_link`, `base_frame`, `joint_names`, `vel_scale`, `acc_scale`, `planning_time`, `planning_attempts`, `joint_tolerance`, `ik_timeout_sec`, `ik_avoid_collisions`, `planning_pipeline`, `planner_id`, `replan*`, `motion_retries` | `base_frame` 은 `world` 가 아니라 `base_link`. `planning_pipeline`: `ompl`(기본) \| `isaac_ros_cumotion` — IK 는 파이프라인을 안 타므로 영향 없음, `_move()`(관절목표 계획)에만 적용됨. 그 파이프라인이 `move_group`에 떠 있어야 한다 |
-| 자세 | `approach_offset_m`, `lift_offset_m`, `tcp_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환 |
+| 자세 | `approach_offset_m`, `lift_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환. 손끝 오프셋은 파라미터가 아니라 `rg2.fingertip_length_m(width_m)` 계산값이다(2026-08-07) |
 | 씬 | `object_id`, `object_radius_m`, `clear_octomap_before_descend`, `allow_gripper_octomap_collision`, `gripper_links` | 뒤 둘은 §4 읽고 켤 것 |
 | 그리퍼 | `gripper_backend`, `grip_clearance_m`, `max_grip_width_m`, `force_down_steps`, `gripper_settle_sec`, `verify_required`, `grip_retries` | |
 | 인식 | `grasp_source`, `grasp_service`, `min_confidence`, `default_width_m`, `max_alternatives` | |
@@ -247,7 +325,8 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 | 항목 | 상태 | 방법 |
 |---|---|---|
 | `colcon build --packages-select pick_fsm_msgs pick_fsm` | ✅ 통과 | §7 |
-| `colcon test` (단위테스트 18개) | ✅ 통과 | 폭 단위 변환 · 접근축 오프셋 · 전이표 · ACM 병합 |
+| 단위테스트 23개 | ✅ 통과 | 폭 단위 변환 · 접근축 오프셋 · 전이표 · ACM 병합 · **§1 mermaid 다이어그램 ↔ `TRANSITIONS` 대조**(2026-08-07 추가). 실행: `python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio` |
+| `colcon test --packages-select pick_fsm` | ❌ **이 랩탑에서 실행 불가** | 이 패키지 문제가 아니다 — 아래 "colcon test 가 안 도는 이유" 참고. `colcon` 에는 `-p no:anyio` 를 넣을 자리가 없다. 2026-08-07 확인 |
 | 사용하는 MoveIt 메시지 필드명·상수 | ✅ 확인 | `moveit_msgs` 를 import 해 `get_fields_and_field_types()` 로 대조 |
 | `<octomap>` ACM 이름 | ✅ 확인 | `libmoveit_planning_scene.so` 문자열 |
 | RG2 명령 형식 (`'o'/'c'/숫자`, 1/10 mm) | ✅ 확인 | `OnRobotRGControllerServer.py:258-303`, `OnRobotRGOutput.msg` |
@@ -288,9 +367,12 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 
 ### ⛔ 실기 전 블로커
 
-1. **`tool0` 플랜지면 → RG2 손끝 거리 실측.** URDF 190 mm vs 매뉴얼 220+10 mm.
-   차이가 실재하면 MoveIt 이 손끝을 **40 mm 더 깊이** 민다. 이건 `tcp_offset_m` 이 아니라
-   `onrobot_rg2.xacro` 의 `origin xyz` 를 고쳐야 한다.
+1. **`tool0` 플랜지면 → RG2 손끝 거리 — 2026-08-07 실측·배선 완료, 실기 확인만 남았다.**
+   닫힘 240 mm = 브라켓+퀵커넥터 22 mm + 그리퍼 자체 218 mm (`md/context/constraints.md` "GraspGenX 관련").
+   폭에 따라 변하는 성분(개구 70/100 mm 에서 17/41 mm 후퇴)은 `rg2.fingertip_length_m()`으로,
+   고정 성분(22 mm 브라켓)은 `onrobot_rg2.xacro`(`has_bracket=true`, `xyz` 0.004→0.022)로
+   반영했다. `colcon build` PASS. **미검증**: RViz 육안 확인, self-collision 경계 재검토 —
+   로봇 세션에서 확인할 것.
 2. **`gripper_links` 이름 대조.** 기본값은 URDF 매크로에서 유추한 것이다. 틀리면 ACM 항목이
    조용히 아무 데도 안 걸린다. 확인: `ros2 param get /move_group robot_description` 에서 `rg2_` 링크 목록.
 3. **`force_down_steps`** — 40 N 으로 사과를 물면 으깬다 (§4).
@@ -302,7 +384,44 @@ cd ~/cobot2_ws
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select pick_fsm_msgs pick_fsm
 colcon test --packages-select pick_fsm && colcon test-result --verbose
+
+# ⚠️ 위 colcon test 는 이 랩탑에서 안 돈다 (아래 참고). 그동안은 pytest 를 직접 부른다:
+python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio
 ```
+
+### `colcon test` 가 안 도는 이유 (2026-08-07 진단)
+
+`pytest` 는 시작할 때 `pytest11` 엔트리포인트를 **전부 자동 로드**한다. 그중 `anyio` 의
+플러그인이 pytest ≥7 의 `_pytest.scope` 를 import 하는데, 이 랩탑의 pytest 는 apt 6.2.5 뿐이라
+(`~/.local` 에 pip pytest 없음 — `sys.path` 로 확인) **테스트를 수집하기도 전에** 죽는다:
+
+```
+ModuleNotFoundError: No module named '_pytest.scope'
+  .../anyio/pytest_plugin.py:15
+```
+
+anyio 가 이 머신에 **두 벌** 깔려 있다. 둘 다 `pytest11` 을 등록하므로 둘 다 꺼야 한다:
+
+| 위치 | 버전 | 범위 | 상태 |
+|---|---|---|---|
+| `~/.local/lib/python3.10/site-packages/anyio-4.13.0.dist-info` | 4.13.0 | `kimkh` 계정만 | `entry_points.txt` → `.disabled` 로 이름 변경함 (2026-08-07) |
+| `/usr/local/lib/python3.10/dist-packages/anyio-4.14.1.dist-info` | 4.14.1 | **랩탑 전체 계정** (`sudo pip` 흔적) | ⛔ 손대지 않음 — 공유 자원이라 승인 필요 |
+
+**anyio 패키지 자체는 지우면 안 된다.** `httpx`·`httpcore`·`openai`·`jupyter_server`·
+`jupyter_client`·`starlette`·`watchfiles`·`langsmith` 8개가 의존한다 — 지우면 `nlm`(notebooklm),
+jupyter, uvicorn 이 같이 죽는다. 꺼야 할 것은 **`entry_points.txt` 의 `[pytest11]` 등록 한 줄**뿐이고,
+그 플러그인은 pytest 6.2.5 에서 어차피 못 쓴다.
+
+**2026-08-07 결정: `/usr/local` 은 건드리지 않고 `-p no:anyio` 로 간다.** 이 충돌은 테스트에만
+영향을 주고 FSM 실행에는 영향이 없어서(§2), 공유 랩탑의 전역 자원을 손댈 이유가 없다.
+나중에 `colcon test` 를 꼭 살려야 하면 아래 한 줄이면 되지만, **모든 계정에 영향을 준다**:
+
+```bash
+sudo mv /usr/local/lib/python3.10/dist-packages/anyio-4.14.1.dist-info/entry_points.txt{,.disabled}
+```
+
+같은 이유로 깨질 수 있는 다른 플러그인 2개(`langsmith`, `dash`)는 확인해보니 pytest 6.2.5 에서
+정상 import 된다 — anyio 하나만 문제다.
 
 `pick_fsm_msgs` 를 별도 패키지로 뺀 이유: `ament_python` 패키지는 인터페이스를 생성하지
 못하고, 한 `ament_cmake` 패키지에서 `rosidl_generate_interfaces` 와

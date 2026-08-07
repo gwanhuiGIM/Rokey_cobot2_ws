@@ -23,6 +23,47 @@ RG2_MAX_WIDTH_M = 0.110
 #: 하드웨어 한계(0.110)보다 **좁다**. 후보 선별 기준은 좁은 쪽을 쓴다.
 RG2_MODEL_WIDTH_M = 0.102
 
+#: 2026-08-07 실측(`kimkh`) — 펜던트에서 TCP 설정 후 그리퍼를 수직정렬하고 천천히 내려
+#: 접촉 지점까지 잰 값. **완전히 닫힌(0 mm) 상태**의 tool0 플랜지면 -> 손끝 거리.
+#: 브라켓+퀵커넥터 22 mm + 그리퍼 자체(닫힘) 218 mm = 240 mm.
+#: GraspGenX 의 상수 0.18 m(`config.json` fingertip[2])보다 6 cm 길다 — 그 값을 그대로 쓰면
+#: 실기에서 손끝이 6 cm 짧게 나가 물체 앞에서 헛짚는다(md/context/constraints.md 2026-08-05).
+RG2_CLOSED_FINGERTIP_LENGTH_M = 0.240
+
+#: 개구 폭이 커질수록 손가락이 힌지를 축으로 벌어지며 손끝이 짧아진다 — 회전 링크라 폭에
+#: **선형이 아니다**. {개구 폭[m]: 닫힘(0.240 m) 대비 길이 감소[m]}, 2026-08-07 실측 2점.
+RG2_LENGTH_SHRINK_CAL_M = {
+    0.000: 0.000,
+    0.070: 0.017,
+    0.100: 0.041,
+}
+
+
+def fingertip_length_m(width_m: float) -> float:
+    """개구 폭 [m] -> tool0 플랜지면부터 손끝까지 실측 거리 [m] (보정표 선형보간).
+
+    `RG2_LENGTH_SHRINK_CAL_M` 3점을 구간별로 선형보간한다. 힌지 회전 구조라 실제로는
+    비선형이지만(구간 기울기가 0.24 -> 0.8 mm/mm 로 뛴다), 점이 3개뿐이라 그 이상의
+    곡선을 지어내지 않는다. 표 밖(>100 mm, RG2 최대 110 mm 까지)은 마지막 구간 기울기로
+    외삽한다 — 그 구간은 실측 안 됐으니 결과를 그대로 신뢰하지 말 것.
+
+    이 값은 **`tool0` IK 목표 자체를 바꾸지 않는다** — grasp 원점이 곧 tool0 라 목표 포즈는
+    GraspGenX 출력 그대로 쓴다(constraints.md "GraspGenX grasp 4×4 = tool0 목표 자세").
+    여기서 쓰는 곳은 손끝 위치 **추정**뿐이다: CollisionObject 배치, 로그, RViz 시각화.
+    tool0 -> rg2_base_link 자체의 고정 오프셋(브라켓 22 mm, 폭과 무관)은 별개 문제이고
+    `onrobot_rg2.xacro` 쪽에서 고쳐야 한다(README "실기 전 블로커" 1번) — 이 함수는 그걸
+    대신하지 않는다.
+    """
+    xs = sorted(RG2_LENGTH_SHRINK_CAL_M)
+    w = max(0.0, float(width_m))
+    if w >= xs[-1]:
+        x0, x1 = xs[-2], xs[-1]
+    else:
+        x0, x1 = next((xs[i], xs[i + 1]) for i in range(len(xs) - 1) if w <= xs[i + 1])
+    y0, y1 = RG2_LENGTH_SHRINK_CAL_M[x0], RG2_LENGTH_SHRINK_CAL_M[x1]
+    shrink = y0 + (y1 - y0) * (w - x0) / (x1 - x0)
+    return RG2_CLOSED_FINGERTIP_LENGTH_M - shrink
+
 
 def width_to_rgwd(width_m: float) -> int:
     """개구 폭 [m] → 드라이버 명령값 [1/10 mm], 유효범위로 클램프.

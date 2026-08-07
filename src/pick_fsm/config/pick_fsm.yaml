@@ -11,7 +11,9 @@ task_manager:
 
     # ── MoveIt ───────────────────────────────────────────
     planning_group: manipulator
-    ee_link: tool0              # grasp 포즈가 지정하는 링크. tool0 -> rg2_base_link 오프셋이 0이다
+    ee_link: tool0              # grasp 포즈가 지정하는 링크. URDF 는 tool0 -> rg2_base_link 오프셋을
+                                 # 0 으로 두지만 실측 브라켓+퀵커넥터는 22 mm 다(2026-08-07) — 아직
+                                 # xacro 미수정. md/context/constraints.md "GraspGenX 관련" 참고
     base_frame: base_link       # ⚠️ world 아님 (planning scene 은 world 를 모른다)
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
     vel_scale: 0.1              # 실기 첫 시도는 느리게. 익숙해지면 올린다
@@ -31,7 +33,8 @@ task_manager:
     # ── 자세 ─────────────────────────────────────────────
     approach_offset_m: 0.10     # UNVERIFIED: 접근 여유. 물체 주변 혼잡도에 따라 조정
     lift_offset_m: 0.15         # UNVERIFIED
-    tcp_offset_m: 0.18          # GraspGenX onrobot_RG2/config.json fingertip[2]
+    # tcp_offset_m 파라미터는 삭제됨(2026-08-07) — rg2.fingertip_length_m(width_m)이
+    # 실측 보정표(닫힘 0.240 m, 폭에 따라 비선형 감소)로 대체했다. pick_fsm/rg2.py 가 정본.
     max_reach_m: 0.900          # M0609 URDF 실측 (shoulder 기준 flange 까지)
     home_joints_deg: [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]      # robot_control.py JReady
     place_joints_deg: [4.0, 38.0, 64.0, -0.1, 78.0, 4.0]   # robot_control.py BUCKET_POS

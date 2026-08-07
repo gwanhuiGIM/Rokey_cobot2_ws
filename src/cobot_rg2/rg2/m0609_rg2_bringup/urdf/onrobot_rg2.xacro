@@ -32,8 +32,12 @@
     <joint name="joint0" type="fixed">
         <parent link="${effector_base}"/>
         <child link="${prefix}base_link"/>
+        <!-- xyz는 effector_base(tool0) 프레임 기준. rpy="1.5708 0 1.5708"가 축을 재배치해서
+             child(rg2_base_link)의 접근축(+Z)은 parent(tool0)의 +X로 매핑된다 — 그래서
+             브라켓 두께를 X 성분에 더한다(Z가 아니다). 2026-08-07 실측: 브라켓+퀵커넥터
+             22 mm(이전 0.004는 출처 불명 추정값). md/context/constraints.md "GraspGenX 관련" 참고 -->
         <xacro:if value="${has_bracket}">
-          <origin xyz="0.004 0. 0." rpy="1.5708 0 1.5708" />
+          <origin xyz="0.022 0. 0." rpy="1.5708 0 1.5708" />
         </xacro:if>
         <xacro:unless value="${has_bracket}">
           <origin xyz="0. 0. 0." rpy="1.5708 0 1.5708" />

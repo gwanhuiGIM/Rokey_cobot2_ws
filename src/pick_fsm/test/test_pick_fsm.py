@@ -1,15 +1,18 @@
 """로봇·move_group 없이 검증 가능한 부분만 테스트한다.
 
-여기서 검증하는 것은 셋뿐이고, 전부 **틀리면 조용히 물체를 망가뜨리는** 계산이다:
+여기서 검증하는 것은 넷뿐이고, 전부 **틀리면 조용히 물체를 망가뜨리거나 문서가 거짓말을 하는** 것이다:
   1. 폭 → rgwd 단위 변환 (mm 로 잘못 바꾸면 10배 좁게 명령한다)
   2. grasp 포즈의 접근축 오프셋 (월드 -Z 로 물러나면 비스듬한 grasp 에서 물체를 친다)
-  3. 상태 전이표 (다이어그램과 코드가 갈라지는 걸 막는다)
+  3. 상태 전이표
+  4. README 의 mermaid stateDiagram ↔ 전이표 (다이어그램과 코드가 갈라지는 걸 막는다)
 
     colcon test --packages-select pick_fsm
     python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q      # ROS 없이도 됨
 """
 
 import math
+import re
+from pathlib import Path
 
 import pytest
 from geometry_msgs.msg import PoseStamped
@@ -17,7 +20,7 @@ from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import OCTOMAP_ACM_NAME, merge_acm
-from pick_fsm.rg2 import RG2_MAX_RGWD, width_to_rgwd
+from pick_fsm.rg2 import RG2_MAX_RGWD, fingertip_length_m, width_to_rgwd
 from pick_fsm.states import TRANSITIONS, State, is_allowed
 
 
@@ -31,6 +34,24 @@ def test_width_to_rgwd_는_1_10mm_단위다():
 def test_width_to_rgwd_는_유효범위로_클램프한다():
     assert width_to_rgwd(-1.0) == 0
     assert width_to_rgwd(5.0) == RG2_MAX_RGWD   # 범위를 넘겨 보내면 드라이버가 무시/오동작
+
+
+def test_fingertip_length_m_은_실측_보정점을_그대로_재현한다():
+    # 2026-08-07 실측 3점 (닫힘/70mm/100mm) — 보간 함수는 이 점들에서 정확히 맞아야 한다
+    assert fingertip_length_m(0.000) == pytest.approx(0.240)
+    assert fingertip_length_m(0.070) == pytest.approx(0.240 - 0.017)
+    assert fingertip_length_m(0.100) == pytest.approx(0.240 - 0.041)
+
+
+def test_fingertip_length_m_은_구간_내에서_선형보간한다():
+    assert fingertip_length_m(0.035) == pytest.approx(0.240 - 0.017 / 2)
+
+
+def test_fingertip_length_m_은_음수와_표_밖_폭도_처리한다():
+    assert fingertip_length_m(-1.0) == fingertip_length_m(0.0)     # 음수는 0으로 클램프
+    beyond = fingertip_length_m(0.110)                             # RG2 최대 폭, 외삽 구간
+    assert beyond < fingertip_length_m(0.100)                      # 계속 짧아져야 한다(단조)
+    assert 0.0 < beyond < 0.240
 
 
 # ── 2. 포즈 연산 ─────────────────────────────────────────
@@ -124,6 +145,55 @@ def test_지름길은_막혀_있다():
 
 def test_자기_자신으로의_전이는_상태_유지다():
     assert is_allowed(State.PERCEIVE, State.PERCEIVE)
+
+
+# ── 3-1. README 다이어그램 ↔ 전이표 ──────────────────────
+# states.py 가 경고하는 그 실패("다이어그램과 코드가 조용히 갈라진다")를 여기서 막는다.
+_MERMAID = re.compile(r'```mermaid\n(.*?)```', re.S)
+_EDGE = re.compile(r'^\s*(\w+)\s*-->\s*(\w+)\s*(?::.*)?$')
+
+#: 전이표에 있지만 **일부러** 안 그린 전이. 이유 없이 여기 추가하지 말 것.
+#: 모든 `* -> ABORT` 는 16개라 그리면 못 읽는다 → 다이어그램의 note 로 묶었다 (아래 테스트가 예외처리).
+_UNDRAWN = {
+    # 표에는 있지만 _st_listening 이 실제로 쓰지 않는 경로 (README 에 각주로 적어뒀다)
+    (State.LISTENING, State.IDLE),
+}
+
+
+def _readme_state_edges() -> set:
+    readme = Path(__file__).resolve().parent.parent / 'README.md'
+    if not readme.exists():                     # 설치 트리에서 돌 때는 README 가 없다
+        pytest.skip(f'README 없음: {readme}')
+    for block in _MERMAID.findall(readme.read_text(encoding='utf-8')):
+        if 'stateDiagram' not in block:
+            continue
+        edges, unknown = set(), []
+        for line in block.splitlines():
+            m = _EDGE.match(line)
+            if m is None:                       # `[*] --> IDLE`, note 본문, 노드 선언
+                continue
+            src, dst = m.groups()
+            for name in (src, dst):
+                if name not in State.__members__:
+                    unknown.append(name)
+            if not unknown:
+                edges.add((State[src], State[dst]))
+        assert not unknown, f'README 다이어그램에 없는 상태 이름: {unknown}'
+        return edges
+    pytest.fail('README 에 stateDiagram mermaid 블록이 없다')
+
+
+def test_README_다이어그램의_전이가_전부_전이표에_있다():
+    bogus = [(s.name, d.name) for s, d in _readme_state_edges() if not is_allowed(s, d)]
+    assert not bogus, f'그림에만 있고 TRANSITIONS 에 없는 전이: {bogus}'
+
+
+def test_전이표의_전이가_전부_README_에_그려져_있다():
+    drawn = _readme_state_edges()
+    missing = [(s.name, d.name)
+               for s, dsts in TRANSITIONS.items() for d in dsts
+               if d is not State.ABORT and (s, d) not in drawn and (s, d) not in _UNDRAWN]
+    assert not missing, f'전이표에는 있는데 그림에 없는 전이: {missing}'
 
 
 # ── 4. ACM 병합 ──────────────────────────────────────────

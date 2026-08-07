@@ -50,6 +50,7 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 | 문서 | 상태 |
 |---|---|
 | [2026-08-03-notebooklm-digest.md](2026-08-03-notebooklm-digest.md) | 📤 NotebookLM 소스용 다이제스트(08-03 스냅샷). 여기 적힌 값은 갱신되지 않는다 — 정본은 위 상시 문서다 |
+| [2026-08-07-nvblox-curobo-digest.md](2026-08-07-nvblox-curobo-digest.md) | 📤 NotebookLM 소스용. **단일 출처: nvblox·cuRobo·cuMotion·GraspGenX 알고리즘 설명, MoveIt vs cuRobo 비교(개념·연산구조).** 실행 명령은 여기 없다(`config/testcommand.md`) |
 | [isaac_ros_nvblox_setup.md](isaac_ros_nvblox_setup.md) | ⏸ Docker/udev 셋업(§1~5)만 유효. **nvblox 실행 절차 본체는 [[ws/cobot2/plans/2026-08-05-cumotion-bringup]] §6이 단일 출처** |
 | [archive/2026-08-01-session.md](archive/2026-08-01-session.md) | 🗄 **동결(08-01 세션 기록).** 런치·녹화 명령은 **폐기** — `rosbag-d435i.md`를 볼 것 |
 | [archive/2026-08-03-session-dashboard.html](archive/2026-08-03-session-dashboard.html) | 🗄 08-03 세션 성과 요약(시각화). 값은 갱신 안 됨 — 정본은 `review_moveit.md`·`errors-log.md` |

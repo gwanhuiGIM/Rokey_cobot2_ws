@@ -29,7 +29,7 @@ from std_srvs.srv import Trigger
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import SUCCESS, MoveItBridge, err_name, merge_acm
-from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client
+from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client, fingertip_length_m
 from pick_fsm.robot_safety_node import UNSAFE_STATES
 from pick_fsm.states import HOLDING_STATES, State, is_allowed
 
@@ -175,7 +175,8 @@ class TaskManager(Node):
             # 자세
             'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
             'lift_offset_m': 0.15,           # LIFT: 월드 +Z
-            'tcp_offset_m': 0.18,            # grasp 원점 → 손끝. config.json fingertip[2]
+            # tcp_offset_m 은 더 이상 파라미터가 아니다 — rg2.fingertip_length_m(width_m)이
+            # 2026-08-07 실측(폭에 따라 손끝이 짧아지는 비선형 보정표)으로 대체했다.
             'max_reach_m': 0.900,            # M0609 URDF 실측 (shoulder 기준)
             'home_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],     # robot_control JReady
             'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS
@@ -448,7 +449,7 @@ class TaskManager(Node):
         self.grasp = pose
         self.width_m = self._grip_width(width_m)
         self.alternatives = list(alternatives)[: int(self.p('max_alternatives'))]
-        tcp = geo.tcp_of(pose, float(self.p('tcp_offset_m')))
+        tcp = geo.tcp_of(pose, fingertip_length_m(self.width_m))
         self.get_logger().info(
             f'grasp conf={float(confidence):.2f} '
             f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}) '
@@ -489,7 +490,7 @@ class TaskManager(Node):
             self._plan_i = 1
             return
         if self._fut is None:                       # ② 물체 + 병합 ACM 적용
-            tcp = geo.tcp_of(self.grasp, float(self.p('tcp_offset_m')))
+            tcp = geo.tcp_of(self.grasp, fingertip_length_m(self.width_m))
             obj = self.moveit.make_object(self.p('object_id'), tcp,
                                           float(self.p('object_radius_m')))
             acm = merge_acm(self._acm, self.p('object_id'), list(self.p('gripper_links')),
@@ -555,7 +556,7 @@ class TaskManager(Node):
             self._to(State.SPEAK_FAIL, '후보 소진')
             return
         self.grasp = self.alternatives.pop(0)
-        tcp = geo.tcp_of(self.grasp, float(self.p('tcp_offset_m')))
+        tcp = geo.tcp_of(self.grasp, fingertip_length_m(self.width_m))
         self.get_logger().info(
             f'다음 후보 (남은 {len(self.alternatives)}개) '
             f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f})')
