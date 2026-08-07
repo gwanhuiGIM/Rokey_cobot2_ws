@@ -36,6 +36,9 @@ setup(
             # ⚠️ 이것도 로봇이 실제로 움직인다. arm.py 를 안 쓰는 독립형 재계획 루프이고,
             #    check 모드가 없으니 vel_scale 을 낮춘 채로 시작한다.
             'reactive_replan = cumotion.reactive_replan:main',
+            # NVIDIA 예제(isaac_ros_moveit_goal_setter) 방식. plan_only=False 라
+            # move_group 이 실행까지 한다. reactive_replan 과 비교하려고 만든 것.
+            'goal_setter_replan = cumotion.goal_setter_replan:main',
         ],
     },
 )

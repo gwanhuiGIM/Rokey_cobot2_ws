@@ -11,7 +11,7 @@
 
     ros2 launch pick_fsm pick_fsm.launch.py                    # 계획만 (기본, 안전)
     ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 실행. 승인은 여전히 필요
-    ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=apple, orange
+    ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=apple
     ros2 launch pick_fsm pick_fsm.launch.py planning_pipeline:=isaac_ros_cumotion
 """
 

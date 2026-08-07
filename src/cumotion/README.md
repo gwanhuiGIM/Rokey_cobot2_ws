@@ -309,6 +309,7 @@ T6 재기동 후 로그의 `ESDF req` 가 `Point(-0.2, -0.5, -0.35), Vector3(1.0
 | **`ros2 run` 은 `static` 이 아니라 `static_mode`** | `-p static:=true` 는 선언 안 된 파라미터라 **조용히 무시**되고 재계획이 돈다. 대조군인 줄 알고 잘못된 데이터를 받는다 | launch 는 `static:=true`, `ros2 run` 은 `-p static_mode:=true`. 시작 로그에 `🔴 static_mode=true` 경고가 뜨는지로 확인 |
 | **`ROS_DOMAIN_ID` 누락** | `/move_action 액션 서버 없음` → T7 이 죽은 줄 알게 된다. 실제로는 도메인이 0이었을 뿐 | 호스트 터미널마다 `export ROS_DOMAIN_ID=93` |
 | **`container_setup.sh` 누락** | T4 는 `import cv2 → _ARRAY_API not found`, T6 은 `warp has no attribute 'torch'` | 컨테이너를 **새로 만들 때마다** 실행 |
+| 🔴 **컨테이너에 `root` 로 들어감** | `container_setup.sh` 를 돌렸는데도 위 에러가 그대로 난다. pip 이 사용자별로 설치되기 때문이다 — `admin` 은 `~/.local` 에 numpy 1.26.4, `root` 는 시스템 numpy 2.2.6 그대로 (2026-08-07 실측) | **`docker exec -it -u admin …`** 로 들어가거나 `run_dev.sh` 를 다시 실행한다(떠 있는 컨테이너엔 `-u admin` 으로 attach 한다, `run_dev.sh:195`). `docker exec -it <c> bash` 는 기본이 **root** 라 물린다 |
 | **`config/*.yaml` 미적용** | `testcommand.md` 의 T5·T6 명령이 `--params-file` 을 안 준다. 튜닝값이 **한 번도 적용된 적이 없었다** | T6 로그의 `ESDF req` 줄, `ros2 param get` 으로 확인 |
 | **cuMotion 의 `PLANNING_FAILED(-1)`** | 플러그인이 플래너의 진짜 error_code 를 덮어쓴다. T6 은 `NO_IK_SOLUTION` 인데 우리에겐 `-1` | **T6 로그의 `Motion planning failed wih status:` 줄**을 봐야 한다 |
 
