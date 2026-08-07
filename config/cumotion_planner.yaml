@@ -73,7 +73,7 @@
     # 궤적을 얼마나 느리게 펼칠지 (1.0 = 최고속). MoveIt이 보낸 velocity/accel scaling이
     # 유효하면 그쪽이 이기고, 아래 값은 override_moveit_scaling_factors: true 일 때만 강제된다.
     # ⚠️ 실기 첫 실행은 0.2~0.3으로 낮춰서 본다. 여기는 **로봇이 실제로 움직이는 속도**다.
-    time_dilation_factor: 0.8
+    time_dilation_factor: 0.5
     override_moveit_scaling_factors: false
 
     # ───────── 입출력 ─────────

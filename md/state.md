@@ -204,6 +204,15 @@ code .                                          # 이후 VS Code Source Control�
    후보를 `corecode/GraspSelection/grasp_selector.py`의 재충돌 필터에 통과시킨다. 점수 0.9+인데
    충돌로 탈락하면 → **그 분기 점수를 못 믿는다는 증거**다. `branch_tags`는 이미 출력에 있다.
    근거·배경은 [[ws/cobot2/2026-08-07-nvblox-curobo-digest]] §9-2(E).
+0-e. **`planning_options.replan`이 OMPL/cuMotion 각각에서 실제로 걸리는지 실기 검증 (2026-08-07 추가)**
+   `pick_fsm.yaml`엔 `replan: true`로 켜져 있고 `pick_fsm/README.md:340`엔 "⚠️ 추론, 관측한 적
+   없음"으로 적혀 있다. 구조적으로 의심되는 지점: move_group의 궤적-무효화 감시는 move_group
+   자신의 `PlanningSceneMonitor`(octomap + collision object)를 보는데, cuMotion의 장애물은
+   nvblox에서 계획 시점에 서비스로 당겨오는 것(`read_esdf_world:=True`)이라 **그 공유
+   PlanningSceneMonitor에 안 들어가 있을 수 있다.** 맞다면 OMPL 경로는 replan이 걸리는데
+   cuMotion 경로는 안 걸릴 수 있다 — 소스가 apt 바이너리라 로컬에서 확정 못 했다(2026-08-07).
+   **최소 실험**: 실행 중(`APPROACH` 등) 궤적 경로에 손을 넣어 OMPL·cuMotion 각각 재계획되는지
+   관찰. `testcommand.md` §12 "장애물이 궤적을 실제로 바꾸는지 미검증"과 같은 실기 세션에 묶어서 확인.
 
 1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).

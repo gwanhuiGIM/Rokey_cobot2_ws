@@ -304,7 +304,8 @@ capture_graspgenx_scene.py ◀────────────┘        [�
    │ 씬 4파일
    ▼
 grasp_bridge_node.py ──uv──▶ GraspGenX 워커       [호스트]
-   │ /grasp/compute (Trigger) · /grasp/best (PoseStamped, base_link, tool0 목표)
+   │ /grasp/compute (Trigger) · /grasp/best (PoseStamped, base_link, GraspGenX 원시 grasp 프레임)
+   │   ⚠️ tool0 목표가 아니다 — FSM 이 to_gripper_base() 로 rg2_base_link 목표로 바꾼다
    ▼
 task_manager (pick_fsm) ──▶ MoveIt ──▶ 로봇
 ```

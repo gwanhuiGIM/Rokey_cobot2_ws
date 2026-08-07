@@ -20,7 +20,13 @@ from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import OCTOMAP_ACM_NAME, merge_acm
-from pick_fsm.rg2 import RG2_MAX_RGWD, fingertip_length_m, width_to_rgwd
+from pick_fsm.rg2 import (
+    RG2_BRACKET_LENGTH_M,
+    RG2_MAX_RGWD,
+    fingertip_from_rg2_base_m,
+    fingertip_length_m,
+    width_to_rgwd,
+)
 from pick_fsm.states import TRANSITIONS, State, is_allowed
 
 
@@ -52,6 +58,13 @@ def test_fingertip_length_m_은_음수와_표_밖_폭도_처리한다():
     beyond = fingertip_length_m(0.110)                             # RG2 최대 폭, 외삽 구간
     assert beyond < fingertip_length_m(0.100)                      # 계속 짧아져야 한다(단조)
     assert 0.0 < beyond < 0.240
+
+
+def test_rg2_base_기준_손끝은_플랜지_기준보다_브라켓만큼_짧다():
+    # grasp 포즈 원점은 rg2_base_link 다. 플랜지 기준 240 mm 를 그대로 쓰면 22 mm 더 나간다.
+    assert fingertip_from_rg2_base_m(0.0) == pytest.approx(0.218)
+    assert (fingertip_length_m(0.07) - fingertip_from_rg2_base_m(0.07)
+            == pytest.approx(RG2_BRACKET_LENGTH_M))
 
 
 # ── 2. 포즈 연산 ─────────────────────────────────────────
@@ -98,6 +111,30 @@ def test_tcp_는_grasp_원점이_아니다():
     tilted = _pose(0.5, 0.0, 0.3, quat=(0.0, s, 0.0, s))
     tcp = geo.tcp_of(tilted, 0.18)
     assert tcp == pytest.approx((0.68, 0.0, 0.3))       # 원점(0.5,0,0.3)에서 18 cm 떨어져 있다
+
+
+def test_to_gripper_base_는_접근축을_보존하고_손가락만_90도_돌린다():
+    """이게 깨지면 그리퍼가 물체를 폭이 아니라 긴 축으로 물거나, 90° 누워서 진입한다."""
+    s = math.sin(math.pi / 4)
+    tilted = _pose(0.5, 0.0, 0.3, quat=(0.0, s, 0.0, s))    # 로컬 +Z 가 월드 +X
+    out = geo.to_gripper_base(tilted)
+
+    # ① 접근축(+Z)은 그대로여야 한다 — Z 축 둘레의 회전이므로
+    assert geo.quat_axis_z(out.pose.orientation) == pytest.approx(
+        geo.quat_axis_z(tilted.pose.orientation), abs=1e-9)
+    # ② 손가락 방향(+X)은 원래의 +Y 로 간다 (로컬 요 +90°).
+    #    Ry(90°) 에서 원래 +X 는 (0,0,-1), 원래 +Y 는 (0,1,0) 이다.
+    assert geo.quat_axis_x(tilted.pose.orientation) == pytest.approx((0.0, 0.0, -1.0), abs=1e-9)
+    assert geo.quat_axis_x(out.pose.orientation) == pytest.approx((0.0, 1.0, 0.0), abs=1e-9)
+    # ③ 원점은 안 움직인다 — 두 프레임은 요만 다르다
+    assert (out.pose.position.x, out.pose.position.y, out.pose.position.z) == pytest.approx(
+        (0.5, 0.0, 0.3))
+
+
+def test_to_gripper_base_는_단위쿼터니언에서_정확히_요_90도다():
+    out = geo.to_gripper_base(_pose())
+    assert geo.quat_axis_x(out.pose.orientation) == pytest.approx((0.0, 1.0, 0.0), abs=1e-9)
+    assert geo.quat_axis_z(out.pose.orientation) == pytest.approx((0.0, 0.0, 1.0), abs=1e-9)
 
 
 def test_deg2rad():

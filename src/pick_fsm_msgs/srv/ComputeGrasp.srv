@@ -14,15 +14,18 @@ bool    success
 string  message          # 실패 사유 (검출 0 / 후보 0 / 도달 불가 …). 성공해도 요약을 채운다
 
 # ⚠️ 이름이 grasp_tcp가 아니라 grasp_pose인 것은 의도적이다.
-#    GraspGenX가 내는 4x4의 원점은 **그리퍼 base**이고 손끝(TCP)은 거기서 +Z로 0.18 m 떨어져 있다
-#    (md/context/constraints.md "GraspGenX grasp 4x4 = tool0 목표 자세").
-#    그리고 우리 URDF에서 tool0 -> rg2_base_link 오프셋이 0이라 **이 포즈가 곧 tool0의 목표 자세**다.
-#    이걸 "손끝 좌표"로 읽고 IK를 걸면 18 cm를 더 밀어넣는다. frame_id는 base_link.
+#    GraspGenX가 내는 4x4의 원점은 **그리퍼 base**이고 손끝(TCP)은 거기서 +Z로 떨어져 있다.
+#    이걸 "손끝 좌표"로 읽고 IK를 걸면 20 cm 넘게 더 밀어넣는다. frame_id는 base_link.
+# 🔴 여기 담기는 건 **GraspGenX 원시 grasp 프레임**이다 (+Z=접근축, +X=닫힘, 원점=그리퍼 base).
+#    tool0 목표 자세가 **아니다** — tool0의 접근축은 +Z가 아니라 +X다(2026-08-07 정정,
+#    md/context/constraints.md "정본: grasp 프레임 = rg2_base_link").
+#    변환은 소비자(pick_fsm task_manager)가 geometry.to_gripper_base()로 한다.
+#    생산자는 변환하지 말고 원시 프레임 그대로 채운다 — 양쪽에서 걸면 90° 더 돌아간다.
 geometry_msgs/PoseStamped grasp_pose
 
 float64 width_m          # 잡을 때 벌릴 개구 폭 [m]. 1/10 mm 변환은 **호출자(FSM)**가 한다
 float32 confidence
 
-# 1등이 IK/계획에 실패했을 때 쓸 다음 후보들. 같은 규약(ee_link 목표 자세, base_link).
+# 1등이 IK/계획에 실패했을 때 쓸 다음 후보들. grasp_pose 와 같은 규약(원시 grasp 프레임, base_link).
 # 이걸 같이 주는 게 핵심이다 — 실패할 때마다 GPU 추론을 다시 돌리면 수십 초가 날아간다.
 geometry_msgs/PoseStamped[] alternatives

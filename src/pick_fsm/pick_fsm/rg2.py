@@ -30,6 +30,11 @@ RG2_MODEL_WIDTH_M = 0.102
 #: 실기에서 손끝이 6 cm 짧게 나가 물체 앞에서 헛짚는다(md/context/constraints.md 2026-08-05).
 RG2_CLOSED_FINGERTIP_LENGTH_M = 0.240
 
+#: 브라켓 + 퀵커넥터 두께 [m], 2026-08-07 실측. `tool0 -> rg2_base_link` 평행이동이며
+#: `onrobot_rg2.xacro:40` 의 `xyz="0.022 0 0"` 과 **같은 값이어야 한다**(tool0 의 +X 가
+#: 그리퍼 접근축이라 X 성분에 들어가 있다). 폭과 무관한 고정 오프셋이다.
+RG2_BRACKET_LENGTH_M = 0.022
+
 #: 개구 폭이 커질수록 손가락이 힌지를 축으로 벌어지며 손끝이 짧아진다 — 회전 링크라 폭에
 #: **선형이 아니다**. {개구 폭[m]: 닫힘(0.240 m) 대비 길이 감소[m]}, 2026-08-07 실측 2점.
 RG2_LENGTH_SHRINK_CAL_M = {
@@ -47,12 +52,12 @@ def fingertip_length_m(width_m: float) -> float:
     곡선을 지어내지 않는다. 표 밖(>100 mm, RG2 최대 110 mm 까지)은 마지막 구간 기울기로
     외삽한다 — 그 구간은 실측 안 됐으니 결과를 그대로 신뢰하지 말 것.
 
-    이 값은 **`tool0` IK 목표 자체를 바꾸지 않는다** — grasp 원점이 곧 tool0 라 목표 포즈는
-    GraspGenX 출력 그대로 쓴다(constraints.md "GraspGenX grasp 4×4 = tool0 목표 자세").
-    여기서 쓰는 곳은 손끝 위치 **추정**뿐이다: CollisionObject 배치, 로그, RViz 시각화.
-    tool0 -> rg2_base_link 자체의 고정 오프셋(브라켓 22 mm, 폭과 무관)은 별개 문제이고
-    `onrobot_rg2.xacro` 쪽에서 고쳐야 한다(README "실기 전 블로커" 1번) — 이 함수는 그걸
-    대신하지 않는다.
+    ⚠️ 기준면이 **`tool0` 플랜지면**이다. grasp 포즈의 원점은 `rg2_base_link`(플랜지면에서
+    브라켓 22 mm 앞)이므로 **grasp 포즈에 이 값을 그대로 더하면 22 mm 더 나간다.**
+    그 경우엔 `fingertip_from_rg2_base_m()` 을 쓴다.
+
+    이 값은 IK 목표 자체를 바꾸지 않는다 — 쓰는 곳은 손끝 위치 **추정**뿐이다:
+    CollisionObject 배치, 로그, RViz 시각화.
     """
     xs = sorted(RG2_LENGTH_SHRINK_CAL_M)
     w = max(0.0, float(width_m))
@@ -63,6 +68,15 @@ def fingertip_length_m(width_m: float) -> float:
     y0, y1 = RG2_LENGTH_SHRINK_CAL_M[x0], RG2_LENGTH_SHRINK_CAL_M[x1]
     shrink = y0 + (y1 - y0) * (w - x0) / (x1 - x0)
     return RG2_CLOSED_FINGERTIP_LENGTH_M - shrink
+
+
+def fingertip_from_rg2_base_m(width_m: float) -> float:
+    """개구 폭 [m] -> **`rg2_base_link` 원점**부터 손끝까지 거리 [m].
+
+    grasp 포즈(원점 = 그리퍼 base)에 얹을 때 쓰는 값이다. 플랜지면 기준
+    `fingertip_length_m()` 에서 브라켓 22 mm 를 뺀 것 — 닫힘 상태에서 218 mm 다.
+    """
+    return fingertip_length_m(width_m) - RG2_BRACKET_LENGTH_M
 
 
 def width_to_rgwd(width_m: float) -> int:

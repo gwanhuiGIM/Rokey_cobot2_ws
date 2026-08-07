@@ -11,9 +11,12 @@ task_manager:
 
     # ── MoveIt ───────────────────────────────────────────
     planning_group: manipulator
-    ee_link: tool0              # grasp 포즈가 지정하는 링크. URDF 는 tool0 -> rg2_base_link 오프셋을
-                                 # 0 으로 두지만 실측 브라켓+퀵커넥터는 22 mm 다(2026-08-07) — 아직
-                                 # xacro 미수정. md/context/constraints.md "GraspGenX 관련" 참고
+    # 🔴 tool0 이 아니다 (2026-08-07 정정). tool0 의 접근축은 +Z 가 아니라 +X 라서
+    #    (`onrobot_rg2.xacro:40` rpy="1.5708 0 1.5708") grasp 포즈를 tool0 에 그대로 걸면
+    #    그리퍼가 90° 누운 채 계획된다. 실기 확인: 같은 하강 포즈로 /compute_ik 를 부르면
+    #    ik_link=rg2_base_link 는 SUCCESS, ik_link=tool0 는 NO_IK_SOLUTION(-31) 이다.
+    #    rg2_base_link 는 GraspGenX 그리퍼 base 와 같은 프레임이라 브라켓 22 mm 도 같이 해소된다.
+    ee_link: rg2_base_link
     base_frame: base_link       # ⚠️ world 아님 (planning scene 은 world 를 모른다)
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
     vel_scale: 0.1              # 실기 첫 시도는 느리게. 익숙해지면 올린다

@@ -838,19 +838,26 @@ cbf3f3bdb2e4c03fca8486ed24de0e6a8a859e6bd22bce2f1434a610335abd3e   dis/epoch_105
 - 네 파일 권한이 전부 `-rwxrwxrwx`였다 = FAT 계열 매체(USB) 경유 흔적. **대용량 자산을 매체·PC 간
   복사한 뒤에는 `sha256sum` 검증을 습관으로 한다.**
 
-### ✅ GraspGenX grasp 4×4 = `tool0` 목표 자세 (2026-08-05, 양쪽 URDF 대조로 확정)
+### ❌ 취소됨: "GraspGenX grasp 4×4 = `tool0` 목표 자세" (2026-08-05 주장 → 2026-08-07 반증)
 
-계획서 §1-3 6번("조용히 틀리는 지점")의 답이다. **추가 변환이 필요 없다.**
+> **이 결론은 틀렸다. 아래 "grasp 프레임 = `rg2_base_link`" 절이 정본이다.**
+> 남겨두는 이유: 이 오류가 실기에서 **그리퍼 90° 눕힘**으로 나타났고(2026-08-07),
+> 같은 함정을 다시 밟지 않으려면 왜 틀렸는지가 필요하기 때문이다.
+
+당시 표는 우리 조인트를 이렇게 적었다:
 
 | | 부모 → 그리퍼 base 조인트 |
 |---|---|
-| 우리 (`onrobot_rg2.xacro:33-35`) | `tool0 → rg2_base_link`, `xyz="0 0 0" rpy="0 0 1.57"` |
+| 우리 (`onrobot_rg2.xacro:33-35`) | `tool0 → rg2_base_link`, `xyz="0 0 0" rpy="0 0 1.57"` ← **오기** |
 | GraspGenX (`x_grippers/onrobot_RG2/gripper.urdf:8-12`) | `world → onrobot_rg2_base_link`, `xyz="0 0 0" rpy="0 0 1.5708"` |
 
-같은 메시(`meshes/rg2/visual/base_link.stl`), 같은 90° 요. 그리고 grasp 프레임이 `world` 쪽인 근거:
-`robot.py:61` "approach는 +Z, **contact는 +X**"인데 `onrobot_rg2_base_link` 안에서는 너클이
-**Y**로 벌어진다(`xyz="0 -0.007678 0.142297"`, `axis="-1 0 0"`). 90° 요가 Y→X로 돌린다.
-→ **grasp 프레임 = `world` = 우리 `tool0`.** 요가 양쪽에서 상쇄되므로 그대로 쓰면 된다.
+"양쪽 요가 같으니 상쇄된다"는 **논리는 맞았지만 입력 사실이 틀렸다.** 실제 파일은
+`rpy="1.5708 0 1.5708"` 이다(요만 있는 게 아니라 롤이 같이 있다). GraspGenX 쪽 값을
+우리 칸에 옮겨 적은 것으로 보인다.
+
+**교훈**: 두 URDF를 "대조"할 때 한쪽 값을 눈으로 읽어 표에 옮기지 말 것. 양쪽 다
+회전행렬로 펼쳐서 `R @ [0,0,1]` 을 찍어 비교한다 — 이 오기는 표만 보면 안 보이고
+행렬로 펼치면 첫 줄에서 드러난다.
 
 - 손끝(TCP) = grasp 원점 + **0.18 m** × grasp의 +Z축 (`config.json` `fingertip[2]`).
   **grasp 원점을 물체 위치로 읽으면 안 된다** — 접근이 30° 기울면 원점은 물체에서 9 cm 옆에 앉는다.
@@ -881,9 +888,51 @@ cbf3f3bdb2e4c03fca8486ed24de0e6a8a859e6bd22bce2f1434a610335abd3e   dis/epoch_105
    줄어든다(힌지 회전 구조). **MoveIt은 이걸 볼 수 없다** — RG2는 ros2_control 컨트롤러가 없어
    손가락 관절이 `/joint_states`에 없고 URDF는 고정 자세로만 렌더된다. 그래서 이 성분은
    **런타임 코드로만 보정 가능**하다 → `pick_fsm/pick_fsm/rg2.py`의 `fingertip_length_m(width_m)`
-   (선형보간, 2026-08-07 추가)가 `tcp_offset_m` 상수 0.18 을 대체했다. **IK 목표(tool0 pose) 자체는
-   안 바뀐다** — grasp 원점=tool0 라 GraspGenX 출력을 그대로 쓰고, 이 함수는 CollisionObject
-   배치·로그 등 손끝 위치 **추정**에만 쓰인다.
+   (선형보간, 2026-08-07 추가)가 `tcp_offset_m` 상수 0.18 을 대체했다. IK 목표 자세 자체는
+   이 함수와 무관하다 — CollisionObject 배치·로그 등 손끝 위치 **추정**에만 쓰인다.
+   ⚠️ 이 함수의 기준면은 **`tool0` 플랜지면(240 mm)** 이다. grasp 포즈 원점은 `rg2_base_link`
+   라서 grasp 에 얹을 때는 브라켓 22 mm 를 뺀 `fingertip_from_rg2_base_m()`(218 mm)를 쓴다.
+
+### 🔴 정본: grasp 프레임 = `rg2_base_link` × 요 90°. **`tool0` 이 아니다** (2026-08-07, 실기 반증)
+
+**증상**: `test_grap_plan` T6 에서 물체 인식·후보 선별까지 정상인데 계획 포즈의 그리퍼가
+90° 누워 있었고, 모든 후보가 `NO_IK_SOLUTION(-31)` 로 떨어졌다(손끝 z≈0.042 m, 테이블 바로 위 →
+눕힌 그리퍼가 상판과 충돌). RViz `tool0` Show Axes 로 육안 확인: **+Z 는 아래를 향하는데
+그리퍼 몸통은 수평**이었다.
+
+**회전행렬 3개를 직접 펼쳐서 확정한 값** (표에 옮겨 적지 말고 이 계산을 다시 할 것):
+
+| 조인트 | 값 | 결과 |
+|---|---|---|
+| `joint_6 → tool0` (`m0609.urdf:248`) | `rpy="3.1416 -1.5708 0"` | **`tool0` 의 +X 가 플랜지 법선** (link_6 +Z). tool0 은 link_6 과 정렬돼 있지 않다 |
+| `tool0 → rg2_base_link` (`onrobot_rg2.xacro:40`) | `rpy="1.5708 0 1.5708"` | rg2 의 +Z(접근축) → tool0 의 **+X**, rg2 의 +X(닫힘) → tool0 의 **+Y** |
+| `world → onrobot_rg2_base_link` (GraspGenX `gripper.urdf:8-12`) | `rpy="0 0 1.5708"` | grasp 프레임(=`world`)에서 `rg2_base_link` 로 가려면 **로컬 요 +90°** |
+
+→ URDF 는 물리적으로 맞다(그리퍼가 플랜지 법선 방향으로 곧게 나감). 틀린 건 코드 가정이었다.
+
+**정본 규약** — GraspGenX 출력 `T` 에 대해:
+```
+R_base_rg2base = R_T · Rz(+90°)          # 자세: 로컬 요 90°
+p_base_rg2base = p_T                     # 원점: 그대로 (두 프레임 원점이 같은 점)
+등가:  R_base_tool0 = R_T · Ry(-90°),  p_tool0 = p_T − 0.022 · (T의 +Z축)
+```
+
+**개구 방향 교차확인(요 90° 의 독립 근거)**: `config.json` 의 `sweep_volume.extents[0]=0.102`,
+`bbox` x 범위 ±76 mm → grasp 프레임에서 **개구 방향은 X**. 반면 `rg2_base_link` 안에서는
+너클이 `xyz="0 ±0.017178 0.125797"`, `axis="±1 0 0"` 로 **±Y** 로 벌어진다
+(우리 `onrobot_rg2_model_macro.xacro:158` = GraspGenX `gripper.urdf:141,164`, **값이 동일**하다
+= 두 `base_link` 프레임은 같은 프레임이다).
+
+**틀렸을 때 실제로 벌어지는 일**: `R_tool0 = R_T` 로 명령하면 실제 접근축이 `R_T·(1,0,0)`
+= grasp 의 **+X**(닫힘 방향)가 된다. 손가락은 접근 방향으로 닫힌다. 완전한 90° 스왑이다.
+여기에 브라켓 22 mm 만큼 **더 깊이** 들어간다.
+
+**코드 반영** (2026-08-07):
+- `task_manager.py` `ee_link`: `tool0` → **`rg2_base_link`** (MoveIt 은 solver tip 에 고정조인트로
+  붙은 링크를 `ik_link_name` 으로 받는다). 이걸로 22 mm 오프셋도 같이 해소된다.
+- `geometry.to_gripper_base()` 신설 — `_accept_grasp()` 에서 best·alternatives **양쪽에** 건다.
+  요 회전이라 접근축(+Z)은 불변 → `pre_grasp()`/`tcp_of()` 는 그대로 유효하다.
+- `rg2.fingertip_from_rg2_base_m()` 신설 (240 − 22 = 218 mm). FSM 의 손끝 추정은 전부 이쪽.
 
 #### ✅ 고정 오프셋(브라켓 22mm)도 xacro에 반영함 (2026-08-07)
 

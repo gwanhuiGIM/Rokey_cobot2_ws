@@ -153,7 +153,8 @@ ros2 service call /safety/exit_backdrive  std_srvs/srv/Trigger {}   # 정상 모
 ```bash
 ros2 launch pick_fsm pick_fsm.launch.py \
   voice:=false target:=apple grasp_source:=manual gripper_backend:=virtual
-# 그리고 /grasp/best 로 포즈를 직접 쏜다 (base_link 프레임, tool0 목표 자세)
+# 그리고 /grasp/best 로 포즈를 직접 쏜다 (base_link 프레임, GraspGenX 원시 grasp 프레임
+#   = +Z 접근축 · 원점 그리퍼 base. tool0 목표가 아니다 — 아래 "grasp 포즈는 손끝 좌표가 아니다")
 ```
 
 ### ⚠️ 기본값이 안전 쪽이다
@@ -220,13 +221,19 @@ python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 23개 �
 
 ### grasp 포즈는 손끝 좌표가 아니다
 
-`ComputeGrasp.grasp_pose` 는 **`ee_link`(= `tool0`) 의 목표 자세**다. 손끝(TCP)이 아니다.
-GraspGenX grasp 4×4 의 원점은 그리퍼 base 이고, 우리 URDF 는 `tool0 → rg2_base_link`
-오프셋이 0이라 그 포즈가 그대로 `tool0` 목표가 된다
-(`md/context/constraints.md` "GraspGenX grasp 4×4 = tool0 목표 자세").
-손끝은 거기서 +Z 로 `rg2.fingertip_length_m(width_m)`만큼 떨어져 있고, 로그·CollisionObject
-배치에만 쓴다 — 2026-08-07 실측 보정표(닫힘 0.240 m, 개구 폭에 따라 비선형 감소)로,
-GraspGenX 상수 0.18 m를 대체했다. IK 목표(`tool0` pose) 자체는 안 바뀐다(§6 "실기 전 블로커" 1번).
+`ComputeGrasp.grasp_pose` 는 **GraspGenX 원시 grasp 프레임**이다 — 손끝(TCP)도 아니고
+`ee_link` 목표 자세도 아니다. 규약은 `+Z=접근축 · +X=손가락 닫힘 · 원점=그리퍼 base`.
+
+🔴 **`tool0` 목표가 아니다** (2026-08-07 정정). `tool0` 의 접근축은 +Z 가 아니라 **+X** 다
+(`onrobot_rg2.xacro:40` `rpy="1.5708 0 1.5708"`). 이 포즈를 `ik_link=tool0` 로 넘기면
+그리퍼가 90° 누운 채 계획된다 — 실기에서 전 후보 `NO_IK_SOLUTION(-31)` 로 나타났다.
+FSM 이 `_accept_grasp()` 에서 `geometry.to_gripper_base()`(로컬 요 +90°)를 걸어
+**`rg2_base_link` 목표 자세**로 바꾼 뒤 IK 에 넘긴다. 생산자는 변환하지 말고 원시 프레임을 준다.
+근거·회전행렬은 `md/context/constraints.md` "정본: grasp 프레임 = `rg2_base_link`".
+
+손끝은 거기서 +Z 로 `rg2.fingertip_from_rg2_base_m(width_m)`(닫힘 0.218 m) 만큼 떨어져 있고,
+로그·CollisionObject 배치에만 쓴다. ⚠️ 플랜지면 기준인 `fingertip_length_m()`(0.240 m)과
+혼동하지 말 것 — 차이는 브라켓 22 mm 다.
 
 > 문서 §2 의 필드 이름 `grasp_tcp` 를 **`grasp_pose` 로 바꿨다.** 이름이 "TCP"인데 값은
 > 그리퍼 base 라서, 그대로 두면 18 cm 오차를 부르는 이름이다.

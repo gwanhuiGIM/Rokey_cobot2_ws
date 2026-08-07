@@ -1,7 +1,13 @@
 """포즈 연산. ROS 메시지에만 의존하고 로봇/네트워크는 안 건드린다 → 단위테스트가 가능하다.
 
-grasp 포즈의 규약 (md/context/constraints.md "GraspGenX grasp 4x4 = tool0 목표 자세"):
-    +Z = 접근축(approach) · +X = 손가락이 닫히는 방향 · 원점 = 그리퍼 base = 우리 `tool0`
+GraspGenX 가 주는 grasp 포즈의 규약 (`robot.py:59-61`):
+    +Z = 접근축(approach) · +X = 손가락이 닫히는 방향 · 원점 = 그리퍼 base
+
+🔴 이 프레임은 우리 `tool0` 이 **아니다** (2026-08-07 정정, md/context/constraints.md).
+   `tool0` 의 접근축은 +Z 가 아니라 **+X** 다 — `onrobot_rg2.xacro:40` 의
+   `rpy="1.5708 0 1.5708"` 이 rg2 의 +Z 를 tool0 의 +X 로 보낸다. 여기 있는 함수들이
+   가정하는 "+Z=접근축" 프레임은 `to_gripper_base()` 를 거친 **`rg2_base_link`** 목표다.
+   변환 전 포즈를 `ik_link='tool0'` 로 넘기면 그리퍼가 90° 누운 채 진입한다.
 
 여기서 scipy 를 쓰지 않는다. 필요한 건 쿼터니언에서 축 하나 뽑는 것뿐인데
 그 한 줄 때문에 노드 실행 의존성을 늘릴 이유가 없다.
@@ -10,6 +16,15 @@ grasp 포즈의 규약 (md/context/constraints.md "GraspGenX grasp 4x4 = tool0 �
 import math
 
 from geometry_msgs.msg import Pose, PoseStamped
+
+#: GraspGenX 의 grasp 프레임 -> `rg2_base_link` 로 가는 로컬 요(yaw) 90°.
+#: 근거: `x_grippers/onrobot_RG2/gripper.urdf:8-12` 의 `world -> onrobot_rg2_base_link`
+#: 가 `rpy="0 0 1.5708"` 이다. grasp 는 그 `world` 프레임에서 주어지므로 그리퍼 base 의
+#: 자세는 grasp 자세에 이 요를 **오른쪽에서** 곱한 것이다.
+#: 교차확인: `config.json` 의 `sweep_volume.extents[0]=0.102`, `bbox` x 가 ±76 mm
+#: → grasp 프레임에서 개구 방향은 X. `rg2_base_link` 안에서는 너클이 ±Y 로 벌어진다
+#: (`onrobot_rg2_model_macro.xacro:158` `xyz="0 0.017178 0.125797"`, `axis="1 0 0"`).
+_SQRT1_2 = math.sqrt(0.5)
 
 
 def quat_axis_x(q) -> tuple[float, float, float]:
@@ -22,6 +37,29 @@ def quat_axis_z(q) -> tuple[float, float, float]:
     """회전행렬의 3열 = 로컬 +Z축. grasp 포즈에서는 **접근축**이다."""
     x, y, z, w = q.x, q.y, q.z, q.w
     return (2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y))
+
+
+def to_gripper_base(grasp: PoseStamped) -> PoseStamped:
+    """GraspGenX grasp 포즈 -> `rg2_base_link` 목표 자세. **IK 에 넘기기 전에 반드시 거친다.**
+
+    원점은 그대로다 (양쪽 프레임 원점이 같은 점이다 — 요만 다르다). 자세만 로컬 +Z 축
+    기준 90° 돌린다. +Z 를 돌리는 회전이라 **접근축은 안 바뀐다** — 그래서
+    `pre_grasp()` · `tcp_of()` 는 변환 전후 어느 쪽에 걸어도 같은 답을 준다.
+    바뀌는 건 접근축을 중심으로 한 손가락 방향이고, 그게 틀리면 손가락이 물체를
+    잡는 폭이 아니라 긴 축을 물게 된다.
+    """
+    q = grasp.pose.orientation
+    out = PoseStamped()
+    out.header = grasp.header
+    # 값 복사다 — 대입하면 구독 메시지와 같은 객체를 공유하게 된다 (`translated()` 와 같은 관례)
+    out.pose.position.x = grasp.pose.position.x
+    out.pose.position.y = grasp.pose.position.y
+    out.pose.position.z = grasp.pose.position.z
+    out.pose.orientation.x = _SQRT1_2 * (q.x + q.y)
+    out.pose.orientation.y = _SQRT1_2 * (q.y - q.x)
+    out.pose.orientation.z = _SQRT1_2 * (q.w + q.z)
+    out.pose.orientation.w = _SQRT1_2 * (q.w - q.z)
+    return out
 
 
 def translated(pose: Pose, axis: tuple[float, float, float], dist: float) -> Pose:

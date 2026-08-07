@@ -29,7 +29,7 @@ from std_srvs.srv import Trigger
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import SUCCESS, MoveItBridge, err_name, merge_acm
-from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client, fingertip_length_m
+from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client, fingertip_from_rg2_base_m
 from pick_fsm.robot_safety_node import UNSAFE_STATES
 from pick_fsm.states import HOLDING_STATES, State, is_allowed
 
@@ -153,7 +153,12 @@ class TaskManager(Node):
 
             # MoveIt
             'planning_group': 'manipulator',
-            'ee_link': 'tool0',              # grasp 포즈가 지정하는 링크 (그리퍼 base = tool0)
+            # 🔴 `tool0` 이 아니다 (2026-08-07 정정). tool0 의 접근축은 +Z 가 아니라 +X 라
+            #    (`onrobot_rg2.xacro:40` rpy="1.5708 0 1.5708"), grasp 포즈를 tool0 에
+            #    그대로 걸면 그리퍼가 90° 누운 채 진입한다. `rg2_base_link` 는 GraspGenX 의
+            #    그리퍼 base 와 같은 프레임이라 브라켓 22 mm 오프셋도 같이 해소된다.
+            #    MoveIt 은 solver tip(tool0)에 고정조인트로 붙은 링크를 ik_link 로 받는다.
+            'ee_link': 'rg2_base_link',
             'base_frame': 'base_link',       # ⚠️ world 아님. planning scene 이 world 를 모른다
             'joint_names': ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'],
             'vel_scale': 0.1,                # 실기 첫 시도는 느리게
@@ -446,10 +451,16 @@ class TaskManager(Node):
             self._to(State.SPEAK_FAIL,
                      f'grasp 프레임이 {pose.header.frame_id} 다 (기대: {base})')
             return
-        self.grasp = pose
+        # 🔴 여기가 grasp 프레임 -> `rg2_base_link`(= ee_link) 로 넘어오는 **유일한 지점**이다.
+        #    best 와 alternatives 를 같이 돌린다 — 대안만 빠뜨리면 첫 후보가 실패한 뒤부터
+        #    조용히 90° 틀어진다. 이 아래로는 전부 ee_link 목표 자세다.
+        self.grasp = geo.to_gripper_base(pose)
         self.width_m = self._grip_width(width_m)
-        self.alternatives = list(alternatives)[: int(self.p('max_alternatives'))]
-        tcp = geo.tcp_of(pose, fingertip_length_m(self.width_m))
+        self.alternatives = [geo.to_gripper_base(a)
+                             for a in list(alternatives)[: int(self.p('max_alternatives'))]]
+        # 변환 **후** 포즈로 잰다. 지금은 요 회전이라 +Z 가 같아서 결과가 같지만, 이 변환에
+        # 언젠가 평행이동이 붙으면 여기만 조용히 :502/:568 과 갈라진다.
+        tcp = geo.tcp_of(self.grasp, fingertip_from_rg2_base_m(self.width_m))
         self.get_logger().info(
             f'grasp conf={float(confidence):.2f} '
             f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}) '
@@ -490,7 +501,7 @@ class TaskManager(Node):
             self._plan_i = 1
             return
         if self._fut is None:                       # ② 물체 + 병합 ACM 적용
-            tcp = geo.tcp_of(self.grasp, fingertip_length_m(self.width_m))
+            tcp = geo.tcp_of(self.grasp, fingertip_from_rg2_base_m(self.width_m))
             obj = self.moveit.make_object(self.p('object_id'), tcp,
                                           float(self.p('object_radius_m')))
             acm = merge_acm(self._acm, self.p('object_id'), list(self.p('gripper_links')),
@@ -556,7 +567,7 @@ class TaskManager(Node):
             self._to(State.SPEAK_FAIL, '후보 소진')
             return
         self.grasp = self.alternatives.pop(0)
-        tcp = geo.tcp_of(self.grasp, fingertip_length_m(self.width_m))
+        tcp = geo.tcp_of(self.grasp, fingertip_from_rg2_base_m(self.width_m))
         self.get_logger().info(
             f'다음 후보 (남은 {len(self.alternatives)}개) '
             f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f})')
