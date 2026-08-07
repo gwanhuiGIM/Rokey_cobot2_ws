@@ -19,8 +19,8 @@ task_manager:
     ee_link: rg2_base_link
     base_frame: base_link       # ⚠️ world 아님 (planning scene 은 world 를 모른다)
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
-    vel_scale: 0.1              # 실기 첫 시도는 느리게. 익숙해지면 올린다
-    acc_scale: 0.1
+    vel_scale: 0.05              # 실기 첫 시도는 느리게. 익숙해지면 올린다
+    acc_scale: 0.05
     planning_time: 5.0
     planning_attempts: 10
     joint_tolerance: 0.001
