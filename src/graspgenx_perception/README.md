@@ -286,7 +286,7 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 | `image_topic` | `/camera/camera/color/image_raw` | |
 | `publish_overlay` | `true` | |
 | `device` / `conf` / `min_pixels` | `0` / `0.25` / `300` | |
-| `out_dir` | `''` | 씬 4파일을 남길 경로. 비우면 임시 디렉토리 |
+| `out_dir` | `''` | 씬 4파일 저장 경로. 비우면 `<repo>/data/graspgenx_scene` (2026-08-07부터 항상 영구 저장, 임시 디렉토리 아님 — 아래 "라이브 경로" 절) |
 
 ## pick_fsm 과의 연결 — 지금 작동하는가
 
@@ -433,6 +433,40 @@ docker exec -it od_kimkh bash -lc \
 `retina_masks=True` 가 없으면 `masks.data` 가 letterbox 된 모델 해상도로 나온다
 (194×259 입력 → 480×640 마스크, ultralytics 8.4.113 실측). 그 상태로 라벨맵에 인덱싱하면
 `IndexError` 다 — `build_label_map()` 이 먼저 잡아 `retina_masks` 를 지목하는 메시지를 낸다.
+
+### 🔴→✅ 라이브 경로(`/grasp/compute`)가 판단 근거를 안 남기던 문제 — 2026-08-07 수정
+
+**증상(발견 당시)**: `capture_graspgenx_scene` 단독 실행은 `out_dir`가 비어 있으면
+`<repo>/data/graspgenx_scene/<scene>/`에 영구 저장하는데, `grasp_bridge_node.compute()`는
+같은 `out_dir=''` 기본값에서 `tempfile.TemporaryDirectory()`를 쓰고 워커 호출 직후 `finally`
+블록에서 **즉시 지웠다.** `/grasp/compute`를 실기로 불러도 GraspGenX가 뭘 보고 판단했는지
+(rgb.png/seg.png/meta_data.json)를 나중에 열어볼 방법이 없었다 — 이 워크스페이스 어디에도
+`data/graspgenx_scene/`가 존재하지 않았던 이유이기도 하다(`find` 전수조사 0건).
+
+**수정**: `grasp_bridge_node.compute()`에서 임시 디렉토리 분기를 없애고 항상
+`capture_graspgenx_scene.default_out_dir()`(비었으면 이 값, 지정하면 그 경로) 아래에
+영구 저장한다. `scene` 파라미터를 안 바꾸면(기본값 `00`) 호출마다 타임스탬프
+(`YYYYmmdd_HHMMSS`) 하위 디렉토리를 새로 만들어 이전 호출 기록을 덮어쓰지 않는다.
+고정된 씬 이름이 필요하면(재현 테스트 등) `scene` 파라미터를 명시하면 그 이름을 그대로 쓴다.
+
+**수정 중에 딸려나온 두 번째 버그(환경 감지)**: `default_out_dir()`가 `os.path.abspath(__file__)`
+로 "패키지 루트"를 계산했는데, 이 워크스페이스의 기본 빌드 방식(`--symlink-install`)에서는
+`install/setup.bash`가 PYTHONPATH에 `build/graspgenx_perception/graspgenx_perception/`를
+먼저 얹고, 그 안의 각 파일은 `src/`를 가리키는 **심볼릭 링크**다. `abspath`는 링크를 풀지
+않으므로 계산된 경로가 `build/graspgenx_perception/data/graspgenx_scene`가 됐다 — `colcon
+build`/`rm -rf build`로 지워지는 산출물 디렉토리다. `python3 -c` 로 직접 import 해
+`__file__`이 `build/...`로 잡히는 것과, `realpath`로 풀면 `src/graspgenx_perception/...`가
+되는 것을 확인하고 `abspath` → `realpath`로 고쳤다(같은 파일, `default_out_dir()`).
+
+```bash
+# 재확인 (2026-08-07, colcon build PASS 후):
+python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out_dir; print(default_out_dir())"
+# -> /home/kimkh/cobot2_ws/src/graspgenx_perception/data/graspgenx_scene  (수정 전엔 build/ 밑)
+```
+
+`.gitignore:38`의 `data/graspgenx_scene/`가 대상이라 어느 경로든 커밋되지는 않는다.
+회귀 확인: `pytest test_yolo_seg.py`(10개) + `manual_grasp_bridge.py` + `pick_fsm`
+`pytest`(26개) 전부 PASS(2026-08-07).
 
 ## graspx 에 YOLO 를 쓰기 전에
 

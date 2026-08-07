@@ -356,7 +356,7 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 | MoveGroup 액션 **계획**(plan_only) 4구간 | ✅ 확인 | pre_grasp/grasp/lift/place/home 전부 0.02s 내 성공 |
 | 전체 happy path (IDLE→…→HOME→IDLE) | ✅ 확인 | 목업 그리퍼 + plan_only 로 완주 |
 | 승인 게이트 · 제한시간 → ABORT → SAFE_STOP | ✅ 확인 | CLOSE 20s 초과 시 정상 ABORT |
-| **`planning_options.replan` 이 실제로 재계획하는지** | ⚠️ **추론** | MoveIt 소스 구조상 그렇지만 관측한 적 없음. 장애물을 손으로 넣어봐야 확정된다 |
+| **`planning_options.replan` 이 실제로 재계획하는지** | ⚠️ **추론** | MoveIt 소스 구조상 그렇지만 관측한 적 없음. 장애물을 손으로 넣어봐야 확정된다. **게다가 `dry_run:=true`(기본값)에서는 `_move()`가 `plan_only=True`로 호출돼(`task_manager.py:608-612`) 애초에 실행이 안 일어나므로 replan 루프 자체가 안 돈다** — 확인하려면 `dry_run:=false`가 먼저 필요하고, 그건 "실기 실행" 항목과 같은 블로커에 걸린다(2026-08-07 코드 대조로 확인) |
 | **octomap 이 있을 때 grasp pose 계획이 되는지** | ❌ **미검증** | 위 검증은 `octomap:=false` 였다. §4 SCENE_PREP 의 진짜 시험은 여기서 시작한다 |
 | **`gripper_links` 이름이 URDF 와 일치하는지** | ❌ **미검증** | 틀려도 ACM 병합은 성공한다 — 조용히 아무 데도 안 걸린다 |
 | **실기 실행(dry_run:=false)** | ❌ **미검증** | `tool0 → RG2 손끝` 실측(줄자)이 선행 블로커다 (`md/state.md` 0번) |

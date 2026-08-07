@@ -6,7 +6,9 @@
 한 번 부를 때마다:
     1. depth N프레임 수집 → 픽셀별 중앙값 병합
     2. base 프레임 작업공간 박스로 세그멘테이션(신경망 0개)
-    3. 씬 4파일을 임시 디렉토리에 쓰고 **GPU 워커**에 경로 한 줄 전달
+    3. 씬 4파일을 `out_dir`(기본 `<repo>/data/graspgenx_scene`, 호출마다 타임스탬프 하위
+       디렉토리)에 영구 저장하고 **GPU 워커**에 경로 한 줄 전달 — 판단 근거를 나중에도
+       열어볼 수 있어야 한다(2026-08-07, 예전엔 임시 디렉토리에 썼다가 즉시 지웠다)
     4. 워커가 준 grasp(=base_link 프레임)를 도달·접근축·점수로 거르고 1개 선택
     5. `/grasp/best`(PoseStamped) + `/grasp/candidates`(PoseArray) 발행,
        서비스 응답 message 에 요약
@@ -22,8 +24,8 @@
 
 import json
 import os
+import shutil
 import subprocess
-import tempfile
 import threading
 import time
 
@@ -35,7 +37,9 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from std_srvs.srv import Trigger
 
-from graspgenx_perception.capture_graspgenx_scene import SceneCapture, segment, write_scene
+from graspgenx_perception.capture_graspgenx_scene import (
+    SceneCapture, default_out_dir, segment, write_scene,
+)
 
 EXTRA_DEFAULTS = {
     # 워커
@@ -227,27 +231,32 @@ class GraspBridge(SceneCapture):
             return False, diag
         self.get_logger().info(diag)
 
-        # 3) 워커 호출. 씬은 임시 디렉토리 — 남기고 싶으면 out_dir 파라미터를 준다
+        # 3) 워커 호출. 씬은 항상 영구 저장한다 — GraspGenX가 뭘 보고 판단했는지(rgb/seg/meta)를
+        #    호출이 끝난 뒤에도 열어볼 수 있어야 오검출을 진단할 수 있다(2026-08-07, 임시
+        #    디렉토리+즉시 삭제였을 때는 이게 불가능했다). scene id 를 호출마다 마이크로초
+        #    타임스탬프로 잡아 이전 호출 기록을 덮어쓰지 않는다(초 단위면 빠른 재시도가
+        #    충돌할 수 있어 %f 를 붙인다, cross-review 2026-08-07) — `scene` 파라미터를
+        #    명시하면 그 이름을 그대로 쓴다(재현용 고정 씬을 만들 때). 단 `scene='00'`(기본값과
+        #    같은 문자열)을 "명시"해도 구분할 수 없어 타임스탬프로 대체된다 — 고정 씬이
+        #    필요하면 `00` 이외의 이름을 쓸 것.
         # ⚠️ 워커에 넘기는 경로는 **반드시 절대경로**다. 이 노드의 cwd 는 사용자가 ros2 를
         #    실행한 곳이고 워커의 cwd 는 graspgenx_root 다(start_worker). 상대경로를 넘기면
         #    워커가 <graspgenx_root>/output/00 을 찾다가
         #    "FileNotFoundError: No meta_data.json in output/00" 으로 죽는다 (2026-08-07).
-        tmp = None
-        if p['out_dir']:
-            scene_dir = os.path.abspath(
-                os.path.expanduser(os.path.join(p['out_dir'], p['scene'])))
-        else:
-            tmp = tempfile.TemporaryDirectory(prefix='graspgen_scene_')
-            scene_dir = os.path.join(tmp.name, '00')
-        self.get_logger().info(f'씬 저장: {scene_dir}')
+        scene = p['scene'] if p['scene'] != '00' else time.strftime('%Y%m%d_%H%M%S_%f')
+        scene_dir = os.path.abspath(os.path.expanduser(
+            os.path.join(p['out_dir'] or default_out_dir(), scene)))
+        self.get_logger().info(f'씬 저장(영구): {scene_dir}')
         try:
             write_scene(scene_dir, depth, self.color, seg, self.K, T_base_cam, label_map,
                         [p['x_min'], p['y_min'], p['z_min'],
                          p['x_max'], p['y_max'], p['z_max']])
-            res = self.ask_worker(scene_dir, p['worker_timeout_sec'])
-        finally:
-            if tmp is not None:
-                tmp.cleanup()
+        except Exception:
+            # 파일 4개 중 일부만 쓰다 실패하면(디스크 풀 등) 반쪽짜리 씬이 남아
+            # 나중에 진짜 기록과 섞인다 — 실패 시 통째로 지운다(cross-review 2026-08-07).
+            shutil.rmtree(scene_dir, ignore_errors=True)
+            raise
+        res = self.ask_worker(scene_dir, p['worker_timeout_sec'])
         if not res.get('ok'):
             return False, f"워커 오류: {res.get('error')}"
 

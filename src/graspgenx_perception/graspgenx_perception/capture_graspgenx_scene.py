@@ -393,6 +393,24 @@ def segment(depth, K, T_base_cam, p, yolo_labels=None):
     return seg, label_map, '\n'.join(diag)
 
 
+def default_out_dir():
+    """`out_dir` 파라미터가 비었을 때 쓰는 저장 위치.
+
+    설치 경로가 계정마다 다를 수 있어(cobot2_ws 위치) 하드코딩하지 않는다 — 이 파일
+    자신의 경로에서 두 단계 위로 올라가 패키지 소스 루트를 찾는다.
+
+    ⚠️ `abspath`가 아니라 **`realpath`를 써야 한다.** `--symlink-install`(이 워크스페이스
+    기본값)에서 `install/setup.bash`는 `build/<pkg>/<pkg>/`를 PYTHONPATH에 먼저 얹고,
+    그 경로의 각 파일은 `src/`를 가리키는 심볼릭 링크다. `abspath(__file__)`는 심볼릭
+    링크를 풀지 않으므로 결과가 `build/graspgenx_perception/data/graspgenx_scene`가
+    되는데, 이 디렉토리는 `colcon build`/`rm -rf build`로 지워지는 임시 산출물이라
+    저장한 씬이 조용히 사라진다(2026-08-07, `python3 -c` 로 직접 재현·확인). `realpath`로
+    링크를 풀면 진짜 소스 트리(`src/graspgenx_perception`) 밑으로 저장된다.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    return os.path.join(repo, 'data', 'graspgenx_scene')
+
+
 def write_scene(out, depth, color_rgb, seg, K, T, label_map, bounds):
     """loader가 요구하는 파일 4개를 쓴다. 카메라 없이도 테스트할 수 있게 분리했다."""
     os.makedirs(out, exist_ok=True)
@@ -461,9 +479,7 @@ def run(node):
         node.get_logger().error(diag)
         return 1
 
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out = os.path.join(p['out_dir'] or os.path.join(repo, 'data', 'graspgenx_scene'),
-                       p['scene'])
+    out = os.path.join(p['out_dir'] or default_out_dir(), p['scene'])
     write_scene(out, depth, color, seg, K, T, label_map,
                 [p['x_min'], p['y_min'], p['z_min'],
                  p['x_max'], p['y_max'], p['z_max']])
