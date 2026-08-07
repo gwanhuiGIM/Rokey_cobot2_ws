@@ -196,6 +196,14 @@ code .                                          # 이후 VS Code Source Control�
    `grasp_bridge_node.py`가 이 파일을 안 쓰고 폭 계산 없는 자체 `select()`를 따로 쓴다.
    남은 일(import 교체 · `/grasp/best` width_m 추가 · `OnRobotRGOutput` 퍼블리시)은
    [[ws/cobot2/detect_graspx]] §7-10이 단일 출처.
+0-d. **GraspMoE 분기별 점수 캘리브레이션 확인 — 로봇 없이 데이터만으로 된다 (2026-08-07 추가)**
+   판별기가 확산 분기(`diff`)와 기하 분기(`obb`)를 같은 척도로 채점한다는 보장이 없다.
+   (판별기는 데이터셋 음성·on-policy 음성으로도 학습되지만 — 소스 확인 — OBB 격자 후보가
+   그 분포에 있는지는 미확인.)
+   **최소 실험**: 순위 1·2위가 `obb`, 3·4위가 `diff`인 **순위 역전** 프레임을 골라, 상위 `obb`
+   후보를 `corecode/GraspSelection/grasp_selector.py`의 재충돌 필터에 통과시킨다. 점수 0.9+인데
+   충돌로 탈락하면 → **그 분기 점수를 못 믿는다는 증거**다. `branch_tags`는 이미 출력에 있다.
+   근거·배경은 [[ws/cobot2/2026-08-07-nvblox-curobo-digest]] §9-2(E).
 
 1. **README 4절 체크1~3 명령 실측** — `tf2_echo base_link camera_link`, `topic hz .../points`,
    `topic echo /dsr01/joint_states`는 **아직 한 번도 실행 안 됨**(README에 ⚠️ 미검증 표기해 둠).
