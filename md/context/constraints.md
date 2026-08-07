@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:40
+updated: 2026-08-07 10:40
 status:  live
 owns:    실기·현장에서 확인된 사실 (하드웨어, TF, MoveIt, QoS, 리소스)
 -->
@@ -844,8 +844,9 @@ depth 마스크 픽셀의 평균은 **보이는 표면**의 무게중심이다. 
 
 ### `real_world` 씬 포맷 계약 — 우리 캡처가 이 규약을 따른다 (2026-08-05, loader 왕복 검증)
 
-`scripts/capture_graspgenx_scene.py` → `demo_scene_pc.py` 경로. 합성 장면으로 GraspGenX **자체 loader**를
-통과시켜 확인했다(`scripts/test_scene_roundtrip.py`, PASS).
+`graspgenx_perception/capture_graspgenx_scene.py` → `demo_scene_pc.py` 경로. 합성 장면으로
+GraspGenX **자체 loader**를 통과시켜 확인했다
+(`src/graspgenx_perception/test/manual_scene_roundtrip.py`, PASS).
 
 | 파일 | 규약 |
 |---|---|

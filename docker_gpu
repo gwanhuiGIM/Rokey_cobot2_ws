@@ -9,7 +9,6 @@ cd ~/cobot2_ws/isaac_ros-dev/src/isaac_ros_common/scripts
 이미 컨테이너가 실행 중이면 새로 빌드하지 않고 바로 새 bash 세션을 열어줍니다. 여러 터미널에서 동시에 같은 컨테이너 안에 각각 셸을 띄우고 싶을 때(예: 한쪽은 ros2 launch, 다른 쪽은 ros2 topic echo) 이 방법이 제일 편합니다.
 
 방법 2 — docker exec 직접 사용
-
 bash
 sudo docker exec -it isaac_ros_dev-x86_64-container bash
 
@@ -18,12 +17,10 @@ sudo docker exec -it isaac_ros_dev-x86_64-container bash
 끄기 / 켜기
 
 중지 (컨테이너는 유지, 프로세스만 정지)
-
 bash
 sudo docker stop isaac_ros_dev-x86_64-container
 
 재시작 (멈춘 컨테이너를 다시 켬 — 내부 상태/설치한 패키지 유지됨)
-
 bash
 sudo docker start isaac_ros_dev-x86_64-container
 # 켠 뒤 셸 붙이기

@@ -23,7 +23,6 @@
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -36,8 +35,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from std_srvs.srv import Trigger
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from capture_graspgenx_scene import SceneCapture, segment, write_scene  # noqa: E402
+from graspgenx_perception.capture_graspgenx_scene import SceneCapture, segment, write_scene
 
 EXTRA_DEFAULTS = {
     # 워커
@@ -230,12 +228,18 @@ class GraspBridge(SceneCapture):
         self.get_logger().info(diag)
 
         # 3) 워커 호출. 씬은 임시 디렉토리 — 남기고 싶으면 out_dir 파라미터를 준다
+        # ⚠️ 워커에 넘기는 경로는 **반드시 절대경로**다. 이 노드의 cwd 는 사용자가 ros2 를
+        #    실행한 곳이고 워커의 cwd 는 graspgenx_root 다(start_worker). 상대경로를 넘기면
+        #    워커가 <graspgenx_root>/output/00 을 찾다가
+        #    "FileNotFoundError: No meta_data.json in output/00" 으로 죽는다 (2026-08-07).
         tmp = None
         if p['out_dir']:
-            scene_dir = os.path.join(p['out_dir'], p['scene'])
+            scene_dir = os.path.abspath(
+                os.path.expanduser(os.path.join(p['out_dir'], p['scene'])))
         else:
             tmp = tempfile.TemporaryDirectory(prefix='graspgen_scene_')
             scene_dir = os.path.join(tmp.name, '00')
+        self.get_logger().info(f'씬 저장: {scene_dir}')
         try:
             write_scene(scene_dir, depth, self.color, seg, self.K, T_base_cam, label_map,
                         [p['x_min'], p['y_min'], p['z_min'],

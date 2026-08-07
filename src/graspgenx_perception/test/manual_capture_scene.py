@@ -1,18 +1,21 @@
 """합성 장면(테이블 평면 + 상자 2개)으로 segment()/write_scene() 검증.
 
-실행:  python3 scripts/test_capture_graspgenx_scene.py [출력디렉토리]
+실행:  source install/setup.bash
+       python3 src/graspgenx_perception/test/manual_capture_scene.py [출력디렉토리]
        (시스템 파이썬. 카메라·로봇·GPU 불필요)
 
 2단계 검증의 1단계다. 2단계는 여기서 쓴 디렉토리를 GraspGenX venv 의 loader 로
-실제로 읽어보는 것 — scripts/test_scene_roundtrip.py 참고.
+실제로 읽어보는 것 — 형제 파일 manual_scene_roundtrip.py 참고.
+
+pytest 가 수집하지 않도록 `manual_` 접두어를 쓴다 — 최상위에서 `sys.argv` 를 읽고
+`rclpy.init()` 까지 부르는 스크립트형이라 `colcon test` 에 섞이면 안 된다.
 """
 import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from capture_graspgenx_scene import (  # noqa: E402
+from graspgenx_perception.capture_graspgenx_scene import (
     DEFAULTS, quat_to_matrix, segment, to_base, write_scene,
 )
 
@@ -97,7 +100,7 @@ print(f'wrote {out}')
 
 # ROS 파라미터 타입 강제 — `-p scene:=00`(YAML이 정수 0으로 파싱)이 죽지 않아야 한다
 import rclpy  # noqa: E402
-from capture_graspgenx_scene import SceneCapture  # noqa: E402
+from graspgenx_perception.capture_graspgenx_scene import SceneCapture  # noqa: E402
 
 rclpy.init(args=['test', '--ros-args',
                  '-p', 'scene:=00',        # INTEGER 0 으로 들어온다 -> '00'

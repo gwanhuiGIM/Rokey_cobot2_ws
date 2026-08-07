@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """GraspGenX GPU 워커 — 모델을 한 번만 올려놓고 stdin 으로 씬을 받는다.
 
-실행 (반드시 GraspGenX venv 안에서):
+실행 (반드시 GraspGenX venv 안에서. 보통은 grasp_bridge_node 가 자식 프로세스로 띄운다):
     cd ~/cobot2_ws/isaac_ros-dev/src/GraspGenX
-    uv run python ~/cobot2_ws/scripts/graspgen_worker.py --gripper onrobot_RG2
+    uv run python \
+      ~/cobot2_ws/src/graspgenx_perception/graspgenx_perception/graspgen_worker.py \
+      --gripper onrobot_RG2
+
+이 파일은 패키지 디렉토리에 있지만 **rclpy 를 import 하지 않는다.** 형제 모듈이 아니라
+`grasp_bridge_node` 가 경로로 실행하는 별도 프로세스다(`worker_script` 파라미터).
 
 프로토콜 (한 줄 = 한 요청):
     stdin  <- 씬 디렉토리 경로 한 줄

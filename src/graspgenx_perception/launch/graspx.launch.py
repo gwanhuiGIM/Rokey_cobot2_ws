@@ -51,10 +51,11 @@ def generate_launch_description():
         }],
     )
 
-    # scripts/grasp_bridge_node.py 를 yolo_seg 의 실행 파일로 심어뒀다 (setup.py 참고).
     # 이 노드는 로봇을 움직이지 않는다 — grasp 포즈를 계산해 발행할 뿐이다.
+    # 실행 파일 이름에 `.py` 가 없다: 소스가 패키지 안으로 들어오면서 console_scripts
+    # 진입점이 됐다 (2026-08-07, setup.py 주석 참고).
     bridge = Node(
-        package='graspgenx_perception', executable='grasp_bridge_node.py', name='grasp_bridge_node',
+        package='graspgenx_perception', executable='grasp_bridge_node', name='grasp_bridge_node',
         output='screen',
         condition=IfCondition(cfg['run_bridge']),
         parameters=[{

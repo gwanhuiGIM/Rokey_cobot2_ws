@@ -29,7 +29,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
-# 라벨맵 규약은 scripts/capture_graspgenx_scene.py 와 맞춘다.
+# 라벨맵 규약은 형제 모듈 capture_graspgenx_scene.py 와 맞춘다.
 # GraspGenX 로더가 `obj_` 접두어 라벨만 보므로 obj_1 -> 101, obj_2 -> 102 ...
 LABEL_OBJ_BASE = 100
 # 라벨맵이 uint8 이라 100+156 은 조용히 0 으로 랩어라운드한다.

@@ -1,15 +1,15 @@
 """grasp_bridge_node 의 순수 함수 검증 (카메라·GPU·로봇 불필요).
 
-    python3 scripts/test_grasp_bridge.py
-"""
-import os
-import sys
+    source install/setup.bash
+    python3 src/graspgenx_perception/test/manual_grasp_bridge.py
 
+pytest 가 수집하지 않도록 `manual_` 접두어를 쓴다 — 최상위에서 assert 를 돌리는
+스크립트형이라 `colcon test` 에 섞이면 안 된다 (형제 파일 manual_roundtrip.py 와 같은 규칙).
+"""
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from grasp_bridge_node import EXTRA_DEFAULTS, pose_msg, select  # noqa: E402
+from graspgenx_perception.grasp_bridge_node import EXTRA_DEFAULTS, pose_msg, select
 
 # ---- 1. pose_msg: 4x4 -> quaternion. 부호 하나가 grasp 자세를 뒤집는다 ----
 rng = np.random.default_rng(1)

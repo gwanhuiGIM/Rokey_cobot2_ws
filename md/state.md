@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:40
+updated: 2026-08-07 11:05
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -28,8 +28,14 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 | 접근축 `R[2,2]` | −1.00 (수직) |
 | grasp 후보 | 12~32개 (씬에 따라) |
 
-- 파일: `scripts/{capture_graspgenx_scene,graspgen_worker,grasp_bridge_node}.py` + 테스트 3종.
-  **아직 ROS 패키지가 아니다**(`scripts/` 단독 실행). 동작이 굳으면 패키지로 올린다.
+- 파일: `src/graspgenx_perception/graspgenx_perception/{capture_graspgenx_scene,graspgen_worker,grasp_bridge_node}.py`
+  + 수동 검증 3종(`test/manual_{capture_scene,grasp_bridge,scene_roundtrip}.py`).
+  **2026-08-07 부터 ROS 패키지다** — 이전에는 워크스페이스 `scripts/` 단독 실행이었고
+  `setup.py` 가 바깥 경로를 `scripts=[...]` 로 심었다. 지금은 소스가 전부 패키지 안에 있고
+  진입점이 `console_scripts` 라 **실행 파일 이름에서 `.py` 가 빠졌다**:
+  `ros2 run graspgenx_perception {grasp_bridge_node,capture_graspgenx_scene}`.
+  이전↔현재 경로 대조표는 `src/graspgenx_perception/README.md` "graspx 와 함께 띄우기" 절에 있다
+  (vault 밖이라 위키링크가 아니라 저장소 경로로 적는다).
 - 계약·튜닝값·함정은 [[ws/cobot2/detect_graspx]]가 단일 출처다(출력 규약 §3, 폭 계산·1/10mm 함수 §5, 상류 버그 §6). 실측 사실(체크포인트 sha256, VRAM 측정치)만 [[ws/cobot2/context/constraints]] "GraspGenX 관련"에 있다.
 - ⛔ **실기 모션 전 블로커 1개**: `tool0` 플랜지면 → RG2 손끝 **실측 거리**.
   URDF는 190 mm(어댑터 오프셋 0), 매뉴얼은 220 mm + 브라켓 10 mm.
@@ -39,8 +45,9 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 
 ## 🟢 cuMotion + nvblox 실기 파이프라인 전 구간 관통 (2026-08-06) — 로봇은 아직 안 움직였다
 
-> 📌 **실행 명령어·노드 지도·단계별 검증은 [[ws/cobot2/testcommand]]가 단일 출처다.**
+> 📌 **실행 명령어·노드 지도·단계별 검증은 `config/testcommand.md`가 단일 출처다.**
 > 여기서 명령을 다시 적지 않는다.
+> ⚠️ 이 문서는 vault(`md/`) 밖에 있어 **위키링크로 못 건다** — 아래 "열려 있는 이슈" 참고.
 
 ```
 카메라 ─▶ robot_segmenter ─▶ nvblox(esdf_mode:=3d) ─(서비스)─▶ cumotion_planner ─▶ move_group
@@ -112,6 +119,15 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
+- 🟡 **`testcommand.md`가 vault 밖에 있다** (2026-08-07). 저장소 루트 → `config/testcommand.md`로
+  옮겨졌는데, 이 문서는 **md/ 문서 형식으로 쓰여 있다** — meta 헤더(`status: live`,
+  `owns: 실행 명령어 · 노드 지도 · 단계별 검증 명령`)가 있고 본문이
+  `[[ws/cobot2/context/constraints]]`·`[[ws/cobot2/plans/2026-08-05-cumotion-bringup]]`을 건다.
+  `md/` 밖에 있으면 **세 가지가 동시에 깨진다**: ① 이 문서를 `ws/cobot2/testcommand` 위키링크로
+  못 부른다(위 "cuMotion" 절이 그래서 저장소 경로로 바뀌었다) ② 이 문서가 내보내는 위키링크 2개가
+  Obsidian에서 안 걸린다 ③ `doc_check.sh`가 md/만 훑으므로 이 문서는 **검사 대상에서 빠진다**
+  (meta·문서 지도·live 방치 전부). 정본 해결은 `md/testcommand.md`로 옮기고 `md/README.md`
+  문서 지도에 등재하는 것. 옮기지 않기로 정했다면 위 세 가지를 감수하는 결정임을 여기 적어둔다.
 - 🔴 **세 계정이 동시 로그인해 같은 ROS 도메인(93)과 같은 GPU를 쓴다** (2026-08-06 실측).
   `joonwon`이 띄운 `move_group`이 내 `ros2 node list`에 그대로 나오고, `kill`은 uid가 달라 실패한다.
   **`ps`에 `user`를 넣지 않으면 남의 프로세스를 내 것으로 착각한다.**

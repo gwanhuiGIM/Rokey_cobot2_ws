@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:40
+updated: 2026-08-07 10:40
 status:  live
 owns:    GraspGenX 출력 규약(§3) · 그리퍼 폭 계산·1/10mm 함수(§5) · 상류 버그(§6) · grasp_selector.py 연결 상태(§7-10)
 -->
@@ -362,7 +362,7 @@ eye-to-hand AX=XB에서 TCP 오프셋은 `A_i` 계산에서 소거되므로 **`:
 - [ ] **7.** TCP 0.18m 오프셋 부호 검증 — **RViz에서. 실기 아님** (§3-2)
 - [ ] **8.** SAM 마스크 → `seg.png` 포맷 어댑터 작성
 - [ ] **9.** (A안 동작 후) CAD 확보된 물체에 한해 B안 검토
-- [ ] **10.** `scripts/grasp_bridge_node.py`의 자체 `select()`(L93~124, 폭 계산·`rgwd`·재충돌 필터
+- [ ] **10.** `graspgenx_perception/grasp_bridge_node.py`의 자체 `select()`(L93~124, 폭 계산·`rgwd`·재충돌 필터
       없음)를 `corecode/GraspSelection/grasp_selector.py`의 `select_grasps()`로 교체
       (2026-08-06 코드 감사로 발견). **알고리즘은 이미 있다(§5-3 위 박스) — 새로 짤 게 아니라
       import 배선만 하면 된다.** 남은 세 조각:

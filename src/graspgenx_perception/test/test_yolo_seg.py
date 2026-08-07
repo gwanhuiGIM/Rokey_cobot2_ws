@@ -90,10 +90,11 @@ def test_shape_mismatch_raises_with_actionable_message():
 
 
 def test_max_objects_matches_capture_script():
-    """scripts/capture_graspgenx_scene.py 와 같은 상한이어야 라벨 규약이 일치한다."""
+    """형제 모듈 capture_graspgenx_scene.py 와 같은 상한이어야 라벨 규약이 일치한다."""
     import pathlib
     import re
-    src = pathlib.Path(__file__).resolve().parents[3] / 'scripts' / 'capture_graspgenx_scene.py'
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / 'graspgenx_perception' / 'capture_graspgenx_scene.py')
     if not src.exists():
         pytest.skip('capture_graspgenx_scene.py 가 없다')
     m = re.search(r'^MAX_OBJECTS\s*=\s*(\d+)', src.read_text(), re.M)

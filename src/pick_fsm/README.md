@@ -59,8 +59,8 @@ ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false
 # 3) 카메라 + 캘리브 TF (인식을 쓸 때만)
 ros2 launch m0609_rg2_bringup camera.launch.py
 
-# 4) grasp 공급원 (지금은 아직 패키지가 아니다 — scripts/ 단독 실행)
-python3 scripts/grasp_bridge_node.py
+# 4) grasp 공급원 (2026-08-07 부터 graspgenx_perception 패키지의 실행 파일이다)
+ros2 run graspgenx_perception grasp_bridge_node
 
 # 5) 상태머신 + robot_safety_node (같은 launch 로 같이 뜬다, §8)
 ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
@@ -120,7 +120,7 @@ ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 승인은 여전히
 |---|---|---|
 | `/get_keyword` | `std_srvs/Trigger` | `voice_processing` (기존) |
 | `/grasp/compute_grasp` | `pick_fsm_msgs/ComputeGrasp` | **아직 없음** — 정본 계약 |
-| `/grasp/compute` | `std_srvs/Trigger` | `scripts/grasp_bridge_node.py` (현행) |
+| `/grasp/compute` | `std_srvs/Trigger` | `graspgenx_perception` 의 `grasp_bridge_node` (현행) |
 | `/grasp/best`, `/grasp/candidates` | `PoseStamped`, `PoseArray` | 같은 브리지 |
 | `/compute_ik` | `moveit_msgs/GetPositionIK` | `move_group` |
 | `/move_action` | `moveit_msgs/MoveGroup` (액션) | `move_group` |

@@ -3,9 +3,13 @@
 왜 필요한가: 스키마를 소스 읽어서 맞췄을 뿐 실제로 로드해본 적이 없다.
 카메라가 오기 전에 포맷 오류를 여기서 잡는다 — 실기 시간에 디버깅하지 않으려고.
 
-실행 (GraspGenX venv 안에서):
+실행 (GraspGenX venv 안에서. 이 파일만 rclpy 가 아니라 `graspgenx` 를 import 한다):
     cd ~/cobot2_ws/isaac_ros-dev/src/GraspGenX
-    uv run python ~/cobot2_ws/scripts/test_scene_roundtrip.py /tmp/graspgenx_scene_test/00
+    uv run python ~/cobot2_ws/src/graspgenx_perception/test/manual_scene_roundtrip.py \
+        /tmp/graspgenx_scene_test/00
+
+`manual_` 접두어가 필수다 — 호스트 시스템 파이썬엔 `graspgenx` 가 없어서 pytest 가
+수집하면 `colcon test` 가 통째로 깨진다.
 """
 import sys
 

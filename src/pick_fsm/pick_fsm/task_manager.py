@@ -71,7 +71,7 @@ class TaskManager(Node):
 
         # ── grasp 공급원 ──────────────────────────────────
         # 문서의 정본 계약은 ComputeGrasp 다. 하지만 지금 실제로 도는 건
-        # scripts/grasp_bridge_node.py 의 Trigger 경로다(아직 패키지도 아니다).
+        # graspgenx_perception 의 grasp_bridge_node 가 내는 Trigger 경로다.
         # 둘 다 지원하지 않으면 이 FSM 은 "언젠가 돌 코드"가 된다.
         self.grasp_cli = None
         if p['grasp_source'] == 'compute_grasp':
@@ -413,7 +413,7 @@ class TaskManager(Node):
                                list(res.alternatives))
             return
 
-        # legacy_trigger: 지금 scripts/grasp_bridge_node.py 가 제공하는 계약.
+        # legacy_trigger: 지금 graspgenx_perception 의 grasp_bridge_node 가 제공하는 계약.
         # 응답에 포즈가 없고 /grasp/best 로 따로 나온다 → **이번 호출 이후에 들어온** 것만 쓴다.
         # 직전 요청의 포즈를 재활용하면 아무 로그도 없이 엉뚱한 물체를 집는다.
         if self._fut is None:
