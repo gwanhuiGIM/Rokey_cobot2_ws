@@ -57,16 +57,19 @@ stateDiagram-v2
     PERCEIVE --> SPEAK_FAIL : grasp 없음 · 프레임 불일치
     SCENE_PREP --> PLAN : 물체 등록 + ACM 병합
     PLAN --> WAIT_APPROVAL : IK 3점 성공
-    WAIT_APPROVAL --> APPROACH : /pick/approve ✋
+    WAIT_APPROVAL --> STOW : /pick/approve ✋
+    STOW --> APPROACH : 그리퍼 닫기 + settle
 
-    APPROACH --> DESCEND : pre_grasp 도달
+    APPROACH --> OPEN_GRIPPER : pre_grasp 도달
+    OPEN_GRIPPER --> DESCEND : 그리퍼 열기 + settle
     DESCEND --> CLOSE : grasp 도달
     CLOSE --> VERIFY : 그리퍼 닫기 + settle
     VERIFY --> LIFT : grip 감지 → 물체 attach
     LIFT --> PLACE
     PLACE --> RELEASE : place_joints_deg 도달
     RELEASE --> HOME : 그리퍼 열기 + detach
-    HOME --> IDLE : home_joints_deg 도달
+    HOME --> IDLE : home_joints_deg 도달 (사이클 정상 종료)
+    HOME --> PERCEIVE : home_joints_deg 도달 (RELEASE_RETRY 경유)
 
     PLAN --> NEXT_CANDIDATE : IK 실패 · 도달범위 밖
     APPROACH --> NEXT_CANDIDATE : motion_retries 소진
@@ -75,13 +78,21 @@ stateDiagram-v2
     NEXT_CANDIDATE --> SPEAK_FAIL : 후보 소진
 
     VERIFY --> RELEASE_RETRY : 파지 실패
-    RELEASE_RETRY --> PERCEIVE : 열고 재인식 · grip_retries 이내
+    RELEASE_RETRY --> HOME : 열고 홈 복귀 · grip_retries 이내
     RELEASE_RETRY --> ABORT : grip_retries 초과
 
     SPEAK_FAIL --> LISTENING : voice_enabled=true
     SPEAK_FAIL --> IDLE : voice_enabled=false
     ABORT --> SAFE_STOP
-    SAFE_STOP --> IDLE : /pick/reset
+    SAFE_STOP --> HOME : /pick/reset
+
+    note right of HOME
+        RELEASE_RETRY 나 SAFE_STOP 에서 곧장 PERCEIVE/IDLE 로 가지 않고 여기를 거친다.
+        팔이 물체 높이·작업공간 박스 안에 남은 채 재촬영하면 그리퍼 자신이 물체로
+        오인식된다(capture_graspgenx_scene.py 세그멘테이션은 팔을 XY 로 못 빼고
+        높이로만 구분한다, 2026-08-07). task_manager._home_next 가 도착 후 목적지
+        (IDLE/PERCEIVE) 를 정한다.
+    end note
 
     note right of ABORT
         SPEAK_FAIL · ABORT · SAFE_STOP 을 뺀 모든 상태에서 ABORT 로 갈 수 있다.
@@ -105,6 +116,7 @@ stateDiagram-v2
 |---|---|---|
 | `PLAN --> APPROACH : 사용자 승인 ✋` (전이 라벨) | `WAIT_APPROVAL` **상태** | 승인 대기는 시간이 흐르는 구간이다. 상태가 아니면 `/pick/state` 를 봐도 "사람을 기다리는 중"인지 알 수 없다 |
 | `APPROACH` 안에 EXECUTING/MONITOR/STOP_REPLAN/WAITING 서브상태 | 서브상태 없음 | move_group 의 `PlanExecution` 이 그 루프를 이미 돈다 (§4 참고). 두 겹으로 구현하면 서로 싸운다 |
+| 그리퍼 열기/닫기 시점 명시 없음 | `STOW`(닫기) → `APPROACH` → `OPEN_GRIPPER`(열기) → `DESCEND` | 그리퍼가 벌어진 채로 pre-grasp 까지 장거리 이동하면 주변 물체와 부딪힐 폭이 커진다. 이동 중엔 닫아 폭을 줄이고, pre-grasp 도착 후 하강 직전에만 연다 |
 
 ## 2. 실행
 
@@ -141,7 +153,7 @@ rqt --standalone pick_fsm
 ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서만)
 ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인
 ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
-ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → IDLE
+ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → HOME → IDLE
 ros2 topic echo /pick/state                               # 현재 상태
 ros2 service call /safety/stop            std_srvs/srv/Trigger {}   # 즉시 정지 (§8)
 ros2 service call /safety/enter_backdrive std_srvs/srv/Trigger {}   # 사람이 팔을 손으로 밀 수 있게
@@ -188,7 +200,7 @@ python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 23개 �
 | `/pick/start` | `std_srvs/Trigger` | IDLE 에서만 받는다 |
 | `/pick/approve` | `std_srvs/Trigger` | `WAIT_APPROVAL` 에서만 받는다 |
 | `/pick/abort` | `std_srvs/Trigger` | 진행 중 goal 을 취소하고 SAFE_STOP |
-| `/pick/reset` | `std_srvs/Trigger` | SAFE_STOP → IDLE |
+| `/pick/reset` | `std_srvs/Trigger` | SAFE_STOP → HOME → IDLE (팔을 홈으로 복귀시킨 뒤 대기) |
 | `/pick/robot_state_code` | `std_msgs/Int8` | **`robot_safety_node`가 발행** — `task_manager`는 이 값이 안전정지류(§8)면 자동으로 abort 한다 |
 
 ### 이 노드가 쓰는 것

@@ -62,11 +62,11 @@ realsense_pointcloud:
   #      약 8 px이 덮으므로(D435i 87° FOV / 424 px) subsample 3에서도 voxel당 점이 남는다.
   #      지도는 거의 그대로인데 레이캐스트만 3~9배가 된다.
   #   "장애물 반영이 느리다"의 손잡이는 아래 max_update_rate 하나다. 여기가 아니다.
-  point_subsample: 4
+  point_subsample: 3
 
   # [튜닝] 로봇 자기 몸을 클라우드에서 지울 때 링크를 얼마나 부풀릴지.
   # 자기 팔이 장애물로 잡혀 계획이 실패하면 padding_offset을 키운다(단위 m).
-  padding_offset: 0.1
+  padding_offset: 0.15
   padding_scale: 2.5
 
   # [튜닝] octomap 갱신 주파수(Hz). **RViz에서 체감하는 "장애물 반영 지연"의 상한이 여기다** —

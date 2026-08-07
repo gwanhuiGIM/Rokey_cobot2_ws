@@ -33,6 +33,9 @@ setup(
         'console_scripts': [
             # ⚠️ 로봇이 실제로 움직이는 노드다. 항상 mode:=check 를 먼저 돌린다.
             'dynamic_avoid = cumotion.dynamic_avoid:main',
+            # ⚠️ 이것도 로봇이 실제로 움직인다. arm.py 를 안 쓰는 독립형 재계획 루프이고,
+            #    check 모드가 없으니 vel_scale 을 낮춘 채로 시작한다.
+            'reactive_replan = cumotion.reactive_replan:main',
         ],
     },
 )

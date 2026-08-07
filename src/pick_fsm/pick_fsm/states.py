@@ -23,7 +23,9 @@ class State(Enum):
     PLAN = auto()            # pre-grasp / grasp / lift 3점 IK
     NEXT_CANDIDATE = auto()  # alternatives 에서 다음 후보 꺼내기 (GPU 재호출 없음)
     WAIT_APPROVAL = auto()   # ✋ 사람이 /pick/approve 를 부를 때까지 정지
-    APPROACH = auto()        # pre-grasp 로 이동 (실행 구간)
+    STOW = auto()            # APPROACH 이동 전 그리퍼를 닫는다 — 이동 중 폭을 줄여 주변과의 충돌을 피한다
+    APPROACH = auto()        # pre-grasp 로 이동 (실행 구간, 그리퍼는 닫힌 채)
+    OPEN_GRIPPER = auto()    # pre-grasp 도착 후, 하강 전에 그리퍼를 연다
     DESCEND = auto()         # grasp pose 로 하강
     CLOSE = auto()           # 그리퍼 닫기
     VERIFY = auto()          # 잡혔는지 확인
@@ -45,19 +47,26 @@ TRANSITIONS: dict[State, set[State]] = {
     State.SCENE_PREP:     {State.PLAN, State.ABORT},
     State.PLAN:           {State.WAIT_APPROVAL, State.NEXT_CANDIDATE, State.ABORT},
     State.NEXT_CANDIDATE: {State.PLAN, State.SPEAK_FAIL, State.ABORT},
-    State.WAIT_APPROVAL:  {State.APPROACH, State.ABORT},
-    State.APPROACH:       {State.DESCEND, State.NEXT_CANDIDATE, State.ABORT},
+    State.WAIT_APPROVAL:  {State.STOW, State.ABORT},
+    State.STOW:           {State.APPROACH, State.ABORT},
+    State.APPROACH:       {State.OPEN_GRIPPER, State.NEXT_CANDIDATE, State.ABORT},
+    State.OPEN_GRIPPER:   {State.DESCEND, State.ABORT},
     State.DESCEND:        {State.CLOSE, State.NEXT_CANDIDATE, State.ABORT},
     State.CLOSE:          {State.VERIFY, State.ABORT},
     State.VERIFY:         {State.LIFT, State.RELEASE_RETRY, State.ABORT},
-    State.RELEASE_RETRY:  {State.PERCEIVE, State.ABORT},
+    # RELEASE_RETRY, SAFE_STOP 모두 곧장 PERCEIVE/IDLE 로 가지 않고 HOME 을 거친다 —
+    # 팔이 작업공간 박스 안(물체 높이)에 남은 채 재촬영하면 그리퍼 자신이 물체로
+    # 오인식된다 (2026-08-07 발견: capture_graspgenx_scene.py 의 세그멘테이션은 팔을
+    # XY 로 못 빼고 높이로만 구분한다). HOME 도착 후 어디로 갈지는
+    # task_manager._home_next 가 정한다.
+    State.RELEASE_RETRY:  {State.HOME, State.ABORT},
     State.LIFT:           {State.PLACE, State.ABORT},
     State.PLACE:          {State.RELEASE, State.ABORT},
     State.RELEASE:        {State.HOME, State.ABORT},
-    State.HOME:           {State.IDLE, State.ABORT},
+    State.HOME:           {State.IDLE, State.PERCEIVE, State.ABORT},
     State.SPEAK_FAIL:     {State.IDLE, State.LISTENING},
     State.ABORT:          {State.SAFE_STOP},
-    State.SAFE_STOP:      {State.IDLE},
+    State.SAFE_STOP:      {State.HOME},
 }
 
 #: 로봇이 실제로 움직일 수 있는 상태. ABORT 시 진행 중인 goal 을 취소해야 하는 구간이다.

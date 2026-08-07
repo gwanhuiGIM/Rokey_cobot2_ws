@@ -155,7 +155,8 @@ def test_전이표의_목적지도_전부_정의된_상태다():
 
 def test_문서의_주요_경로가_허용된다():
     path = [State.IDLE, State.LISTENING, State.PERCEIVE, State.SCENE_PREP, State.PLAN,
-            State.WAIT_APPROVAL, State.APPROACH, State.DESCEND, State.CLOSE, State.VERIFY,
+            State.WAIT_APPROVAL, State.STOW, State.APPROACH, State.OPEN_GRIPPER, State.DESCEND,
+            State.CLOSE, State.VERIFY,
             State.LIFT, State.PLACE, State.RELEASE, State.HOME, State.IDLE]
     for a, b in zip(path, path[1:]):
         assert is_allowed(a, b), f'{a.name} -> {b.name} 가 막혀 있다'
@@ -166,9 +167,13 @@ def test_실패_경로도_허용된다():
     assert is_allowed(State.NEXT_CANDIDATE, State.PLAN)
     assert is_allowed(State.NEXT_CANDIDATE, State.SPEAK_FAIL)
     assert is_allowed(State.VERIFY, State.RELEASE_RETRY)
-    assert is_allowed(State.RELEASE_RETRY, State.PERCEIVE)
+    # RELEASE_RETRY/SAFE_STOP 은 곧장 PERCEIVE/IDLE 로 가지 않고 HOME 을 거친다 —
+    # 팔이 물체 높이에 남은 채 재촬영하면 그리퍼가 물체로 오인식된다(2026-08-07).
+    assert is_allowed(State.RELEASE_RETRY, State.HOME)
+    assert is_allowed(State.HOME, State.PERCEIVE)
     assert is_allowed(State.ABORT, State.SAFE_STOP)
-    assert is_allowed(State.SAFE_STOP, State.IDLE)
+    assert is_allowed(State.SAFE_STOP, State.HOME)
+    assert is_allowed(State.HOME, State.IDLE)
 
 
 def test_지름길은_막혀_있다():

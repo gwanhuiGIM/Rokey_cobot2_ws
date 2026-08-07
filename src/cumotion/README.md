@@ -1,8 +1,9 @@
 <!-- meta
 updated: 2026-08-07
-status:  live (2026-08-07 GPU PC 실기 첫 실행 완료. 인프라 전 구간 OK, **회피는 미검증**.
-         미해결 2건: INVALID_MOTION_PLAN(-2) 13%, IK_FAIL. 0~0-5 절이 전부다)
-next:    0-4 절 "이어서 할 것" 1번부터 — RViz /curobo/voxels 육안 확인
+status:  live (2026-08-07 GPU PC 실기. 루프 결함은 **해결**(60초 타임아웃 → 17.0초, 0-1절).
+         미해결 3건: 복셀 한 자릿수(0-2b), INVALID_MOTION_PLAN(-2) 6~17%, 회피 자체 미검증)
+next:    0-4 절 1번 — config/cumotion_planner.yaml 의 grid z 하한을 -0.35 로 (테이블 실측 -0.30)
+warn:    config/nvblox_realtime.yaml 이 이분법 실험 상태로 남아 있다 → 0-2b 마지막 표 참고
 owns:    MoveIt+cuMotion 스택의 파이썬 제어 · 실행 중 재계획 루프 설계 · 이 패키지의 배치/실행 위치
 -->
 
@@ -65,17 +66,29 @@ owns:    MoveIt+cuMotion 스택의 파이썬 제어 · 실행 중 재계획 루�
 
 ---
 
-## 0-1. 수정 후 첫 실행 (같은 날, `swap_threshold_rad: 0.05`)
+## 0-1. ✅ 수정 검증 — `swap_threshold_rad` 튜닝 (같은 날)
 
-**`_same_path()` 는 동작한다. 다만 문턱이 너무 작다.**
+**루프 결함은 해결됐다.** 같은 목표(`[45,0,90,0,90,0]` deg), `vel:=0.15`:
 
+| 설정 | 도착 | 교체 | 생략 | 이음새 max | `-2` 실패율 |
+|---|---|---|---|---|---|
+| 수정 전 (교체 무조건) | ❌ **60초 타임아웃** | 155 | — | 0.037 | 23/179 (13%) |
+| 문턱 0.05 | ✅ 35.6초 | 50 | 36 | 0.067 | 18/105 (17%) |
+| **문턱 0.12** | ✅ **17.0초** | **9** | 36 | 0.073 | **3/49 (6%)** |
+| `static:=true` (기준) | ✅ 7.7초 | 0 | — | — | — |
+
+**문턱을 올릴수록 교체가 줄고 도착이 빨라진다.** 이음새가 0.037 → 0.073 으로 커진 것도
+**좋은 신호**다 — 로봇이 실제로 속도를 내고 있다는 뜻이다(수정 전엔 속도가 붙질 못했다).
+
+🔴 아직 static 의 **2.2배**(17.0 vs 7.7초)다. 문턱을 더 올릴 여지가 있으나, 너무 올리면
+장애물이 와도 교체를 안 하게 된다. **실제 장애물 투입 실험 전까지는 상한을 모른다.**
+
+⚠️ 계획시간이 197 ms → **약 400 ms** 로 늘어난 시점이 있었다(nvblox 감쇠 파라미터를 되돌린 뒤).
+그러면 `lookahead_s: 0.35` 가 부족해진다 — `mode:=check` 가 자동으로 경고해준다:
 ```
-궤적 교체 9회 (동일해서 생략 2회)      ← 11회 중 2회만 생략. 문턱 0.05 rad 가 작다
+⚠️ lookahead_s(0.35) < 계획시간+handover(0.45) → 재계획 궤적이 매번 폐기될 수 있다.
 ```
-재계획마다 lookahead 지점이 달라 cuMotion 이 미묘하게 다른 경로를 낸다. 그 차이가 0.05 rad 를
-넘어서 대부분 교체돼 버린다. **다음 시도는 0.10~0.15 부터.**
-
-⚠️ 이 실행은 6.5초 만에 **다른 이유로** 중단돼서 문턱의 실제 효과(도착 시간)를 못 봤다.
+계획시간이 400 ms 대면 **`lookahead:=0.5`** 로 올려서 이동한다.
 
 ## 0-2. 미해결 2건 — 계획 실패
 
@@ -120,6 +133,71 @@ config/cumotion_planner.yaml:     중심 (0.35,0,0.325),   1.10×1.0×0.75 m
 실제로는 한 번도 적용된 적이 없다.** T5 도 `workspace_bounds_type: unbounded` 로 돌고 있다.
 감시 상자가 의도보다 훨씬 커서 바닥·로봇 뒤 공간까지 장애물로 들어온다.
 
+## 0-2b. 🔴 미해결 ③ — 복셀이 한 자릿수다 (조사 진행 중, 미완)
+
+**증상**: `config/` 의 튜닝 yaml 을 T5·T6 에 적용한 뒤 복셀이 **2500~2850개 → 2~5개**로 붕괴했다.
+계획은 계속 성공하므로 **"성공처럼 보이는 실패"**다 — 이 상태로 움직이면 장애물을 통과한다.
+
+### 소거법으로 배제한 것 (전부 실측)
+
+| 후보 | 판정 | 근거 |
+|---|---|---|
+| 입력 `world_depth` | ✅ 무죄 | T4 살아있고 **3.728 Hz** 정상 발행 |
+| T6 ESDF 서비스 클라이언트 | ✅ 무죄 | T5 재시작 후 T6 도 재시작 → 그대로 2개 |
+| RViz 재시작 필요 여부 | ✅ 무죄 | `ros2 topic hz` 가 독립 구독자를 만든다 |
+| nvblox 감쇠 4종 | ✅ 무죄 | base 값으로 되돌려도 **2개 → 5개** |
+| `map_clearing_radius_m` | ✅ 무죄 | `clear_map_outside_radius_rate_hz:=-1.0` 으로 꺼도 그대로 |
+| nvblox `workspace_bounds` | ✅ 무죄 | `unbounded` 로 바꿔도 **4개** |
+| 감시상자 z 하한 (nvblox) | 🔧 **고침** | −0.05 → **−0.35** (아래 실측) |
+
+### 🔴 실측: base_link 의 z=0 은 테이블 상판이 아니다
+
+카메라 포인트클라우드를 `base_link` 로 변환해 백분위수를 뽑았다(표본 6497점):
+
+```
+축      min       1%      50%      99%      max
+x   -24.854   -4.181    0.416    1.003    1.035
+y   -24.296   -2.793   -0.107    3.097    6.519
+z   -14.084   -1.732   -0.339    0.406    0.473
+                        ↑ 테이블 상판
+```
+
+**상판은 z ≈ −0.30 m. 로봇이 받침대 위에 올라가 있다.** `nvblox_realtime.yaml` 의
+`workspace_bounds_min_height_m: -0.05` 가 테이블과 그 위 물체를 통째로 잘라내고 있었다.
+→ **−0.35** 로 고쳤다(상판 −0.30 − 여유 0.05). 상자 통과율 13.9% → **19.9%**.
+
+### 🔴 다음 용의자 (미확인) — T6 의 그리드도 같은 z 가정을 쓴다
+
+`config/cumotion_planner.yaml`:
+```yaml
+grid_center_m: [0.35, 0.0, 0.325]
+grid_size_m:   [1.10, 1.0, 0.75]     # z 범위 = 0.325 ± 0.375 = -0.05 ~ 0.70
+                                     #          ↑ nvblox 와 **똑같이 틀린 하한**
+```
+
+🔴 **`/curobo/voxels` 는 nvblox 가 아니라 T6 의 cuRobo 충돌월드에서 세는 숫자다.**
+nvblox 쪽 z 만 고치고 T6 그리드는 안 고쳤으므로, **테이블이 여전히 T6 그리드 바닥 아래**에 있다.
+이것이 남은 유력 원인이다 — **아직 시험 안 했다.**
+
+nvblox 상자(x −0.20\~0.80, y −0.50\~0.50, z −0.35\~0.70)와 **같은 상자**로 맞추려면:
+```yaml
+grid_center_m: [0.30, 0.0, 0.175]
+grid_size_m:   [1.00, 1.00, 1.05]    # 각 성분이 voxel_size(0.05)의 정수배여야 한다
+```
+(현재 값은 x 도 어긋나 있다: T6 −0.20\~**0.90** vs nvblox −0.20\~**0.80**)
+
+### ⚠️ `config/nvblox_realtime.yaml` 이 지금 실험 상태로 남아 있다
+
+이분법 실험 때문에 아래가 **원래 값이 아니다.** 조사 끝나면 되돌려야 한다(원래 값은 주석에 있음):
+```
+workspace_bounds_type: "unbounded"                       (원래 "bounding_box")
+tsdf_decay_factor: 0.95                                  (원래 0.75)
+projective_integrator_max_weight: 5.0                    (원래 2.0)
+projective_tsdf_integrator_invalid_depth_decay_factor: -1.0   (원래 0.8)
+decay_integrator_deallocate_decayed_blocks: false        (원래 true)
+```
+`workspace_bounds_min_height_m: -0.35` 만은 **실측 근거가 있는 확정 수정**이라 되돌리지 않는다.
+
 ## 0-3. 핵심 로그 발췌 (다른 PC 에서 분석용)
 
 **A. 루프 결함 — `static:=true` (대조군)**
@@ -161,6 +239,31 @@ config/cumotion_planner.yaml:     중심 (0.35,0,0.325),   1.10×1.0×0.75 m
 [cumotion_action_server] Motion planning failed wih status: MotionGenStatus.IK_FAIL
 ```
 
+**F. 문턱 0.12 — 루프 수정 검증 성공 (17.0초)**
+```
+[dynamic_avoid] 목표(관절 deg): 45.0, 0.0, 90.0, 0.0, 90.0, 0.0     ← 16:00:00.776
+[dynamic_avoid] 교체 #1 | 이음새 0.031 rad/s | 복셀 0개 …
+   … (교체가 9회뿐이다. 수정 전엔 같은 구간에 50~155회였다) …
+[dynamic_avoid] 목표 도착 (최대오차 0.0073 rad)                       ← 16:00:17.755 = 17.0초
+[dynamic_avoid] 계획 49회 (실패 3) / 궤적 교체 9회 (동일해서 생략 36회) /
+                계획시간 평균 204 ms, 최대 398 ms / 이음새 최대 0.073 rad/s
+```
+
+**G. 복셀 붕괴 — 소거법 (0-2b)**
+```
+config/ yaml 적용 전 (base yaml 만):        복셀 2500~2850개
+config/ yaml 적용 후:                       복셀 0~2개
+  z 하한 -0.05 → -0.35 (실측 근거):          복셀 2개
+  T6 재시작 (ESDF 클라이언트 의심):           복셀 2개
+  감쇠 4종을 base 로 되돌림:                  복셀 5개
+  workspace_bounds_type: unbounded:          복셀 4개    ← 여기까지가 오늘
+```
+```
+# 포인트클라우드 실측 (base_link 기준, 표본 6497점)
+z   min -14.084 | 1% -1.732 | 50% -0.339 | 99% 0.406 | max 0.473
+현재 상자(z -0.35~0.70) 통과: 19.9% (z축만 50.2%)
+```
+
 **E. bench (`scripts/bench_planning_time.py --repeat 10`, plan_only)**
 ```
 octomap:=true    ompl 10/10 (wall 98.7 ms)   cuMotion 7/10 (wall 199.9 ms)  실패 #2,#4,#5 = -2
@@ -169,25 +272,47 @@ octomap:=false   ompl 10/10 (wall 100.2 ms)  cuMotion 8/10 (wall 198.1 ms)  실�
 
 ## 0-4. 🔴 이어서 할 것 (우선순위 순)
 
-1. **RViz `/curobo/voxels` 를 눈으로 본다.** 목표(45° 쪽) 근처가 복셀로 덮여 있는가?
-   → 덮여 있으면 IK_FAIL 원인 확정. 그게 **실제 물체인지 로봇 자기 몸이 샌 것인지**도 거기서 갈린다.
-2. **T6 을 튜닝 yaml 로 재기동**하고 `ESDF req` 가 `Point(-0.2,-0.5,-0.05), Vector3(1.1,1.0,0.75)`
-   로 바뀌는지 확인:
-   ```bash
-   ros2 run isaac_ros_cumotion cumotion_planner_node --ros-args \
-     --params-file /workspaces/cobot2_ws/config/cumotion_planner.yaml \
-     -p robot:=m0609_rg2.xrdf \
-     -p urdf_path:=/workspaces/isaac_ros-dev/m0609/m0609_kinematics.urdf
-   ```
-   T5 도 `config/nvblox_realtime.yaml` 로 같이 맞춘다 (voxel_size 0.05 는 양쪽 동일해야 한다 —
-   다르면 `cumotion_planner.py:410` 에서 FATAL).
-3. **`swap_threshold_rad` 를 0.10~0.15 로 올려** `mode:=joint` 도착 시간이 static 의 **7.7초**에
-   근접하는지 본다. 그게 이 수정의 합격 기준이다.
-4. `-2` 확정 — 실패한 궤적의 **중간 자세**를 `/check_state_validity` 에 넣어 어느 링크쌍이
-   걸리는지 본다. `link_4 ↔ rg2_base_link` 가 나오면 SRDF/XRDF 정합 작업으로 넘어간다.
-5. 그다음에야 `mode:=pingpong` + 실제 장애물 투입. **회피 자체는 아직 한 번도 검증 안 됐다.**
+**1. T6 그리드의 z 하한을 고친다** ← 지금 막힌 자리, 가장 유력
 
-## 0-5. 아직 안 고친 것 (알고 남겨둔 것)
+`config/cumotion_planner.yaml` 을 nvblox 상자와 같은 상자로 맞춘다:
+```yaml
+grid_center_m: [0.30, 0.0, 0.175]
+grid_size_m:   [1.00, 1.00, 1.05]
+```
+T6 재기동 후 로그의 `ESDF req` 가 `Point(-0.2, -0.5, -0.35), Vector3(1.0, 1.0, 1.05)` 로
+바뀌는지 확인하고, `mode:=check` 로 복셀이 수백 이상 돌아오는지 본다.
+→ 돌아오면 **0-2b 조사 종료**. 안 돌아오면 `world_depth` 가 실제로 뭘 담고 있는지
+(로봇 마스크가 화면을 얼마나 지우는지) 봐야 한다.
+
+**2. `nvblox_realtime.yaml` 의 실험값을 되돌린다** (0-2b 마지막 표) — 특히
+`workspace_bounds_type` 을 `bounding_box` 로. `unbounded` 로 두면 작업영역 밖까지 전부
+장애물로 들어와 **IK_FAIL 이 재발한다**(오늘 실측).
+
+**3. 복셀이 돌아온 상태에서 도착 시간을 다시 잰다.** 지금의 17.0초는 **장애물이 거의 없는
+지도**에서 나온 값이다. 복셀이 수천 개로 돌아오면 계획시간·실패율이 달라져 문턱을 다시
+튜닝해야 할 수 있다. 계획시간이 400 ms 대면 `lookahead:=0.5`.
+
+**4. `-2` 확정** — 실패한 궤적의 **중간 자세**를 `/check_state_validity` 에 넣어 어느 링크쌍이
+걸리는지 본다. `link_4 ↔ rg2_base_link` 가 나오면 SRDF/XRDF 정합 작업으로 넘어간다.
+(빈 세계에서도 17% 나므로 **장애물과 무관**한 것은 이미 확인됐다)
+
+**5. 그다음에야 `mode:=pingpong` + 실제 장애물 투입.**
+🔴 **회피 자체는 아직 한 번도 검증 안 됐다.** 오늘 한 이동 실험은 전부 장애물 없이 돌린 것이다.
+
+## 0-5. 🔴 조용히 물리는 함정 (오늘 실제로 당한 것)
+
+에러도 경고도 안 난다. **틀린 채로 그냥 돈다.**
+
+| 함정 | 증상 | 대처 |
+|---|---|---|
+| **`-p static_mapper.*` 가 nvblox 에서 무시된다** | 오버라이드를 줬는데 yaml 값이 그대로. "감쇠를 되돌렸는데 효과 없다"는 **잘못된 결론**을 낼 뻔했다 | `static_mapper.*` 는 **yaml 을 직접 고쳐야** 한다. 접두어 없는 최상위 파라미터(`decay_tsdf_rate_hz` 등)는 `-p` 가 먹는다. 반드시 `ros2 param get` 으로 확인 |
+| **`ros2 run` 은 `static` 이 아니라 `static_mode`** | `-p static:=true` 는 선언 안 된 파라미터라 **조용히 무시**되고 재계획이 돈다. 대조군인 줄 알고 잘못된 데이터를 받는다 | launch 는 `static:=true`, `ros2 run` 은 `-p static_mode:=true`. 시작 로그에 `🔴 static_mode=true` 경고가 뜨는지로 확인 |
+| **`ROS_DOMAIN_ID` 누락** | `/move_action 액션 서버 없음` → T7 이 죽은 줄 알게 된다. 실제로는 도메인이 0이었을 뿐 | 호스트 터미널마다 `export ROS_DOMAIN_ID=93` |
+| **`container_setup.sh` 누락** | T4 는 `import cv2 → _ARRAY_API not found`, T6 은 `warp has no attribute 'torch'` | 컨테이너를 **새로 만들 때마다** 실행 |
+| **`config/*.yaml` 미적용** | `testcommand.md` 의 T5·T6 명령이 `--params-file` 을 안 준다. 튜닝값이 **한 번도 적용된 적이 없었다** | T6 로그의 `ESDF req` 줄, `ros2 param get` 으로 확인 |
+| **cuMotion 의 `PLANNING_FAILED(-1)`** | 플러그인이 플래너의 진짜 error_code 를 덮어쓴다. T6 은 `NO_IK_SOLUTION` 인데 우리에겐 `-1` | **T6 로그의 `Motion planning failed wih status:` 줄**을 봐야 한다 |
+
+## 0-6. 아직 안 고친 것 (알고 남겨둔 것)
 
 - **`do_check()` 가 계획을 1회만 던진다.** `-2` 실패율이 13% 라 **파이프라인이 멀쩡해도 check 가
   8번에 1번꼴로 실패**하고, 그때 `T4/T5/T6 중 하나가 문제다` 라는 엉뚱한 메시지가 찍힌다.

@@ -44,7 +44,9 @@ DEFAULT_TIMEOUTS = {
     State.PERCEIVE: 120.0,      # GPU 추론 + 모델 로딩(첫 호출 수십 초)
     State.SCENE_PREP: 10.0,
     State.PLAN: 30.0,
+    State.STOW: 20.0,
     State.APPROACH: 180.0,      # replan 루프가 도는 구간이라 넉넉히
+    State.OPEN_GRIPPER: 20.0,
     State.DESCEND: 120.0,
     State.CLOSE: 20.0,
     State.VERIFY: 10.0,
@@ -133,6 +135,7 @@ class TaskManager(Node):
         self._retry_grip = 0
         self._object_added = False
         self._nag = 0
+        self._home_next = State.IDLE   # HOME 도착 후 갈 곳. _srv_reset/_st_release_retry 가 덮어쓴다
 
         self.timer = self.create_timer(1.0 / p['tick_hz'], self._tick, callback_group=cb)
         self.get_logger().info(
@@ -283,8 +286,12 @@ class TaskManager(Node):
         if self.state is not State.SAFE_STOP:
             res.success, res.message = False, f'SAFE_STOP 이 아니다 (현재 {self.state.name})'
             return res
-        self._to(State.IDLE)
-        res.success, res.message = True, 'IDLE 복귀'
+        # 곧장 IDLE 로 가지 않는다 — 안전정지가 걸린 자리(테이블/물체 근처일 수 있다)에
+        # 팔을 그대로 두면 다음 PERCEIVE 가 그 자리에서 재촬영해 그리퍼 자신을 물체로
+        # 오인식한다. HOME 을 거쳐야 한다.
+        self._home_next = State.IDLE
+        self._to(State.HOME, 'SAFE_STOP 복구 — 홈으로 복귀 후 재개')
+        res.success, res.message = True, 'HOME 복귀 후 IDLE'
         return res
 
     # ────────────────────────────────────────────────────────
@@ -575,11 +582,11 @@ class TaskManager(Node):
 
     def _st_wait_approval(self):
         if not self.p('require_approval'):
-            self._to(State.APPROACH, '승인 불필요 설정')
+            self._to(State.STOW, '승인 불필요 설정')
             return
         if self._approved:
             self._approved = False
-            self._to(State.APPROACH, '사용자 승인')
+            self._to(State.STOW, '사용자 승인')
             return
         if self._elapsed() > float(self.p('approval_timeout_sec')):
             self._abort('승인 대기 시간 초과')
@@ -638,8 +645,32 @@ class TaskManager(Node):
         else:
             self._to(on_fail, f'{key} 실패: {why}')
 
+    def _st_stow(self):
+        """이동 전 그리퍼를 완전히 닫는다 — 벌어진 폭만큼 주변과 부딪힐 여지를 줄인다."""
+        if not self._extra:
+            if not self.rg2.service_ready():
+                return
+            self._extra = [self.rg2.close_async(0.0)]
+            self.get_logger().info('그리퍼 닫기(이동 대비)')
+            return
+        if self._elapsed() < float(self.p('gripper_settle_sec')):
+            return
+        self._to(State.APPROACH)
+
     def _st_approach(self):
-        self._move('pre_grasp', State.DESCEND, State.NEXT_CANDIDATE)
+        self._move('pre_grasp', State.OPEN_GRIPPER, State.NEXT_CANDIDATE)
+
+    def _st_open_gripper(self):
+        """pre-grasp 도착 후, 하강 전에 그리퍼를 연다."""
+        if not self._extra:
+            if not self.rg2.service_ready():
+                return
+            self._extra = [self.rg2.open_async()]
+            self.get_logger().info('그리퍼 열기(그립 준비)')
+            return
+        if self._elapsed() < float(self.p('gripper_settle_sec')):
+            return
+        self._to(State.DESCEND)
 
     def _st_descend(self):
         if bool(self.p('clear_octomap_before_descend')) and not self._octomap_cleared:
@@ -701,7 +732,10 @@ class TaskManager(Node):
         for k in ('pre_grasp', 'grasp', 'lift'):
             self.solutions.pop(k, None)
         self.poses.clear()
-        self._to(State.PERCEIVE, f'재인식 ({self._retry_grip}회차)')
+        # 곧장 PERCEIVE 로 가지 않는다 — 팔이 방금 그랩을 시도한 자리(물체 높이, 작업공간
+        # 박스 안)에 그대로 있어, 거기서 재촬영하면 그리퍼 자신이 물체로 오인식된다.
+        self._home_next = State.PERCEIVE
+        self._to(State.HOME, f'재인식 전 홈 복귀 ({self._retry_grip}회차)')
 
     def _st_lift(self):
         self._move('lift', State.PLACE, State.ABORT)
@@ -722,10 +756,11 @@ class TaskManager(Node):
         if not self._fut.done():
             return
         self._object_added = False
+        self._home_next = State.IDLE
         self._to(State.HOME)
 
     def _st_home(self):
-        self._joint_move('home_joints_deg', State.IDLE)
+        self._joint_move('home_joints_deg', self._home_next)
 
     def _joint_move(self, param_name: str, nxt: State):
         """고정 관절자세로 이동. IK 가 필요 없어 해를 직접 만든다."""

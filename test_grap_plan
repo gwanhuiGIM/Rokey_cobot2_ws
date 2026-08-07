@@ -25,7 +25,8 @@ ros2 launch m0609_rg2_bringup camera.launch.py
 export ROS_DOMAIN_ID=93
 source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 run graspgenx_perception grasp_bridge_node --ros-args \
-  -p out_dir:=$(pwd)/data/graspgenx_scene
+  -p out_dir:=$(pwd)/data/graspgenx_scene \
+  -p scene:=01
 #   ⚠️ 첫 실행은 모델 로드로 수십 초. "worker ready" 류 로그를 기다린다
 #   out_dir 를 비우면(기본값) 씬은 임시 디렉토리에 썼다가 요청 끝나면 지워진다
 #   (grasp_bridge_node.py:236-241). 여기 지정한 out_dir/scene(기본 "00") 아래

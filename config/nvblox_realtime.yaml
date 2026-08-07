@@ -101,8 +101,12 @@
       projective_integrator_max_integration_distance_m: 2.0
       projective_integrator_truncation_distance_vox: 4.0      # 얇게 하면 표면에 구멍 → 유지
       projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
-      projective_integrator_max_weight: 2.0                   # base 5.0 → 새 관측이 빨리 이긴다
-      projective_tsdf_integrator_invalid_depth_decay_factor: 0.8
+      # ⚠️ 2026-08-07 이분법 실험 중. 원래 값: max_weight 2.0 / invalid_depth_decay_factor 0.8
+      #    증상: 이 yaml 을 얹으면 복셀이 2500~2850개 → **2개**. base yaml 만 쓰면 정상.
+      #    ⚠️ `-p static_mapper.*` 오버라이드는 **먹지 않는다**(nvblox 가 yaml 로 되덮는다).
+      #       그래서 이 파일을 직접 고쳐야 시험이 된다.
+      projective_integrator_max_weight: 5.0                   # 원래 2.0 (실험 중)
+      projective_tsdf_integrator_invalid_depth_decay_factor: -1.0   # 원래 0.8, base 는 -1.0(끔)
       #   ↑ base -1.0(꺼짐). 무효 depth 픽셀에 투영되는 복셀을 감쇠 = 동적 물체 아웃라이어 제거.
       #     ⚠️ 세그멘터가 지운 로봇 마스크도 "무효 depth"다 → 로봇 뒤에 가려진 물체도 같이 흐려진다.
 
@@ -127,18 +131,27 @@
       #       octomap과 반대 방향의 위험이다. 좁힐 때는 반드시 팔 궤적 전체를 덮는지 확인할 것.
       #    ⚠️ cumotion_planner.yaml 의 grid_center_m/grid_size_m 와 **같은 상자**로 유지한다.
       #       한쪽만 고치면 조용히 어긋난다 (에러도 경고도 안 난다).
-      workspace_bounds_type: "bounding_box"
+      # ⚠️ 2026-08-07 이분법 실험 중 — 원래 값은 "bounding_box" 다. 끝나면 되돌린다.
+      #    배제된 것: 입력(world_depth 3.7 Hz), T6 ESDF 클라이언트(재시작 무효),
+      #               감쇠 4종(base 값으로 되돌려도 2개→5개), 맵 정리(꺼도 그대로)
+      #    남은 것이 이 상자다. base yaml(상자 없음)=2500~2850개 vs 우리 yaml=한 자릿수.
+      workspace_bounds_type: "unbounded"
       workspace_bounds_min_corner_x_m: -0.20   # 작업 0.00 - 0.20
       workspace_bounds_max_corner_x_m:  0.80   # 작업 0.70 + 0.20
       workspace_bounds_min_corner_y_m: -0.50   # 작업 -0.30 - 0.20
       workspace_bounds_max_corner_y_m:  0.50   # 작업  0.30 + 0.20
-      workspace_bounds_min_height_m:   -0.05
-      #   ↑ 🔴 **가정: base_link의 z=0 이 테이블 상판이다** (로봇이 테이블에 직접 볼트로 붙음).
-      #     -0.05 는 상판을 5 cm 두께로 남겨 cuMotion이 **테이블을 장애물로 보게** 하는 값이다.
-      #     이 값을 0.05 등으로 올리면 테이블이 지도에서 사라지고 팔이 상판을 뚫는 경로를 낸다.
-      #     로봇이 받침대 위에 있어 상판이 z<0 이면: (상판 z) - 0.05 로 바꾼다.
-      #     재는 법: RViz Fixed Frame=base_link, PointCloud2(/moveit/filtered_cloud) 띄우고
-      #              Select 도구로 상판의 점을 찍어 z를 읽는다.
+      workspace_bounds_min_height_m:   -0.35
+      #   ↑ 🔴 **2026-08-07 실측으로 정한 값. 추정치가 아니다.**
+      #     이전 값 -0.05 는 "base_link의 z=0 이 테이블 상판"이라는 가정이었는데 **틀렸다.**
+      #     실측: 카메라 포인트클라우드를 base_link 로 변환해 보니 상판이 **z ≈ -0.30 m**.
+      #           로봇이 받침대 위에 올라가 있다. 상판 중앙값 -0.297, 99% 0.389, 최대 0.472.
+      #     증상: -0.05 로 두면 테이블과 그 위 물체가 통째로 상자 밖으로 빠져 **복셀이 0개가 된다.**
+      #           (2026-08-07 실기: 2500~2850개 → 0~2개. nvblox는 살아 있는데 지도만 빈다 —
+      #            계획은 계속 성공하므로 로봇이 통과한 뒤에야 안다)
+      #     -0.35 = (상판 -0.30) - 0.05. 상판을 5 cm 두께로 남겨 테이블을 장애물로 보게 한다.
+      #     ⚠️ 로봇이나 테이블을 옮기면 이 값이 무효다. 다시 재는 법 둘:
+      #        ① RViz Fixed Frame=base_link + PointCloud2 + Select 도구로 상판 점의 z를 읽는다
+      #        ② 포인트클라우드를 base_link 로 변환해 z 백분위수를 찍는다(중앙값이 상판이다)
       workspace_bounds_max_height_m:    0.70   # 테이블 위 물체 집기 + 팔이 드는 높이
 
       # ── ESDF ──
@@ -151,7 +164,7 @@
       mesh_integrator_weld_vertices: true
 
       # ── TSDF 감쇠 (잔상 소거) ──
-      tsdf_decay_factor: 0.75                    # base 0.95
+      tsdf_decay_factor: 0.95                    # 원래 0.75 (2026-08-07 실험 중, base 가 0.95)
       tsdf_decayed_weight_threshold: 0.001
       exclude_last_view_from_decay: true         # 지금 프레임에 유효 depth가 있는 복셀은 감쇠 제외
       # false(현재): 다 감쇠된 복셀은 weight만 0이 되고 마지막 거리값을 들고 있다가
@@ -162,7 +175,7 @@
       #              잔상이 계속 거슬리면 여기를 true로 올리는 게 다음 수다.
       tsdf_set_free_distance_on_decayed: false
       tsdf_decayed_free_distance_vox: 4.0
-      decay_integrator_deallocate_decayed_blocks: true
+      decay_integrator_deallocate_decayed_blocks: false   # 원래 true (2026-08-07 실험 중)
 
       # ── 스트리머 ──
       layer_streamer_exclusion_height_m: 1.2
