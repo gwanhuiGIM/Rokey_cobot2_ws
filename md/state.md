@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-07 11:05
+updated: 2026-08-08
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -126,6 +126,28 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
+- ⚪ **개인PC(CPU)에는 YOLO 자산이 없다 — 정상이다, 이슈가 아니다** (2026-08-08).
+  `nvidia-smi` 없는 머신에서 확인한 것이므로 **GPU PC 상태에 대해서는 아무것도 말해주지
+  않는다**(판별 규칙은 아래 "두 PC 체제"). 여기서 관측된 것: 가중치 `yolo11n-seg.pt`
+  `find` 0건(`src`·`build`·`install`), 컨테이너 `od_kimkh` 없음(`docker ps -a` 에
+  `object_detection`(Exited)·`portainer` 뿐).
+  → **개인PC 에서 YOLO 경로를 띄우려 하지 말 것.** 이 PC 의 용도는 rosbag 개발이다.
+  ⚠️ 2026-08-08 세션에서 이걸 "YOLO 경로 기동 불가"라는 **전역 사실로 잘못 적었다가 정정함**
+  (사용자 지적). CPU PC 에서 `find`/`docker ps` 결과로 GPU PC 를 판단할 수 없다.
+  GPU PC 의 실제 상태는 그 머신에서 재확인이 필요하다 — **미확인**.
+- 🟡 **`build/`·`install/` 에 삭제된 패키지 6개가 남아 있다** (2026-08-08). `src/` 에서
+  지웠지만 `ros2 pkg list` 에 `pick_and_place_text`·`pick_and_place_voice`·`robot_control`·
+  `rokey`·`usb_cam`·`webcam_perception` 이 여전히 뜬다. `scripts/graspx_container.sh` 가
+  컨테이너 안에서 같은 `install/setup.bash` 를 source 하므로 컨테이너도 죽은 패키지를 본다.
+  정리하려면 `rm -rf build install` 후 전체 재빌드.
+  ⚠️ **그 전에**: `install/pick_and_place_text/share/.../yolov8n_tools_0122.pt` 가 이 파일의
+  **유일 사본**이다(`.gitignore` 의 `*.pt` 로 git 히스토리에 없음). 공구 5종 가중치이고
+  2026-08-08 시점 "안 쓸 예정"으로 확인받았으므로 소실을 수용하고 진행해도 된다.
+- 🟡 **`voice_processing` 이 `COLCON_IGNORE` 다** (2026-08-08). `setup.py:16` 이 gitignore 된
+  `resource/.env`(API 키)를 `data_files` 에 강제해 `colcon build` 가 실패한다. `.env` 는 원래
+  있어야 하는 파일이라 `setup.py` 를 고치지 않고 빌드에서 뺐다. 지금은 안 쓴다
+  (`pick_fsm` 은 `voice:=false`). **추후 VLA 노드 통합 때 되살린다** — `.env` 를 채우고
+  `src/voice_processing/COLCON_IGNORE` 를 지우면 된다.
 - 🟡 **`testcommand.md`가 vault 밖에 있다** (2026-08-07). 저장소 루트 → `config/testcommand.md`로
   옮겨졌는데, 이 문서는 **md/ 문서 형식으로 쓰여 있다** — meta 헤더(`status: live`,
   `owns: 실행 명령어 · 노드 지도 · 단계별 검증 명령`)가 있고 본문이
@@ -171,6 +193,25 @@ code .                                          # 이후 VS Code Source Control�
   **아직 실기 미검증**: 2.0에서 ① 뒷벽이 장애물로 잡히지 않는지 ② 장애물 경계가 또렷해지는지
   ③ `move_group` CPU가 견디는지 — 다음 실기에서 확인. 경위: [[ws/cobot2/errors-log]] §7
 - **octomap_rviz_plugins 미설치** — `/octomap_binary`·`/octomap_full`을 RViz에서 볼 수 없다. 당장은 `/octomap_point_cloud_centers`(PointCloud2)로 우회 중. `topic_tools`도 미설치(throttle 불가 → 카메라 프로파일에서 줄인다).
+
+## ⏭ 다음에 GPU PC 앞에 앉으면 **먼저** 이 두 줄 (2026-08-08 미해결, 각 10초)
+
+개인PC 에서는 판정 불가라 남긴 것이다. 답이 나오면 `config/testcommand.md` 의
+"합치면서 드러난 파라미터 불일치" 표에서 해당 칸을 지운다.
+
+```bash
+# ① 480x320 이 D435i 지원 프로파일인가 — 카메라 연결 후
+#    config/testcommand.md T1 이 이 값으로 적혀 있다. 미지원이면 스트림이 안 열린다
+rs-enumerate-devices | grep -iE "Depth|Color" | sort -u
+
+# ② GPU PC 의 alias 정의 — 개인PC 와 다르다(이것 때문에 문서 대조가 한 번 틀렸다)
+alias reals; alias br; alias realsense
+```
+
+- ①이 미지원으로 나오면 지원 목록 중 가장 가까운 값으로 `config/testcommand.md` T1 을 고친다.
+  ⚠️ **재캘리브 때는 예외로 `1280x720`** — `data_recording.py` 가 해상도를 지정하지 않고
+  구독만 해서 낮은 해상도로 찍으면 코너 정밀도가 무너진다(이 파일 "캘리브 수집은 1280x720").
+- ②는 `.bashrc` 가 머신 로컬이라 개인PC 에서 확인할 방법이 없다. [[ws/cobot2/errors-log]] #19.
 
 ## 다음 할 일 (순서 고정 — 위가 막히면 아래로 내려가지 않는다)
 > 이 절이 "다음에 뭐 하지"의 단일 출처다. 끝난 항목은 지우고 Day 진행 절로 옮긴다.

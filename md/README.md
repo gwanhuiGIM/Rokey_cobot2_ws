@@ -30,6 +30,9 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 | [rosbag-d435i.md](rosbag-d435i.md) | **D435i rosbag 녹화·재생 명령 전부.** `state.md`·`archive/2026-08-01-session.md`에 두지 않는다 |
 | [review_moveit.md](review_moveit.md) | **MoveIt2 OMPL + Octomap** 파이프라인 수행 기록, 채택 설정 스냅샷, cuRobo 비교 설계 |
 | [detect_graspx.md](detect_graspx.md) | **GraspGenX 설계 원본** — 출력 규약(§3), 폭 계산·1/10mm 함수(§5), 상류 버그(§6). `state.md`는 여기로 포인터만 둔다 |
+| [context/test_grap_plan.md](context/test_grap_plan.md) | 🔄 **합쳐짐(2026-08-08) → `config/testcommand.md` "경로 B".** 값의 정본이 아니다. **비교용으로만** 남겼다 — 두 문서가 같은 명령을 다른 파라미터로 적고 있던 3건(`bringup` 의 `rviz`, `camera` 해상도, `moveit` 의 `cumotion`)을 실기에서 정해야 해서다 |
+| [context/yolo_seg_grasp.md](context/yolo_seg_grasp.md) | YOLO 세그 컨테이너/호스트 2터미널 실행 스니펫 + COCO 인덱스 메모. 루트 `yolo_seg_grasp` 에서 이동(2026-08-08) |
+| [context/docker_gpu.md](context/docker_gpu.md) | isaac_ros 컨테이너 attach·중지·재기동 메모. 루트 `docker_gpu` 에서 이동(2026-08-08) |
 
 ## 계획 문서
 

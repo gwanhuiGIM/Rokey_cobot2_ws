@@ -1,7 +1,9 @@
 # corecode — 교육용 튜토리얼 코드
 
 ROS 2 패키지가 **아니다.** `colcon build` 대상이 아니고 각 디렉토리에서 `python3 <파일>`로 직접 돌린다.
-`src/` 아래의 실제 패키지(`pick_and_place_voice`, `object_detection` 등)에 들어갈 코드의 원형이자 학습 자료다.
+`src/` 아래 실제 패키지에 들어갈 코드의 원형이자 학습 자료다.
+⚠️ 원래 대응되던 `pick_and_place_voice`·`object_detection` 노드 코드는 2026-08-08 정리로 삭제됐다
+(`md/plans/2026-08-08-ws-cleanup.md`). 여기 코드는 학습 자료로만 남아 있고 대응 패키지가 없다.
 
 각 파일 상단 docstring에 실행법·입출력·주의사항이 있다. 여기서는 전체 흐름과 파일 간 관계만 다룬다.
 

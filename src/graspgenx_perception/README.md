@@ -552,6 +552,10 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yo
 ros2 param set /grasp_bridge_node target_classes apple,cup
 ```
 
+⚠️ **콤마 뒤에 공백을 넣지 말 것.** `target_classes:=apple, banana` 라고 쓰면 셸이 `banana` 를
+별개 인자로 쪼개서 `malformed launch argument 'banana'` 로 죽는다. 공백을 쓰려면 통째로
+따옴표: `target_classes:='apple, banana'`.
+
 **두 파라미터의 역할이 다르다**: `classes`(yolo) = 무엇을 **탐지**할지, 넓게. 
 `target_classes`(bridge) = 무엇을 **잡을지**, 좁게. 브리지는 대상 외 라벨을 **워커에
 넘기기 전에** 0 으로 지우므로 GraspGenX 연산 자체가 줄어든다 — `target`(obj_N) 은 이미
@@ -679,9 +683,17 @@ LLM/GUI 가 "사과를 집어"라고 말하는 순간 기하 경로에는 그 �
 
 ## 가중치
 
-`yolo11n-seg.pt` 는 `object_detection/resource/` 에 있고 **`.gitignore` 의 `*.pt` 로 커밋되지
-않는다.** 이 PC에는 **지금 있다**(6.2MB, 2026-08-07 확인). 다른 PC 에서 `git pull` 만 하면
-파일이 없어 노드가 뜨자마자 죽는다:
+`yolo11n-seg.pt` 는 `object_detection/resource/` 에 있어야 하고 **`.gitignore` 의 `*.pt` 로
+커밋되지 않는다.**
+
+> ⚠️ **어느 머신에서 보고 있는지부터 확인할 것.** 이 ws 는 두 PC 를 쓰고 hostname·계정이
+> 같아서 **`nvidia-smi` 유무로만 구분된다**(`md/state.md` "두 PC 체제").
+> **개인PC(CPU, `nvidia-smi` 없음)에서는 가중치도 컨테이너도 없는 게 정상이다** —
+> 2026-08-08 개인PC 실측: `find`(src·build·install) 0건, `docker ps -a` 에 `od_kimkh` 없음.
+> 그건 **그 머신의 사실일 뿐 GPU PC 와 무관하다.** 아래 서술과 이 절 이후의 컨테이너
+> 이름·경로는 **GPU PC 기준**이다.
+
+다른 PC 에서 `git pull` 만 하면 파일이 없어 노드가 뜨자마자 죽는다:
 
 ```bash
 docker exec -it od_kimkh bash -lc \
@@ -965,3 +977,10 @@ python3 src/graspgenx_perception/test/manual_roundtrip.py corecode/OD_Tutorial/Y
 
 프로브는 기본적으로 `/yolo_seg_probe/image` 로 쏜다. 실제 카메라 토픽에 주입하면
 `realsense2_camera` 를 쓰는 다른 소비자에게도 합성 프레임이 간다.
+
+grasp 결과가 Doosan `move_line` 커맨드로 어떻게 번역되는지만 눈으로 보려면 (**로봇을
+움직이지 않는다 — 문자열만 출력한다**):
+
+```bash
+python3 src/graspgenx_perception/test/manual_grasp_to_movel.py
+```
