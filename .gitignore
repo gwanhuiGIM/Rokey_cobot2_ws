@@ -35,7 +35,11 @@ datasets/
 runs/
 
 # capture_graspgenx_scene.py 산출물 (한 씬당 depth.npy 3.7MB + png 2장). 재촬영이 싸다.
-data/graspgenx_scene/
+# **`**/` 가 필요하다.** 슬래시가 중간에 있는 패턴은 이 파일 위치(repo 루트)에 고정돼
+# `data/graspgenx_scene/` 는 루트의 그것만 막는다. 2026-08-07 `default_out_dir()` 이
+# `realpath` 로 바뀌면서 저장 위치가 `src/graspgenx_perception/data/graspgenx_scene/` 로
+# 옮겨갔고, 그 순간 이 규칙 밖으로 나가 8.9MB 짜리 씬이 커밋 대상이 됐다(실제로 확인).
+**/data/graspgenx_scene/
 
 # 핸드아이 캘리브레이션 입력 이미지 (파일명이 좌표라 촬영마다 전부 새 파일이 된다).
 # 결과인 T_cam2base.npy / T_gripper2camera.npy는 계속 커밋한다 — 실기 보정값이라 재현 비용이 크다.

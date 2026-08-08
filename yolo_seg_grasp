@@ -1,0 +1,14 @@
+# 터미널 1 — 컨테이너 (프로파일 없으면 프레임 0장)
+docker start od_kimkh
+docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
+  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
+    source /home/kimkh/cobot2_ws/install/setup.bash
+    ros2 launch graspgenx_perception graspx.launch.py \
+      run_bridge:=false device:=0 publish_overlay:=true classes:="[46,47]"'
+
+# 터미널 2 — 호스트
+export ROS_DOMAIN_ID=93
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo
+
+
+

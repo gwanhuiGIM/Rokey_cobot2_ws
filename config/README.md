@@ -61,6 +61,7 @@ source /workspaces/cobot2_ws/install_container/setup.bash
 export ROS_DOMAIN_ID=93
 
 # T4 — 세그멘터
+
 cd /workspaces/isaac_ros-dev && ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \
   --params-file /workspaces/cobot2_ws/config/cumotion_segmenter.yaml
 
@@ -71,6 +72,7 @@ ros2 run nvblox_ros nvblox_node --ros-args \
   -r camera_0/depth/camera_info:=/camera/camera/aligned_depth_to_color/camera_info
 
 # T6 — 플래너
+
 cd /workspaces/isaac_ros-dev && ros2 run isaac_ros_cumotion cumotion_planner_node --ros-args \
   --params-file /workspaces/cobot2_ws/config/cumotion_planner.yaml
 

@@ -57,6 +57,11 @@ DEFAULT_TIMEOUTS = {
     State.HOME: 180.0,
 }
 
+#: SPEAK_FAIL -> LISTENING 을 몇 번 연속으로 돌면 IDLE 로 내려앉는지.
+#: 이 왕복은 매번 `_to()` 가 `_entered` 를 리셋해서 LISTENING 제한시간이 영원히 안 걸린다 —
+#: 멈추는 조건을 따로 두지 않으면 tick 주기로 무한히 돈다(2026-08-07 실기 로그 폭주).
+MAX_FAIL_STREAK = 3
+
 
 class TaskManager(Node):
 
@@ -133,6 +138,7 @@ class TaskManager(Node):
         self._plan_i = 0
         self._retry_motion = 0
         self._retry_grip = 0
+        self._fail_streak = 0       # SPEAK_FAIL 연속 횟수. _st_idle 이 start 마다 0 으로 되돌린다
         self._object_added = False
         self._nag = 0
         self._home_next = State.IDLE   # HOME 도착 후 갈 곳. _srv_reset/_st_release_retry 가 덮어쓴다
@@ -350,14 +356,21 @@ class TaskManager(Node):
             self._abort(f'{type(exc).__name__}: {exc}')
 
     def _service(self, client, request, name):
-        """(상태, 결과). 상태는 'pending' | 'done' | 'unavailable'.
+        """(상태, 결과). 상태는 'pending' | 'done'.
 
         타이머 콜백 안에서 `spin_until_future_complete` 를 부르면 재진입으로 엉킨다
         (executor 가 이미 이 노드를 돌리고 있다) → 기다리지 않고 매 tick 확인한다.
+
+        ⚠️ 서비스가 아직 안 떠 있으면 **기다린다**(실패로 처리하지 않는다). 즉시 실패로
+        보내면 노드 기동 순서에 의존하게 되고, LISTENING 이 SPEAK_FAIL 과 tick 마다
+        왕복하며 제한시간을 리셋해 영원히 안 멈춘다. 끝내 안 뜨면 DEFAULT_TIMEOUTS 가
+        그 상태를 ABORT 시킨다 (LISTENING 60s / PERCEIVE 120s).
         """
         if self._fut is None:
             if not client.service_is_ready():
-                return 'unavailable', f'{name} 서비스 없음'
+                self.get_logger().warn(f'{name} 서비스를 기다리는 중',
+                                       throttle_duration_sec=5.0)
+                return 'pending', None
             self._fut = client.call_async(request)
             return 'pending', None
         if not self._fut.done():
@@ -372,6 +385,7 @@ class TaskManager(Node):
             return
         self._start_req = False
         self._retry_grip = 0
+        self._fail_streak = 0
         self.alternatives = []
         self.solutions.clear()
         self.poses.clear()
@@ -383,9 +397,6 @@ class TaskManager(Node):
 
     def _st_listening(self):
         status, res = self._service(self.kw_cli, Trigger.Request(), self.p('keyword_service'))
-        if status == 'unavailable':
-            self._to(State.SPEAK_FAIL, res)
-            return
         if status != 'done':
             return
         if res is None or not res.success:
@@ -413,9 +424,6 @@ class TaskManager(Node):
             req.target = self.target
             req.min_confidence = float(self.p('min_confidence'))
             status, res = self._service(self.grasp_cli, req, self.p('grasp_service'))
-            if status == 'unavailable':
-                self._to(State.SPEAK_FAIL, res)
-                return
             if status != 'done':
                 return
             if res is None or not res.success:
@@ -433,9 +441,6 @@ class TaskManager(Node):
             self._seq_at_call = self._best_seq
         status, res = self._service(self.grasp_cli, Trigger.Request(),
                                     self.p('grasp_trigger_service'))
-        if status == 'unavailable':
-            self._to(State.SPEAK_FAIL, res)
-            return
         if status != 'done':
             return
         if res is None or not res.success:
@@ -781,7 +786,15 @@ class TaskManager(Node):
         # TTS 는 이 ws 에 아직 없다. 로그 + /pick/state 로 통보한다.
         self.get_logger().warn(f"실패 통보: 타겟 '{self.target}'")
         self._cleanup_scene()
-        self._to(State.LISTENING if self.p('voice_enabled') else State.IDLE)
+        self._fail_streak += 1
+        if not self.p('voice_enabled'):
+            self._to(State.IDLE)
+        elif self._fail_streak >= MAX_FAIL_STREAK:
+            # 여기서 멈추지 않으면 LISTENING 과 tick 주기로 왕복한다. IDLE 은 조용하고,
+            # 사람이 /pick/start 를 다시 불러야 재개된다.
+            self._to(State.IDLE, f'연속 실패 {self._fail_streak}회 — /pick/start 로 다시 시작')
+        else:
+            self._to(State.LISTENING)
 
     def _st_abort(self):
         self._to(State.SAFE_STOP)

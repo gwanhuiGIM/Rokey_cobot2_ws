@@ -54,6 +54,20 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml
 ros2 run graspgenx_perception yolo_seg_node --ros-args -p publish_overlay:=true -p device:=0
 ```
 
+한 줄로(대화형 셸 없이). `-it` 대신 그냥 `docker exec` 라 Ctrl-C 로 끝낼 수 있다:
+
+```bash
+docker start od_kimkh
+docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
+  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
+    source /home/kimkh/cobot2_ws/install/setup.bash
+    ros2 run graspgenx_perception yolo_seg_node --ros-args \
+      -p device:=0 -p publish_overlay:=true -p classes:="[46,47]"'
+```
+
+> `docker exec` 로 띄운 노드는 종료 후 `<defunct>` 좀비로 남는다(컨테이너 PID 1 이
+> `sleep infinity` 라 거두지 않는다). 쌓이면 `docker restart od_kimkh`.
+
 오버레이를 보려면 **호스트** 터미널에서:
 
 ```bash
@@ -63,8 +77,9 @@ ros2 run rqt_image_view rqt_image_view
 #   토픽 드롭다운에서 /yolo_seg/overlay 를 고르고 transport 를 compressed 로 둔다
 ```
 
-> 도메인 93 에서 **컨테이너 → 호스트 방향 데이터가 지금 안 흐른다.** 아래 "🔴 미해결" 참고 —
-> rqt 오버레이도 이 문제에 걸린다.
+> ~~도메인 93 에서 컨테이너 → 호스트 방향 데이터가 지금 안 흐른다.~~
+> **2026-08-07 21:15 재측정에서 이 방향이 정상으로 돌아왔다** (`/yolo_seg/labels` 호스트 수신
+> 25.6 Hz). 아래 "컨테이너 → 호스트 — 재측정" 절 참고.
 
 ## 데이터가 안 올 때 — 위에서부터
 
@@ -98,13 +113,29 @@ ros2 run rqt_image_view rqt_image_view
 `FASTRTPS_DEFAULT_PROFILES_FILE` 이 필요한 이유는 `fastdds_udp_only.xml` 주석에 있다 —
 FastDDS 공유메모리가 컨테이너 경계를 못 넘는다.
 
-## 🔴 미해결 — 컨테이너 → 호스트 데이터가 안 흐른다 (2026-08-07)
+## ✅ 컨테이너 → 호스트 — 재측정 (2026-08-07 21:15)
 
-**`yolo_seg_node` 를 컨테이너에서 띄우면 호스트의 어떤 소비자도 `/yolo_seg/*` 를 못 받는다.**
-`capture_graspgenx_scene.py`(호스트)가 라벨맵을 소비하므로 **`seg_source:=yolo` 경로가 지금
-막혀 있다.** rqt 오버레이도 마찬가지다.
+**같은 날 저녁 재측정에서 이 방향이 정상이다.** 아래 "🔴 오전 측정" 은 기록으로 남긴다 —
+원인을 특정하지 못한 채 증상이 사라졌으므로 **재발할 수 있다고 보고, 매번 실측으로 확인한다.**
 
-측정한 것 (20바이트 `std_msgs/String` 프로브까지 내려가서 확인):
+컨테이너에서 `yolo_seg_node` 를 띄우고 `/yolo_seg/labels`(1280×720 mono8, 921KB/프레임)를
+`yolo_seg_node` 와 **같은 QoS**(BEST_EFFORT, depth=1)로 세 지점에서 동시 수신:
+
+| 수신 위치 | 프로파일 | 수신율 |
+|---|---|---|
+| 컨테이너 내부 | 있음 | 24.9 Hz |
+| **호스트** | **있음** | **25.6 Hz** |
+| 호스트 | 없음 | 13.8 Hz (절반 — 프로파일을 걸 것) |
+
+⚠️ **측정 도구를 조심할 것.** `ros2 topic hz` 는 기본이 RELIABLE 구독이라 BEST_EFFORT
+퍼블리셔(카메라·이 노드)와 **QoS 불일치로 0건이 나온다** — 전송 장애처럼 보인다.
+Humble 의 `ros2 topic hz` 에는 `--qos-reliability` 플래그가 **없다**. 이번 세션에서 실제로
+이걸 전송 실패로 오진할 뻔했다. rclpy 로 BEST_EFFORT 구독을 짜서 재는 게 확실하다.
+
+### 🔴 오전 측정 (2026-08-07, 원인 미특정 — 기록)
+
+당시엔 **`yolo_seg_node` 를 컨테이너에서 띄우면 호스트의 어떤 소비자도 `/yolo_seg/*` 를 못
+받았다.** 측정한 것 (20바이트 `std_msgs/String` 프로브까지 내려가서 확인):
 
 | 방향 | 결과 |
 |---|---|
@@ -136,6 +167,32 @@ root 소유 `/dev/shm/fastrtps_*` 잔재(현재 5개), (3) 호스트 스택 재�
 **우회**: `seg_source:=geometric` 은 호스트 안에서만 도는 경로라 이 문제와 무관하다.
 지금 pick_fsm 파이프라인의 기본값이 `geometric` 이므로 **현재 파이프라인은 이 버그에 걸리지
 않는다.**
+
+## 컨테이너 운용에서 확인된 것 (2026-08-07 저녁 실측)
+
+**1. 컨테이너 쪽 `FASTRTPS_DEFAULT_PROFILES_FILE` 은 필수다 — 호스트 쪽은 아니다.**
+호스트 카메라(`realsense2_camera_node`)는 지금 이 변수 **없이** 떠 있는데(`/proc/<pid>/environ`
+확인), 컨테이너에서 변수를 걸면 정상 수신된다. A/B (yolo_seg_node 와 같은 BEST_EFFORT/depth=1
+구독으로 10초씩):
+
+| 컨테이너 프로파일 | `/camera/camera/color/image_raw` 수신 |
+|---|---|
+| 없음 | **0 Hz** (watchdog 경고 3회/18초) |
+| 있음 | **26.6 Hz** (참고: 호스트에서 24.6 Hz) |
+
+**2. 컨테이너 PID 1 이 `sleep infinity` 라 `yolo_seg_node` 를 돌릴 때마다 좀비가 하나씩 쌓인다.**
+`sleep` 은 자식을 거두지(reap) 않는다. 이 세션에서 4개 → 6회 실행 후 **10개**로 정확히
+1:1 증가하는 것을 확인했다. 기능에는 영향이 없지만 PID 를 잡아먹고, `ps` 로 "노드가 떠 있나"를
+볼 때 착시를 준다(`Z <defunct>` 는 죽은 것이다). 정리는 `docker restart od_kimkh` 뿐이고,
+근본 해결은 컨테이너를 `--init` 으로 재생성하는 것이다.
+
+**3. 프로파일을 걸었는데도 프레임이 0인 실행이 4회 중 1회 있었다** (첫 실행, 35초 내내
+watchdog 경고). 같은 명령의 이후 3회는 전부 정상이었다. **원인 미특정** — 그래서 실행할 때마다
+노드 로그의 watchdog 경고 유무를 먼저 본다.
+
+**4. 카메라 해상도가 848×480 이 아니라 1280×720 이다** (2026-08-07 21:12 실측:
+`color`/`aligned_depth_to_color` 둘 다 1280×720, rgb8). 이 문서의 속도·대역폭 수치는
+848×480 시절 측정값이므로 **지금 값이 아니다** — 프레임당 raw 는 1.16MB 가 아니라 2.76MB 다.
 
 ## 이 PC에서 지금 테스트 가능한가
 
@@ -225,15 +282,93 @@ root 소유 `/dev/shm/fastrtps_*` 잔재(현재 5개), (3) 호스트 스택 재�
 `classes` 도 같은 이유다. 빈 리스트를 그냥 넘기면 rclpy 가 타입을 `BYTE_ARRAY` 로 추론해
 정수 목록을 못 넣는다. `capture_graspgenx_scene.py:111` 이 같은 우회를 쓴다.
 
-## graspx 와 함께 띄우기
+## 실행 명령 — 기하 vs YOLO 성능 비교 (2026-08-07 최신)
+
+두 경로를 **번갈아 띄워** 같은 장면에서 비교한다. 바뀌는 것은 세그멘테이션뿐이고
+GraspGenX 워커·선택 정책·서비스 호출은 완전히 같다.
+
+### 공통 전제 (한 번만, 호스트에서)
 
 ```bash
-ros2 launch graspgenx_perception graspx.launch.py
+export ROS_DOMAIN_ID=93                      # 빠뜨리면 컨테이너와 토픽이 아예 안 보인다
+source /opt/ros/humble/setup.bash && source ~/cobot2_ws/install/setup.bash
+ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true   # 1280x720
+# 로봇 bringup 은 실기 모션이라 사람이 직접 (base_link <- camera_color_optical_frame TF 필요)
 ```
 
+### A. 기하 세그 (`geometric`) — 호스트 한 대
+
+신경망 0개. `run_yolo:=false` 로 YOLO 노드를 아예 안 띄운다.
+
 ```bash
-ros2 run graspgenx_perception grasp_bridge_node
-ros2 run graspgenx_perception capture_graspgenx_scene
+export ROS_DOMAIN_ID=93
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false
+# 다른 터미널 (같은 도메인)
+ros2 service call /grasp/compute std_srvs/srv/Trigger
+```
+
+### B. YOLO 세그 (`yolo`) — 컨테이너 + 호스트
+
+**터미널 1 — 컨테이너**(GPU 추론. 프로파일 없으면 프레임 0장이다):
+
+```bash
+docker start od_kimkh
+docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
+  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
+    source /home/kimkh/cobot2_ws/install/setup.bash
+    ros2 launch graspgenx_perception graspx.launch.py \
+      run_bridge:=false device:=0 publish_overlay:=true classes:="[46,47]"'
+```
+
+**터미널 2 — 호스트**(브리지만. `seg_source:=yolo` 로 라벨맵을 쓰게 한다):
+
+```bash
+export ROS_DOMAIN_ID=93
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo
+# 다른 터미널
+ros2 service call /grasp/compute std_srvs/srv/Trigger
+```
+
+**확인**: 컨테이너 노드 로그에 `한 장도 못 받았다` 경고가 없어야 한다. 오버레이를 보려면
+호스트에서 `FASTRTPS_DEFAULT_PROFILES_FILE` 을 걸고 `rqt_image_view` →
+`/yolo_seg/overlay/compressed`.
+
+### 무엇을 비교하나
+
+`/grasp/compute` 응답과 노드 로그에 비교에 필요한 것이 전부 찍힌다:
+
+| 볼 것 | 어디에 |
+|---|---|
+| 채택된 물체 수·픽셀 수 | 브리지 로그의 세그 진단 (`obj_N: NNNN px`) |
+| 세그 소요시간 | 기하 38.8 ms(CPU) vs YOLO 5.5 ms(GPU) — 848×480 시절 값, 1280×720 에선 재측정 필요 |
+| grasp 후보 수·통과율 | `선택 단계:` 로그 (`점수 -> 도달 -> 접근축` 단계별 개수) |
+| 최종 점수·손끝 좌표 | 서비스 응답 message |
+| 눈으로 대조 | 저장된 씬의 `seg.png` / `rgb.png` (아래 "라이브 경로" 절의 저장 위치) |
+
+씬이 호출마다 타임스탬프 디렉토리로 남으므로 **두 경로의 `seg.png` 를 나중에 나란히 열 수 있다.**
+
+**2026-08-07 21:29 이 명령들로 실제 비교한 결과**(같은 장면, 위 A/B 를 그대로 실행.
+씬은 `data/graspgenx_scene/cmp_geo`, `cmp_yolo` 에 남겨 뒀다):
+
+| | `cmp_geo` (기하) | `cmp_yolo` (YOLO, `classes:="[46,47]"`) |
+|---|---|---|
+| 박스 안 픽셀 | 299,386 | 299,766 |
+| 채택 물체 | **3개** (덩어리 7개 중) | **1개** |
+| 크기 | 4182 / 5501 / 477 px | 4953 px |
+| seg 라벨값 | `0, 2, 101, 102, 103` | `0, 101` |
+| `label_map` | `ground/table/obj_1..3` | `obj_1` 만 |
+
+읽는 법: 기하는 **박스 안이면 뭐든** 잡아 로봇 팔로 보이는 덩어리(표면중심 z=+0.25 m,
+테이블 위 33 cm)까지 `obj_1` 로 넣었다. YOLO 는 `classes` 로 걸러 1개만 냈지만 그 대신
+**테이블 라벨이 없다** — `segment_from_labels()` 는 `obj_` 만 만든다. GraspGenX 로더가
+`obj_` 접두어만 보고 씬 점군엔 유효 depth 가 전부 들어가므로 이 차이는 결과에 영향이 없다.
+
+### 단독 실행 (씬 한 장만 뜨고 싶을 때)
+
+```bash
+ros2 run graspgenx_perception capture_graspgenx_scene --ros-args -p scene:=cmp_geo
+ros2 run graspgenx_perception capture_graspgenx_scene --ros-args \
+  -p scene:=cmp_yolo -p seg_source:=yolo
 ```
 
 > **2026-08-07 파일 위치를 통일했다.** 이전에는 소스가 워크스페이스 `scripts/` 에 있고
@@ -266,26 +401,72 @@ ros2 run graspgenx_perception capture_graspgenx_scene
 
 **두 노드는 같은 머신에서 못 돈다.** `yolo_seg_node` 는 ultralytics 때문에 **컨테이너 전용**
 이고, `grasp_bridge_node` 는 GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 uv 가 없다**.
-런치 인자로 반씩 나눠 띄운다:
-
-```bash
-# 컨테이너 (od_kimkh — ROS_DOMAIN_ID=0 export 를 잊지 말 것)
-ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false
-# 호스트
-ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false
-ros2 service call /grasp/compute std_srvs/srv/Trigger
-```
+그래서 위 "실행 명령" 절처럼 `run_yolo` / `run_bridge` 로 반씩 나눠 띄운다. **한 머신에서
+둘 다 true 로 두면 안 된다** — 기본값이 둘 다 `true` 라서 인자 없이 띄우면 있는 쪽만 살고
+없는 쪽은 즉시 죽는다.
 
 카메라와 로봇 bringup 은 이 런치에 넣지 않았다 — bringup 은 실기 모션이라 사람이 직접
 실행해야 하고, 카메라는 다른 파이프라인과 공유한다.
 
 | 런치 인자 | 기본값 | 설명 |
 |---|---|---|
-| `seg_source` | `geometric` | `geometric` 또는 `yolo` |
+| `seg_source` | `geometric` | `geometric` 또는 `yolo`. **브리지에만** 간다 |
 | `run_yolo` / `run_bridge` | `true` | 어느 쪽을 띄울지 |
 | `image_topic` | `/camera/camera/color/image_raw` | |
 | `publish_overlay` | `true` | |
 | `device` / `conf` / `min_pixels` | `0` / `0.25` / `300` | |
+| `classes` | `'[]'` | **탐지할 물체 지정** — COCO 인덱스 목록. 아래 절 참고 |
+
+## 탐지할 물체를 바꾸려면 — `classes` 파라미터 (banana 등)
+
+**어디에 넣나: `yolo_seg_node` 의 `classes` 파라미터.** 브리지도 캡처 노드도 아니다.
+값은 이름이 아니라 **COCO 클래스 인덱스의 정수 목록**이다. 비우면 80종 전부.
+
+세 가지 넣는 법 (전부 같은 파라미터):
+
+```bash
+# 1) 런치 인자 (컨테이너에서 YOLO 를 띄우는 정식 경로)
+ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false classes:="[46,47]"
+
+# 2) 노드 단독 실행
+ros2 run graspgenx_perception yolo_seg_node --ros-args -p classes:="[46,47]" -p device:=0
+
+# 3) 컨테이너 한 줄 (위 "빠른 실행" 의 docker exec 형태 안에 그대로)
+docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
+  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
+    source /home/kimkh/cobot2_ws/install/setup.bash
+    ros2 run graspgenx_perception yolo_seg_node --ros-args \
+      -p device:=0 -p classes:="[46,47]"'
+```
+
+⚠️ **`ros2 param set` 으로는 안 바뀐다.** 노드가 `__init__` 에서 한 번만 읽어
+`self.classes` 에 담는다(`yolo_seg_node.py:122-123`). 바꾸려면 **노드를 다시 띄운다.**
+
+자주 쓰는 인덱스 (2026-08-07 `yolo11n-seg.pt` 의 `model.names` 로 직접 확인):
+
+| 물체 | idx | 물체 | idx | 물체 | idx |
+|---|---|---|---|---|---|
+| banana | **46** | cup | 41 | book | 73 |
+| apple | **47** | bottle | 39 | vase | 75 |
+| orange | 49 | bowl | 45 | scissors | 76 |
+| sports ball | 32 | knife / fork / spoon | 43 / 42 / 44 | teddy bear | 77 |
+| person | 0 | cell phone | 67 | dining table | 60 |
+
+전체 목록은 컨테이너에서:
+
+```bash
+docker exec od_kimkh python3 -c "from ultralytics import YOLO; \
+  print(YOLO('/home/kimkh/cobot2_ws/install/object_detection/share/object_detection/resource/yolo11n-seg.pt').names)"
+```
+
+**`classes` 는 필터지 학습이 아니다.** 이 가중치는 COCO 80종만 안다 — 이 프로젝트의 공구 5종
+(drill/hammer/pliers/screwdriver/wrench)은 **어떤 인덱스로도 안 잡힌다.** 테이블 위 공구를
+찍으면 `apple`/`cup`/`person` 같은 걸로 억지 매핑된다(2026-08-07 라이브 실측).
+공구를 잡으려면 seg 데이터셋 재학습이 필요하고, 그 전까지는 `geometric` 이 정답이다.
+
+**같이 손대게 되는 파라미터 둘**: `conf`(신뢰도 임계, 낮추면 더 잡지만 오검출↑),
+`min_pixels`(이보다 작은 인스턴스는 버린다 — 겹침으로 깎인 것 포함).
+`seg_source:=geometric` 경로는 depth 만 보므로 **`classes` 와 무관하다.**
 | `out_dir` | `''` | 씬 4파일 저장 경로. 비우면 `<repo>/data/graspgenx_scene` (2026-08-07부터 항상 영구 저장, 임시 디렉토리 아님 — 아래 "라이브 경로" 절) |
 
 ## pick_fsm 과의 연결 — 지금 작동하는가
@@ -331,7 +512,7 @@ ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
 | 경로 | 인식 소스 | 지금 |
 |---|---|---|
 | `seg_source=geometric` + `grasp_source=legacy_trigger` | depth (호스트 전용) | **유일하게 도는 조합.** 이 패키지의 `yolo_seg_node` 는 **아예 안 쓰인다** |
-| `seg_source=yolo` | `/yolo_seg/labels` (컨테이너) | **막혀 있다** — 컨테이너→호스트 전송 문제(위 🔴) + COCO 클래스 불일치 |
+| `seg_source=yolo` | `/yolo_seg/labels` (컨테이너) | **전송은 뚫렸다**(2026-08-07 21:15, 호스트 25.6 Hz). 남은 막힘은 **COCO 클래스 불일치** 하나 |
 | `grasp_source=compute_grasp` | — | **서버 없음.** 기본값이라 그대로 띄우면 여기서 걸린다 |
 
 즉 **`graspgenx_perception` 의 `yolo_seg_node` 는 현재 pick_fsm 파이프라인에 실질적으로
@@ -464,7 +645,28 @@ python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out
 # -> /home/kimkh/cobot2_ws/src/graspgenx_perception/data/graspgenx_scene  (수정 전엔 build/ 밑)
 ```
 
-`.gitignore:38`의 `data/graspgenx_scene/`가 대상이라 어느 경로든 커밋되지는 않는다.
+**2026-08-07 21:12 실캡처로 재확인**: `ros2 run graspgenx_perception capture_graspgenx_scene
+-p scene:=zzprobe` → `src/graspgenx_perception/data/graspgenx_scene/zzprobe/` 에 파일 4개
+(depth.npy 3.6MB / rgb.png 1.1MB / seg.png / meta_data.json)가 **남았다**. 프로세스 종료
+후에도 그대로다 — `main()` 의 `finally` 는 `destroy_node()`/`shutdown()` 만 하고 파일을 건드리지
+않는다. `grasp_bridge_node.compute()` 도 같은 `write_scene()`/`default_out_dir()` 를 쓰고,
+삭제는 **쓰기 실패 시 `shutil.rmtree`** 한 곳뿐이다.
+
+⚠️ 그 `rmtree` 에 남은 구멍: `scene` 을 고정 이름으로 주면(예: `scene:=73`) 같은 디렉토리에
+다시 쓰는데, 이때 **중간에 실패하면 이전에 성공했던 씬까지 통째로 지운다.** 기본값(타임스탬프)
+경로는 디렉토리가 매번 새것이라 해당 없다. 고정 이름을 쓸 거면 이걸 알고 쓴다.
+
+🔴→✅ **`.gitignore` 가 새 저장 경로를 못 막고 있었다** (2026-08-07 21:32 발견·수정).
+규칙이 `data/graspgenx_scene/` 였는데, 슬래시가 중간에 있는 패턴은 `.gitignore` 위치(repo
+루트)에 **고정**된다 — `realpath` 수정으로 저장 위치가 `src/graspgenx_perception/data/...`
+로 옮겨간 순간 규칙 밖으로 나갔고, 실제로 `git status` 에 씬 8개 파일(8.9MB)이 커밋 대기로
+떴다. `**/data/graspgenx_scene/` 로 고쳐 세 경로(루트·`src/`·`build/`) 전부 막히는 것을
+`git check-ignore -v` 로 확인했다.
+옛 씬 7개(`00,001,0012,01,10,11,73`)는 **워크스페이스 루트** `data/graspgenx_scene/` 에 있다 —
+소스가 `scripts/` 에 있던 시절의 경로다. 지금 코드가 쓰는 곳은
+`src/graspgenx_perception/data/graspgenx_scene/` 이므로 **옛 씬을 찾을 때 두 군데를 본다.**
+`build/graspgenx_perception/data/graspgenx_scene/00`(08-07 10:27)은 `realpath` 수정 전에
+떨어진 것이라 다음 `rm -rf build` 때 사라진다.
 회귀 확인: `pytest test_yolo_seg.py`(10개) + `manual_grasp_bridge.py` + `pick_fsm`
 `pytest`(26개) 전부 PASS(2026-08-07).
 
@@ -503,9 +705,10 @@ python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out
    2026-08-07 라이브 카메라에서는 `['apple','cup','person']` 로 오검출한다.
    공구 seg 데이터셋 재학습이 필요하다.
 
-2. **컨테이너 → 호스트 전송이 막혀 있다** (위 "🔴 미해결"). 라벨맵이 호스트의
-   `capture_graspgenx_scene.py` 까지 도달하지 못하므로, 클래스 문제를 풀어도 이게 먼저 풀려야
-   한다.
+2. ~~컨테이너 → 호스트 전송이 막혀 있다.~~ **2026-08-07 21:15 재측정에서 뚫렸다** — 라벨맵이
+   호스트에 25.6 Hz 로 도달하고, 라벨맵(1280×720)과 정렬 depth(1280×720)의 해상도도 같아
+   `segment_from_labels()` 의 shape 검사를 통과한다. 남은 것은 클래스 불일치뿐이다.
+   (원인을 특정하지 못한 채 증상이 사라진 것이므로 재발 가능성은 남아 있다.)
 
 > 옛 README 는 "`seg_source=yolo` 는 작업공간 박스를 안 본다"고 적었는데 **사실이 아니다.**
 > `segment_from_labels()` 는 기하 경로와 **같은** `workspace_mask()` 박스와 반경 크롭

@@ -26,7 +26,6 @@ sudo docker start isaac_ros_dev-x86_64-container
 # 켠 뒤 셸 붙이기
 sudo docker exec -it isaac_ros_dev-x86_64-container bash
 
-
 sha256sum -c isaac_ros_dev-x86_64.tar.gz.sha256   # 무결성 확인
 gunzip -c isaac_ros_dev-x86_64.tar.gz | docker load  # 또는: docker load -i <(pigz -dc isaac_ros_dev-x86_64.tar.gz)
 

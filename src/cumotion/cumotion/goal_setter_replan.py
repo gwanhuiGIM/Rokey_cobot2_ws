@@ -89,6 +89,55 @@ D2R = math.pi / 180.0
 JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
 
 
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║                                                                           ║
+# ║   🎯 목표 설정 — 여기만 고치면 된다. ①과 ② 중 **하나만** 주석을 푼다.      ║
+# ║                                                                           ║
+# ║   (ros2 run ... --ros-args -p goal_type:=pose 처럼 실행 인자로 줘도        ║
+# ║    되고, 그때는 인자가 아래 값을 이긴다)                                   ║
+# ║                                                                           ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ ① 관절값으로 목표를 준다 (deg)                            │
+# └───────────────────────────────────────────────────────────────────────────┘
+# GOAL_MODE = 'joint'
+
+GOAL_A_JOINT_DEG = [45.0, 0.0, 90.0, 0.0, 90.0, 0.0]
+GOAL_B_JOINT_DEG = [-45.0, 0.0, 90.0, 0.0, 90.0, 0.0]
+
+# ⚠️ "관절 목표"라고 부르지만 cuMotion 은 이걸 FK 로 pose 로 바꾼 뒤 **IK 를 다시 푼다**
+#    (cumotion_planner.py:714-730). 같은 pose 를 만드는 다른 IK 해로 갈 수 있으므로
+#    **여기 적은 관절값 그대로 도착한다는 보장이 없다.** 관절 목표인데 IK_FAIL 도 난다.
+
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ ② base_link 기준 xyz 로 목표를 준다                           │
+# │    GOAL_MODE 줄의 주석을 풀고, 위 ①의 GOAL_MODE 줄을 주석 처리한다        │
+# └───────────────────────────────────────────────────────────────────────────┘
+GOAL_MODE = 'pose'
+
+# 형식 두 가지를 다 받는다 — **길이로 자동 판별**한다:
+#     7개 → [x, y, z, qx, qy, qz, qw]   쿼터니언 (권장)
+#     6개 → [x, y, z, roll, pitch, yaw] 오일러, 각도는 **deg**
+#
+# 🔴 A/B 자세는 pitch 가 정확히 90° 라 **짐벌락 지점**이다. rpy 로 적으면 같은 자세를
+#    나타내는 (roll, yaw) 조합이 무수히 많아 헷갈린다 → **쿼터니언(7개)을 권한다.**
+#
+# 아래 값은 URDF 로 FK 계산한 것이다(위 관절값 A/B 와 같은 자세). **실측이 아니다.**
+# 실기에서 확인하려면 로봇을 그 자세에 두고:
+#     ros2 run tf2_ros tf2_echo base_link tool0
+# 이 출력의 Translation + Rotation(Quaternion)을 그대로 복사한다. 그게 단일 출처다.
+#
+# ⚠️ 기준 링크는 **tool0** 이지 RG2 손가락 끝(TCP)이 아니다 (m0609_rg2.xrdf 주석).
+# ⚠️ 두산 API 의 posx(x,y,z,a,b,c)를 그대로 옮기면 안 된다. 두산은 **mm + Euler ZYZ**
+#    (dsr_common2/include/DRFS.h:769), 여기는 **m + 쿼터니언**이다. 숫자가 6개로
+#    똑같이 생겨서 조용히 틀린다.
+GOAL_A_POSE = [0.2558, 0.2646, 0.4244, -0.653298, -0.270371, 0.653320, -0.270692]
+GOAL_B_POSE = [0.2646, -0.2558, 0.4244, -0.653132, 0.270770, 0.653376, 0.270559]
+
+# ═══════════════════════ 목표 설정 끝 ═══════════════════════════════════════
+
+
 def err_name(code: int) -> str:
     for name in dir(MoveItErrorCodes):
         if name.startswith('_') or name == 'val':
@@ -300,20 +349,45 @@ class GoalSetterReplanNode(Node):
         self.acc_scale = float(p('acc_scale', 0.15).value)
         self.allowed_planning_time = float(p('allowed_planning_time', 10.0).value)
 
-        self.goal_type = p('goal_type', 'joint').value              # joint | pose
-        self.goal_joint_deg = list(p('goal_joint_deg', [45.0, 0.0, 90.0, 0.0, 90.0, 0.0]).value)
-        self.goal_pose = list(p('goal_pose', [0.45, 0.0, 0.35, 180.0, 0.0, 0.0]).value)
+        # 🎯 기본값은 전부 파일 상단의 "목표 설정" 블록에서 온다. 거기를 고치면 된다.
+        #    실행 인자(-p goal_type:=pose 등)를 주면 그쪽이 이긴다.
+        self.goal_type = p('goal_type', GOAL_MODE).value             # joint | pose
+        self.goal_joint_deg = list(p('goal_joint_deg', GOAL_A_JOINT_DEG).value)
+        self.goal_pose = list(p('goal_pose', GOAL_A_POSE).value)
 
         self.pingpong = bool(p('pingpong', False).value)
-        self.pingpong_b_deg = list(p('pingpong_b_deg',
-                                     [-45.0, 0.0, 90.0, 0.0, 90.0, 0.0]).value)
+        self.pingpong_b_deg = list(p('pingpong_b_deg', GOAL_B_JOINT_DEG).value)
+        self.goal_pose_b = list(p('goal_pose_b', GOAL_B_POSE).value)
         self.cycles = int(p('cycles', 0).value)                     # 0 = 무한
+
+        # 🎯 A→B 를 N 등분해서 경유점을 찍는다. 1 = 직행(지금까지의 거동).
+        #
+        #   왜: plan() 호출 하나가 곧 ESDF 재조회다. 구간을 쪼개면 장애물 지도를 그만큼
+        #   자주 읽으므로 **회피 반응 시간이 1/N 로 줄어든다.** 구간 안에서는 여전히 못 피한다.
+        #
+        #   2026-08-08 실측 기반 계산 (vel/acc 0.25, pose 모드, A↔B 90°):
+        #     구간 실행시간 = max(전체이동 7.6초 / N, 바닥값) + MoveIt 오버헤드 0.55초
+        #     바닥값 = num_trajopt_time_steps(32) × interpolation_dt(0.025) / vel_scale
+        #            = 0.8 / 0.25 = 3.2초   ← 아무리 잘게 쪼개도 이 밑으로 안 내려간다
+        #
+        #     N=1  총 8.2초 / 반응 8.2초      N=2  총 8.7초 / 반응 4.4초  ← 사실상 공짜
+        #     N=3  총 11.3초 / 반응 3.8초     N=4+ 총 15초+ / 반응 3.8초  ← 손해만 커진다
+        #
+        #   ⚠️ 3.8초보다 빠르게 하려면 vel_scale 을 더 올리거나(회피 여유는 줄어든다)
+        #      T6 의 num_trajopt_time_steps 를 줄여야 한다(미검증).
+        #   ⚠️ 경유점은 **고정점**이다. 장애물이 경유점 위에 앉으면 그 구간 계획이 실패한다.
+        #      목표가 먼 진짜 재계획과 달리 우회할 자유가 없다. N 을 키울수록 이 위험이 커진다.
+        #   ⚠️ pingpong 일 때만 동작한다 (A/B 양 끝점을 알아야 사이를 나눌 수 있다).
+        self.waypoints = max(1, int(p('waypoints', 1).value))
 
         self.joint_goal_tol = float(p('joint_goal_tol', 0.01).value)
         # 🔴 목표 하나(pingpong=false)일 때 도착하면 종료한다.
         #    이게 없으면 도착한 뒤에도 타이머가 같은 goal 을 영원히 다시 던진다
         #    (2026-08-07 실측: 이미 목표에 있는데도 사이클마다 SUCCESS 가 5.8초씩 찍혔다).
         self.stop_when_arrived = bool(p('stop_when_arrived', True).value)
+        # 🔴 preemptive 전용 실험 스위치. 새 goal 전에 이전 goal 을 취소할지.
+        #    기본 false = 2026-08-08 에 실측한 것과 같은 조건(비교 기준을 유지한다).
+        self.cancel_previous = bool(p('cancel_previous', False).value)
 
         self._cb = ReentrantCallbackGroup()
         self._js_lock = threading.Lock()
@@ -330,6 +404,8 @@ class GoalSetterReplanNode(Node):
         self._previous_goal_position = None
         self._busy = False
         self._target_idx = 0
+        self._wp_idx = 0            # 이번 구간에서 몇 번째 경유점을 향하고 있나
+        self._first_leg = True      # 첫 구간은 출발점을 모르므로 경유점을 안 쓴다
         self._cycle_count = 0
         self.stat_goals = 0
         self.stat_fail = 0
@@ -369,26 +445,109 @@ class GoalSetterReplanNode(Node):
             return self.pingpong_b_deg
         return self.goal_joint_deg
 
+    def _current_target_pose(self) -> List[float]:
+        if self.pingpong and self._target_idx == 1:
+            return self.goal_pose_b
+        return self.goal_pose
+
+    # ── 🎯 경유점 ────────────────────────────────────────────────────────────
+    @staticmethod
+    def _slerp(q0: Sequence[float], q1: Sequence[float], t: float) -> List[float]:
+        """쿼터니언 구면 선형보간. 위치와 달리 회전은 단순 선형보간하면 안 된다."""
+        q1 = list(q1)
+        d = sum(a * b for a, b in zip(q0, q1))
+        if d < 0.0:                       # 더 짧은 쪽으로 돈다
+            q1 = [-v for v in q1]
+            d = -d
+        if d > 0.9995:                    # 거의 같으면 선형으로 충분(수치 안정)
+            q = [a + t * (b - a) for a, b in zip(q0, q1)]
+        else:
+            th0 = math.acos(max(-1.0, min(1.0, d)))
+            s0 = math.sin(th0)
+            q = [math.sin(th0 - th0 * t) / s0 * a + math.sin(th0 * t) / s0 * b
+                 for a, b in zip(q0, q1)]
+        n = math.sqrt(sum(v * v for v in q))
+        return [v / n for v in q]
+
+    def _pose_as_quat(self, g: Sequence[float]) -> Optional[tuple]:
+        """goal_pose(6개 rpy 또는 7개 쿼터니언)를 (xyz, quat) 로 정규화한다."""
+        if len(g) == 7:
+            return [float(v) for v in g[:3]], [float(v) for v in g[3:]]
+        if len(g) == 6:
+            qm = quat_from_rpy(*[float(v) * D2R for v in g[3:]])
+            return [float(v) for v in g[:3]], [qm.x, qm.y, qm.z, qm.w]
+        return None
+
+    def _sub_goal_ratio(self) -> float:
+        """이번에 갈 경유점이 출발점에서 목표까지의 몇 % 지점인가."""
+        return float(self._wp_idx + 1) / float(self.waypoints)
+
+    def _leg_start(self):
+        """이번 구간의 출발점 = 지금 목표의 반대쪽 끝점."""
+        if self.goal_type == 'joint':
+            return self.pingpong_b_deg if self._target_idx == 0 else self.goal_joint_deg
+        return self.goal_pose_b if self._target_idx == 0 else self.goal_pose
+
+    def _use_waypoints(self) -> bool:
+        """경유점을 쓸 조건.
+
+        🔴 첫 구간은 제외한다. 로봇이 실제로 어디서 출발하는지 모르는데 반대쪽 끝점에서
+           보간하면 엉뚱한 지점이 나온다. 첫 목표에 도달한 뒤부터가 A↔B 사이라 의미가 있다.
+        """
+        return self.waypoints > 1 and self.pingpong and not self._first_leg
+
     def _build_constraints(self) -> Optional[Constraints]:
         if self.goal_type == 'joint':
-            target = [v * D2R for v in self._current_target_deg()]
+            target_deg = self._current_target_deg()
+            if self._use_waypoints():
+                # 🎯 관절값 선형보간 — 출발점(반대쪽 끝)에서 목표까지 t 지점
+                t = self._sub_goal_ratio()
+                s = self._leg_start()
+                target_deg = [a + t * (b - a) for a, b in zip(s, target_deg)]
+            target = [v * D2R for v in target_deg]
             return self.client.joint_constraints(target, JOINT_NAMES)
 
         if self.goal_type == 'pose':
+            g = self._current_target_pose()
+
+            if self._use_waypoints():
+                # 🎯 위치는 선형보간, 회전은 slerp. 둘 다 쿼터니언 형태로 맞춰서 섞는다.
+                end = self._pose_as_quat(g)
+                start = self._pose_as_quat(self._leg_start())
+                if end is None or start is None:
+                    self.get_logger().error(
+                        'goal_pose 길이가 6 또는 7 이 아니다 — 경유점 보간 불가')
+                    return None
+                t = self._sub_goal_ratio()
+                xyz = [a + t * (b - a) for a, b in zip(start[0], end[0])]
+                quat = self._slerp(start[1], end[1], t)
+                g = xyz + quat          # 항상 7개짜리가 된다
+
             ps = PoseStamped()
-            ps.header.frame_id = self.base_frame
+            ps.header.frame_id = self.base_frame       # world_frame, 기본 base_link
             ps.header.stamp = self.get_clock().now().to_msg()
             pose = Pose()
-            pose.position.x, pose.position.y, pose.position.z = \
-                [float(v) for v in self.goal_pose[:3]]
-            pose.orientation = quat_from_rpy(*[v * D2R for v in self.goal_pose[3:]])
+            pose.position.x, pose.position.y, pose.position.z = [float(v) for v in g[:3]]
+
+            # 🎯 길이로 자동 판별한다 (파일 상단 "목표 설정" 블록 참고)
+            #    7개 → 쿼터니언 그대로 / 6개 → rpy(deg) 를 쿼터니언으로 변환
+            if len(g) == 7:
+                pose.orientation = Quaternion(
+                    x=float(g[3]), y=float(g[4]), z=float(g[5]), w=float(g[6]))
+            elif len(g) == 6:
+                pose.orientation = quat_from_rpy(*[float(v) * D2R for v in g[3:]])
+            else:
+                self.get_logger().error(
+                    f'goal_pose 길이가 {len(g)} 다. 7개(xyz+쿼터니언) 또는 6개(xyz+rpy deg)여야 한다.')
+                return None
+
             ps.pose = pose
 
             # 원본 goal_initializer.py:116-124 의 "목표가 충분히 움직였을 때만" 게이트.
             # threshold 0.0 이면 항상 통과한다(우리 기본값).
             if self.goal_change_position_threshold > 0.0:
                 import numpy as np
-                new_goal = np.array(self.goal_pose[:3], dtype=float)
+                new_goal = np.array(g[:3], dtype=float)
                 if self._previous_goal_position is not None:
                     d = float(np.linalg.norm(self._previous_goal_position - new_goal))
                     if d <= self.goal_change_position_threshold:
@@ -424,23 +583,75 @@ class GoalSetterReplanNode(Node):
         if rclpy.ok():
             rclpy.shutdown()
 
+    def _advance(self) -> bool:
+        """구간(경유점 또는 최종 목표) 하나를 마쳤을 때. True 면 루프를 끝낸 것이다.
+
+        경유점이 남아 있으면 다음 경유점으로 넘어가고, 다 썼으면 _on_reached() 로 간다.
+        """
+        if self._use_waypoints():
+            self._wp_idx += 1
+            if self._wp_idx < self.waypoints:
+                self.get_logger().info(
+                    f'  └ 경유점 {self._wp_idx}/{self.waypoints} 통과 — 다음 경유점으로')
+                return False
+        self._wp_idx = 0
+        self._first_leg = False
+        return self._on_reached()
+
+    def _on_reached(self) -> bool:
+        """최종 목표(A 또는 B)에 도달했을 때의 처리. True 면 루프를 끝낸 것이다."""
+        if self.pingpong:
+            self._target_idx ^= 1
+            if self._target_idx == 0:
+                self._cycle_count += 1
+                self.get_logger().info(f'왕복 {self._cycle_count}회 | {self.summary()}')
+                if self.cycles and self._cycle_count >= self.cycles:
+                    self._finish('지정 왕복 완료 — 종료')
+                    return True
+            nxt = 'B' if self._target_idx == 1 else 'A'
+            self.get_logger().info(f'도착 → 목표 {nxt} 로 전환')
+            return False
+        if self.stop_when_arrived:
+            self._finish('목표 도착 — 종료')
+            return True
+        return False
+
     def on_timer(self) -> None:
         # sequential 모드에서 send_goal 이 블록하는 동안 타이머가 재진입하지 않게 막는다.
         # (원본은 MutuallyExclusive 콜백그룹이라 자동으로 막혔다. 우리는 Reentrant 라 직접 막는다)
         if self.mode == 'sequential' and self._busy:
             return
 
-        # 🔴 목표가 하나뿐인데 이미 도착했으면 끝낸다.
-        #    ⚠️ pingpong 일 때는 도착이 "다음 목표로 전환" 신호이므로 여기서 끝내면 안 된다.
-        if self.stop_when_arrived and not self.pingpong and self._arrived():
-            self._finish('목표 도착 — 종료')
-            return
+        # ── 도착 판정: 🔴 모드마다 근거가 달라야 한다 (2026-08-08 실측으로 배운 것) ──
+        #   sequential : MoveGroup 결과(SUCCESS)로 판정한다 → 아래 결과 분기의 _on_reached()
+        #   preemptive : 결과를 안 기다리므로 /joint_states 실측으로 여기서 판정한다
+        #
+        # ⚠️ sequential 에 관절공간 판정을 쓰면 안 된다. cuMotion 은 관절 목표를 FK 로 pose 로
+        #    바꾼 뒤 IK 를 푸는데(cumotion_planner.py:714-730), **같은 pose 를 만드는 다른 IK 해**
+        #    로 갈 수 있다. 그러면 pose 는 맞는데 관절값이 달라 _arrived() 가 영영 False 다.
+        #    2026-08-08 실측: 목표 B 에서 정확히 이게 나서 B→A 전환이 안 되고 제자리 궤적만
+        #    5.89초씩 무한 반복했다. (A 에서는 우연히 같은 IK 해가 나와 문제가 안 드러났다)
+        if self.mode == 'preemptive' and self._arrived():
+            if self._advance():
+                return
 
         constraints = self._build_constraints()
         if constraints is None:
             return
 
         wait = (self.mode == 'sequential')
+
+        # 🔴 선점 실험 스위치 — 새 goal 을 던지기 **전에** 이전 goal 을 취소한다.
+        #    ⚠️ send_goal 뒤에 두면 방금 보낸 goal 을 취소하게 된다. 반드시 앞이어야 한다.
+        #
+        #    2026-08-08 preemptive 실측: 8초 → 30초 → 72초+ 로 갈수록 느려졌다.
+        #    두 가설이 구분이 안 된다 —
+        #      (a) 취소를 안 해서 goal 이 쌓이고 로봇이 한참 전 궤적을 실행 중이다
+        #      (b) 새 goal 이 매번 실행을 abort 시켜 v=0 에서 재출발한다(구조적 한계)
+        #    이 스위치를 켜고 시간이 확 줄면 (a), 그대로면 (b) 다.
+        if not wait and self.cancel_previous:
+            self.client.cancel()
+
         self._busy = True
         self.stat_goals += 1
         name = 'B' if (self.pingpong and self._target_idx == 1) else 'A'
@@ -475,14 +686,10 @@ class GoalSetterReplanNode(Node):
             self.get_logger().info(
                 f'✅ 목표 {name} 도착 (plan+execute 완료) | '
                 f'회피 불가 구간 {elapsed:.2f}초')
-            if self.pingpong:
-                self._target_idx ^= 1
-                if self._target_idx == 0:
-                    self._cycle_count += 1
-                    self.get_logger().info(f'왕복 {self._cycle_count}회 | {self.summary()}')
-                    if self.cycles and self._cycle_count >= self.cycles:
-                        self._finish('지정 왕복 완료 — 종료')
-                        return
+            # 🔴 sequential 의 전환은 여기서 한다 — MoveGroup 이 SUCCESS 를 줬다는 것이
+            #    "도착"의 유일하게 믿을 수 있는 신호다(위 on_timer 주석의 IK 해 문제).
+            if self._advance():
+                return
         else:
             self.stat_fail += 1
             hint = ''

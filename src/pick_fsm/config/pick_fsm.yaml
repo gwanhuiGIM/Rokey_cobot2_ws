@@ -30,7 +30,8 @@ task_manager:
     planner_id: ''              # 비우면 파이프라인 기본 플래너
     replan: true
     replan_attempts: 3
-    replan_delay: 1
+    replan_delay: 1.0           # ⚠️ 반드시 소수점을 붙인다. `1` 이면 YAML 이 INTEGER 로 읽어
+                                #    declare_parameter 기본값(DOUBLE)과 타입이 달라 노드가 죽는다
     motion_retries: 2
 
     # ── 자세 ─────────────────────────────────────────────
