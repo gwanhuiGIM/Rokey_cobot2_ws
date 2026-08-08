@@ -135,19 +135,14 @@ def generate_launch_description():
 
     # ── [real] OnRobot RG2 드라이버 ──────────────────────────────────
     # /joint_states → /onrobot_joint_states 로 remap (joint_state_publisher와 충돌 방지)
+    # IP·포트·손끝 offset은 config/rg2_driver.yaml이 정본이다 (bringup.launch.py와 공유).
     onrobot_driver = Node(
         package='onrobot_rg_control',
         executable='OnRobotRGControllerServer',
         name='OnRobotRGControllerServer',
         output='screen',
-        parameters=[{
-            '/onrobot/control':      'modbus',
-            '/onrobot/ip':           '192.168.1.1',
-            '/onrobot/port':         502,
-            '/onrobot/changer_addr': 65,
-            '/onrobot/gripper':      'rg2',
-            '/onrobot/offset':       5,
-        }],
+        parameters=[os.path.join(
+            get_package_share_directory('m0609_rg2_bringup'), 'config', 'rg2_driver.yaml')],
         remappings=[('/joint_states', '/onrobot_joint_states')],
         condition=IfCondition(is_real),
     )

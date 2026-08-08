@@ -86,7 +86,9 @@ DEFAULTS = {
     # 세그멘테이션 백엔드. 'geometric' = 작업공간 박스 + connectedComponents (신경망 0개),
     # 'yolo' = yolo_seg 노드가 내는 라벨맵을 그대로 쓴다. 라벨 규약(101,102,...)이 같아
     # 변환이 필요 없다. yolo 는 학습한 클래스만 잡으므로 공구 seg 모델이 없으면 geometric 이 낫다.
-    'seg_source': 'geometric',
+    # 2026-08-08: 잡을 물체를 target_classes 로 지정해 하나씩 돌리는 운용으로 확정 —
+    # geometric 은 클래스를 모른다(위 target_classes 주석 참고). 기본값을 yolo 로 바꿨다.
+    'seg_source': 'yolo',
     'label_topic': '/yolo_seg/labels',
     # yolo_seg_node 가 내는 "라벨값 -> 클래스 이름" 매핑. target_classes 필터가 이걸 쓴다.
     'class_topic': '/yolo_seg/classes',

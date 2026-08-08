@@ -4,15 +4,17 @@
 `yolo_seg_node` 는 ultralytics 때문에 **컨테이너 전용**이고, `grasp_bridge_node` 는
 GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 uv 가 없다**. 그래서 반씩 나눠 띄운다:
 
-  # A) 기하 세그 — 호스트 한 대로 끝난다 (기본값, 지금 유일하게 검증된 경로)
-  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false
-
-  # B) YOLO 세그 — 컨테이너와 호스트를 각각 띄운다
-  #   컨테이너: FASTRTPS_DEFAULT_PROFILES_FILE 필수 (없으면 프레임 0장)
-  ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false classes:='[46,47]'
-  #   호스트:
-  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo \
+  # A) YOLO 세그 (기본값) — 컨테이너와 호스트를 각각 띄운다
+  #   컨테이너 (run_yolo=true, run_bridge=false 가 기본이라 인자 없이 그대로 써도 된다):
+  #   FASTRTPS_DEFAULT_PROFILES_FILE 필수 (없으면 프레임 0장)
+  ros2 launch graspgenx_perception graspx.launch.py classes:='[46,47]'
+  #   호스트: run_bridge 는 기본 false 라 켜야 하고, yolo_seg_node 는 컨테이너 쪽 것만 쓴다
+  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true \
       target_classes:=apple
+
+  # B) 기하 세그 — 호스트 한 대로 끝난다. 물체 클래스를 모른다(target_classes 못 씀)
+  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true \
+      seg_source:=geometric
 
 카메라(`realsense2_camera`)와 로봇 bringup 은 **여기서 띄우지 않는다.** 로봇 bringup 은
 실기 모션이라 사람이 직접 실행해야 하고, 카메라는 다른 파이프라인과 공유하기 때문이다.
@@ -24,8 +26,9 @@ GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 uv 가 없다**. 그
   4. **컨테이너**에 `FASTRTPS_DEFAULT_PROFILES_FILE` (호스트 쪽은 없어도 됐다 — README 실측)
 
 seg_source:
-  geometric — 작업공간 박스 + connectedComponents. 신경망 0개. **기본값**
-  yolo      — yolo_seg_node 의 `/yolo_seg/labels` 를 그대로 쓴다
+  geometric — 작업공간 박스 + connectedComponents. 신경망 0개. 클래스를 모른다
+  yolo      — yolo_seg_node 의 `/yolo_seg/labels` 를 그대로 쓴다. **기본값**
+              (2026-08-08 확정: 잡을 물체를 target_classes 로 지정해 하나씩 돌린다)
 """
 
 from typing import List
@@ -38,9 +41,11 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 ARGS = {
-    'seg_source': ('geometric', "'geometric' 또는 'yolo'"),
-    'run_yolo': ('true', 'yolo_seg_node 를 띄울지 (seg_source=yolo 면 반드시 true)'),
-    'run_bridge': ('true', 'grasp_bridge_node 를 띄울지'),
+    'seg_source': ('yolo', "'geometric' 또는 'yolo'"),
+    'run_yolo': ('true', 'yolo_seg_node 를 띄울지 (seg_source=yolo 면 반드시 true). **기본값**'),
+    # 기본 false — 컨테이너(uv 없음)에서 무심코 같이 뜨는 걸 막는다. 호스트에서 브리지를
+    # 띄우려면 run_bridge:=true 를 명시한다 (위 A) 예시).
+    'run_bridge': ('false', 'grasp_bridge_node 를 띄울지'),
     'image_topic': ('/camera/camera/color/image_raw', 'yolo_seg 가 구독할 컬러 토픽'),
     'publish_overlay': ('true', '오버레이(JPEG) 발행 — rqt 로 보려면 true'),
     'device': ('0', "'0'=첫 GPU, 'cpu'"),

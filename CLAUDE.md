@@ -14,7 +14,8 @@
 ## 2. 환경
 - ROS 2 Humble / Ubuntu 22.04 / Python 3.10
 - **팀 공유 랩탑**(hostname `rokey`)이며 팀원마다 OS 계정을 분리해서 쓴다 (`kimkh`, `jjh`, `rokey`, `buildfarm` 등 확인됨). `kimkh` 계정에서는 `~/cobot1_ws`가 실제로 접근 가능함(2026-08-01 확인 — 이전에 "접근 불가"로 적혀 있던 건 오기였다). 다만 다른 계정의 홈 디렉토리는 여전히 권한상 접근 불가할 수 있으니 계정이 다르면 재확인한다.
-- 하드웨어: **M0609 로봇(네임스페이스 `dsr01`, IP `192.168.1.100`) + OnRobot RG2 그리퍼 + RealSense D435i 카메라 — 2026-08-02 실기 확인 완료**(`bringup.launch.py mode:=real` 연결 후 MoveIt Plan/Execute 성공). 근거·상세는 [[ws/cobot2/context/constraints]]. C270은 아직 실기 미확인.
+- 하드웨어: **M0609 로봇(네임스페이스 `dsr01`, IP `192.168.1.100`) + OnRobot RG2 그리퍼 + RealSense D435i 카메라 1대(eye-to-hand — 작업대 옆 고정, 팔에 붙어 있지 않다) — 2026-08-02 실기 확인 완료**(`bringup.launch.py mode:=real` 연결 후 MoveIt Plan/Execute 성공). 근거·상세는 [[ws/cobot2/context/constraints]].
+  - **pick_fsm·graspgenx 가 쓰는 카메라는 이 D435i 한 대뿐이고 고정이다.** "손목/eye-in-hand RealSense" 는 존재하지 않는다 (2026-08-08 사용자 정정 — graspgenx README 가 그렇게 적고 있었다. 출처는 별도 repo `~/M0609_VLA_system`). 팔에 다는 안은 C270이고 **아직 실기 미확인·미착수**다 — D435i 와 무관하다.
 
 ## 3. cobot1_ws에서 가져올 것 / 가져오지 말 것
 `kimkh` 계정에서 `~/cobot1_ws`는 접근 가능하다 (2026-08-01 확인).
@@ -23,10 +24,11 @@
 - **가져오지 않는다**: cobot1_ws의 `src/` ROS 코드를 복사해 오기 전에 네임스페이스·토픽·툴 무게 프리셋 의존성을 확인한다. 특히 힘 기반 노드는 그리퍼 자중 보정에 의존한다.
 
 ## 4. 이 ws에서만 참인 규칙 (실패에서 승격 — 상세 근거는 [[ws/cobot2/context/constraints]])
-- **yaml만 고쳐도 `colcon build`를 다시 돌린다.** `--symlink-install`이어도 `config/*.yaml`은 심볼릭 링크가 아니라 복사본이라 소스 수정이 반영되지 않는다 (`.py`는 반영돼서 착각하기 쉽다). — 2026-08-08
+- **yaml만 고쳐도 `colcon build`를 다시 돌린다 — 단 `ament_python` 패키지에서만 참이다.** `pick_fsm`·`cumotion`·`graspgenx_perception`은 `--symlink-install`이어도 share가 `build/<pkg>/config/`를 가리켜서 src 수정이 안 넘어간다 (`.py`는 반영돼서 착각하기 쉽다). **`ament_cmake` + `install(DIRECTORY config)`인 `m0609_rg2_bringup`·`m0609_rg2_moveit`은 반대로 share가 src로의 심볼릭 링크라 즉시 반영된다** — 여기에 이 규칙을 적용하면 없는 문제를 쫓는다(2026-08-08 `ls -l` 실측으로 정정). — 2026-08-08
 - **실수형 파라미터·리스트에는 예외 없이 소수점을 붙인다 (`0` ✗ → `0.0` ✓).** rcl YAML 파서는 리스트 안 int/float 혼합을 거부하고, 스칼라도 INTEGER로 읽혀 `declare_parameter`(DOUBLE)와 타입이 어긋나면 노드가 죽는다. PyYAML은 통과시키므로 파이썬 검증으로는 안 걸린다. — 2026-08-08
 - **`pick_fsm.yaml`의 `home_joints_deg`/`place_joints_deg`를 `robot_control.py`의 JReady/BUCKET_POS에 "맞추지" 않는다.** 다른 게 정상이다. — 2026-08-08
 - **컨테이너 안 노드를 `docker exec`로 직접 띄우지 않는다 → `scripts/graspx_container.sh`.** `docker exec`엔 `--sig-proxy`가 없어 호스트 Ctrl-C가 전달되지 않고, **재실행 1회당 인스턴스가 +1** 된다(실측 10개까지, `/yolo_seg/mask` publisher 10). — 2026-08-08
+- **하드웨어·네트워크 사실을 말하기 전에 `hostname`을 먼저 확인한다.** 이 ws는 머신 두 대에서 열린다: `rokey`(실기, i7-13620H + RTX 4060, 로봇 연결)와 `kimkh-17U70N-GA70K`(개인PC, i7-10510U, **GPU 없음**, `192.168.1.x` 도달 불가). `lspci`/`nvidia-smi`/`ping` 결과만으로 저장소 기록을 "거짓"이라 판정하지 말 것 — **머신이 다를 가능성을 먼저 배제한다.** 서브에이전트는 자기가 어느 머신에 있는지 모른 채 자신 있게 틀린 결론을 내므로 그 보고에도 같은 검사를 적용한다. — 2026-08-08
 
 ## 5. 채워야 할 항목
 - [x] 하드웨어 (로봇 모델, 네임스페이스, 그리퍼, 센서) — 2026-08-02 실기 확인 완료 (2절 참고)

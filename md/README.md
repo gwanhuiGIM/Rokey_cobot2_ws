@@ -10,7 +10,11 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 > 규칙: **같은 사실을 두 문서에 쓰지 않는다.** 아래 "단일 출처" 열이 그 사실을 소유한 문서다.
 > 다른 문서는 값을 베끼지 말고 링크한다 — 사본은 반드시 갈라진다([[ws/cobot2/errors-log]] 참고).
 >
-> ws 루트의 `README.md`는 **팀원용 실행 절차**다(3터미널 · 인자표 · 기능확인). 이 문서와 역할이 다르다.
+> ws 루트의 `README.md`는 **팀원용 실행 절차**다(재현 명령 · 인자표 · 기능확인). 이 문서와 역할이 다르다.
+> 패키지 레퍼런스(인터페이스·파라미터·빌드·검증 상태)는 **`src/PACKAGES.md`**다(2026-08-09,
+> 패키지별 README 4개를 통합 — `cobot_rg2`·`cumotion`·`graspgenx_perception`·`pick_fsm`
+> 폴더의 `README.md`는 이제 그 문서를 가리키는 포인터만 남아 있다). 이 세 문서(루트 실행
+> 가이드 / `src/PACKAGES.md` 레퍼런스 / `md/` 지식베이스)가 이 ws의 문서 전체다.
 
 ## 상시 문서 (계속 갱신)
 
@@ -34,6 +38,16 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 | [context/yolo_seg_grasp.md](context/yolo_seg_grasp.md) | YOLO 세그 컨테이너/호스트 2터미널 실행 스니펫 + COCO 인덱스 메모. 루트 `yolo_seg_grasp` 에서 이동(2026-08-08) |
 | [context/docker_gpu.md](context/docker_gpu.md) | isaac_ros 컨테이너 attach·중지·재기동 메모. 루트 `docker_gpu` 에서 이동(2026-08-08) |
 
+## 패키지 실기 로그 (레퍼런스는 `src/PACKAGES.md`)
+
+패키지별 README에 쌓이던 날짜별 실기 디버깅 로그를 2026-08-09 통합 작업에서 여기로 옮겼다.
+"지금 참인 값"은 `src/PACKAGES.md`, "그 값이 왜 그렇게 됐는지"는 아래.
+
+| 문서 | 단일 출처 |
+|---|---|
+| [cumotion-experiment-log.md](cumotion-experiment-log.md) | **cumotion 패키지 실기 실험 로그** — 루프 결함 발견·수정, 그리퍼 자기충돌 발견, 복셀 붕괴 조사 |
+| [graspgenx-perception-notes.md](graspgenx-perception-notes.md) | **graspgenx_perception 실기 검증·설계 검토 로그** — DDS 방향성 버그, 컨테이너 인스턴스 누적, TensorRT 검토, "다음 방향" 설계 |
+
 ## 계획 문서
 
 | 문서 | 상태 |
@@ -48,6 +62,10 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 | [plans/2026-08-05-cumotion-bringup.md](plans/2026-08-05-cumotion-bringup.md) | 🔴 **진행 중** — 게이트 A~F. §4-3 "cuMotion은 MoveIt octomap을 안 본다"가 nvblox 필수화의 근거 |
 | [plans/2026-08-07-graspgenx-target-matching.md](plans/2026-08-07-graspgenx-target-matching.md) | 🟢 현행 — "GraspGenX가 원하는 물체를 감지했는지" 배선 상태·남은 작업 |
 | [plans/2026-08-08-ws-cleanup.md](plans/2026-08-08-ws-cleanup.md) | ✅ **완료(08-08)** — pick_fsm 기준 패키지 지도 + 삭제 실행(7개 패키지 제거, object_detection 죽은 코드 정리). 결과는 `CLAUDE.md` 1절 |
+| [plans/2026-08-08-vla-integration.md](plans/2026-08-08-vla-integration.md) | 🟢 **범위 확정(2026-08-08, 3차 개정) · 미착수.** 단일 출처: `~/M0609_VLA_system` ↔ 이 ws **역할 경계**(로봇 행동은 우리, VLA 는 지시만·외부 PC·휴대폰 핫스팟), **지시 채널 계약**(커스텀 msg 0개), **VLA PC 로 넘길 카메라 토픽·대역폭 산정**(§3-3), **물체 선정(target selection) 설계** |
+| [plans/2026-08-09-cumotion-verify.md](plans/2026-08-09-cumotion-verify.md) | 🟢 **미착수 · 실기 대기(2026-08-09 작성).** 개인PC에서 소스만 읽고 세운 cuMotion 재계획 트리거 · VRAM 배분 가설의 검증 계획(T1~T7). 예상값은 전부 ⚠️ 미검증 — `rokey` 필요 |
+| [plans/2026-08-09-yolo-seg-finetune.md](plans/2026-08-09-yolo-seg-finetune.md) | 🟢 **미착수 · 계획만(2026-08-09).** COCO 가중치로는 우리 물체를 못 잡는 것(`state.md` 0-b의 잔여 블로커)을 뚫는다. **자동 어노테이션은 새 툴 없이** `capture_graspgenx_scene.py`의 depth 세그 + `scripts/seg_to_yolo.py`. 캡처·학습 모두 `rokey` 필요. 미결정 4건 |
+| [plans/2026-08-10-presentation.md](plans/2026-08-10-presentation.md) | 🟢 **미착수 · 계획만(2026-08-09 작성).** `md/`+git 이력을 시각화해 추후 발표자료로 만들기 위한 범위·데이터 소스 매핑. §3-2 = **실기 세션에서 같이 회수할 데이터 목록**. ⚠️ **파일명의 08-10은 발표일이 아니다**(비공개) — 마감으로 읽지 말 것 |
 | [plans/archive/2026-08-05-graspgenx-gpu-sprint.md](plans/archive/2026-08-05-graspgenx-gpu-sprint.md) | 🗄 **이력** — 2026-08-05 GraspGenX 실기 파이프라인 관통으로 목적 달성. 전제였던 "팀 공유 RTX 4070 좌석"은 폐기(실제는 로컬 RTX 4060 8GB) |
 
 ## 산출물 · 이력

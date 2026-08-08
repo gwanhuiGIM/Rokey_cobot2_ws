@@ -9,6 +9,13 @@ from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
+# ros2_control 제어주기(Hz). xacro(하드웨어 인터페이스 update_rate)와 controller_manager 에
+# 각각 100 이 따로 적혀 있던 것을 한 곳으로 모았다 — 한쪽만 고치면 어긋나기 때문이다.
+# UNVERIFIED: 두 값이 **달라도 되는지**는 확인하지 않았다. 같아야 한다는 근거를 찾은 게 아니라,
+#             원래 같았던 값이 조용히 갈라지는 것을 막았을 뿐이다.
+# 파라미터로 빼지 않은 이유: 실기에서 바꿀 값이 아니다.
+UPDATE_RATE = 100
+
 
 def generate_launch_description():
 
@@ -78,6 +85,10 @@ def generate_launch_description():
         get_package_share_directory('m0609_rg2_bringup'),
         'rviz', 'default.rviz'
     )
+    rg2_driver_params = os.path.join(
+        get_package_share_directory('m0609_rg2_bringup'),
+        'config', 'rg2_driver.yaml'
+    )
 
     # ── [real] Doosan URDF (ros2_control 하드웨어 인터페이스용) ───────
     doosan_xacro = PathJoinSubstitution([
@@ -90,7 +101,7 @@ def generate_launch_description():
         ' port:=', LaunchConfiguration('port'),
         ' mode:=', LaunchConfiguration('mode'),
         ' model:=m0609',
-        ' update_rate:=100',
+        f' update_rate:={UPDATE_RATE}',
     ])
 
     # ── ros2_control_node (virtual/real 공통) ─────────────────────────
@@ -102,7 +113,7 @@ def generate_launch_description():
         namespace='dsr01',
         parameters=[
             {'robot_description': ParameterValue(doosan_robot_description, value_type=str)},
-            {'update_rate': 100},
+            {'update_rate': UPDATE_RATE},
             PathJoinSubstitution([FindPackageShare('dsr_controller2'), 'config', 'dsr_controller2.yaml']),
         ],
         output='both',
@@ -142,19 +153,13 @@ def generate_launch_description():
 
     # ── [real] OnRobot RG2 드라이버 ──────────────────────────────────
     # /joint_states → /onrobot_joint_states 로 remap (joint_state_publisher와 충돌 방지)
+    # IP·포트·손끝 offset은 config/rg2_driver.yaml이 정본이다 — 여기 숫자를 다시 적지 않는다.
     onrobot_driver = Node(
         package='onrobot_rg_control',
         executable='OnRobotRGControllerServer',
         name='OnRobotRGControllerServer',
         output='screen',
-        parameters=[{
-            '/onrobot/control':      'modbus',
-            '/onrobot/ip':           '192.168.1.1',
-            '/onrobot/port':         502,
-            '/onrobot/changer_addr': 65,
-            '/onrobot/gripper':      'rg2',
-            '/onrobot/offset':       5,
-        }],
+        parameters=[rg2_driver_params],
         remappings=[('/joint_states', '/onrobot_joint_states')],
         condition=IfCondition(is_real),
     )

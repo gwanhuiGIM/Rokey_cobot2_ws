@@ -89,17 +89,12 @@ def generate_launch_description():
     # -----------------------------------------------------------------------
     # joint_limits: 관절 제한 로드
     # -----------------------------------------------------------------------
-    joint_limits_yaml = load_yaml('m0609_rg2_moveit', 'config/joint_limits.yaml')
+    # 이 yaml 전체가 robot_description_planning 네임스페이스로 들어간다.
+    # 충돌 여유(default_object_padding / default_robot_padding)도 **yaml 안에 있다** —
+    # 여기서 dict 로 덮어쓰지 않는다. 파이썬에 값을 두면 config/ 만 보는 사람이
+    # "고쳤는데 왜 안 먹지"로 시간을 버린다 (2026-08-08 이관).
     joint_limits = {
-        'robot_description_planning': {
-            **joint_limits_yaml,
-            # [튜닝] scene object(장애물)와의 충돌 판정에 더할 여유 거리(m).
-            # 0.0이면 실측 형상 그대로 충돌 검사. 값을 올리면 그만큼 멀리서부터
-            # "닿았다"고 판정해 더 넉넉히 돌아간다 (planning_scene_monitor
-            # 심볼 configureDefaultPadding 확인).
-            'default_object_padding': 0.02,
-            'default_robot_padding': 0.0,
-        }
+        'robot_description_planning': load_yaml('m0609_rg2_moveit', 'config/joint_limits.yaml')
     }
 
     # -----------------------------------------------------------------------

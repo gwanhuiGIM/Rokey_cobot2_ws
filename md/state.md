@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-08
+updated: 2026-08-09
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -8,7 +8,7 @@ owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-05
+**최종 갱신:** 2026-08-09
 
 ## 🟢 지금 어디까지 왔나 (2026-08-05) — GraspGenX 실기 파이프라인 관통
 
@@ -34,7 +34,8 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
   `setup.py` 가 바깥 경로를 `scripts=[...]` 로 심었다. 지금은 소스가 전부 패키지 안에 있고
   진입점이 `console_scripts` 라 **실행 파일 이름에서 `.py` 가 빠졌다**:
   `ros2 run graspgenx_perception {grasp_bridge_node,capture_graspgenx_scene}`.
-  이전↔현재 경로 대조표는 `src/graspgenx_perception/README.md` "graspx 와 함께 띄우기" 절에 있다
+  이전↔현재 경로 대조표는 `md/graspgenx-perception-notes.md`(2026-08-09 이전엔
+  `src/graspgenx_perception/README.md`였다 — 그날 패키지 README 통합으로 이관됨)에 있다
   (vault 밖이라 위키링크가 아니라 저장소 경로로 적는다).
 - 계약·튜닝값·함정은 [[ws/cobot2/detect_graspx]]가 단일 출처다(출력 규약 §3, 폭 계산·1/10mm 함수 §5, 상류 버그 §6). 실측 사실(체크포인트 sha256, VRAM 측정치)만 [[ws/cobot2/context/constraints]] "GraspGenX 관련"에 있다.
 - ✅ **`tool0` → RG2 손끝 실측 완료 (2026-08-07)**: 닫힘 240 mm = 브라켓+퀵커넥터 22 mm +
@@ -83,6 +84,69 @@ cuMotion이 쥔 장애물 복셀 **27,646개**(`/curobo/voxels`) — nvblox 세�
   `link_4 ↔ rg2_base_link` 자기충돌 검사를 껐다 — 실기 모션 전 재검토 필수 ③ 세그멘터 3.7 Hz 병목
   ④ 그리퍼 Modbus 연결 실패 ⑤ depth가 요청 15 Hz 대비 9.65 Hz.
 
+## README에서 이관 — 현재 상태 / 결합점 / 알려진 함정 (2026-08-09)
+
+> README는 재현 절차(0절)만 남기고, 검증 상태·결합점·함정은 여기로 옮겼다.
+> 대상: `m0609_rg2_bringup`, `m0609_rg2_moveit`.
+
+### 기능별 검증 상태
+
+| 기능 | 상태 | 근거 |
+|---|---|---|
+| 로봇 bringup (virtual) | ✅ 검증됨 | 컨트롤러 3개 active 확인 (2026-08-02) |
+| 로봇 bringup (real) | ✅ 검증됨 | 실기 연결 후 MoveIt Plan/Execute까지 확인 (2026-08-02) |
+| 카메라 드라이버 (`reals` alias) | ✅ 검증됨 | `/camera/camera/...` 토픽 실측 (2026-08-01) |
+| 카메라 드라이버 (`camera.launch.py`) | ✅ 검증됨 | 실기 D435i로 기동 (2026-08-03). `/camera/camera` + `/camera_calib_tf` 노드 기동, `/camera/camera/depth/color/points` 18~20 Hz 발행, `/tf_static`의 `base_link→camera_link`가 `calib_npy_to_tf.py` 출력과 소수점까지 일치 |
+| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. TF 발행 자체는 검증됨(위). 현행 캘리브(2026-08-03, `data/` 34장)는 **자체 진단에서 불합격** — AX=XB 병진잔차 중앙값 40.1 mm, 31쌍 중 21쌍이 30 mm 초과. octomap voxel(20 mm)의 2배라 **octomap 정밀도를 캘리브가 지배한다.** 개발용 TF로는 쓸 수 있으나 인식 정확도 실측의 근거로 삼지 말 것 |
+| MoveIt 경로 계획 | ✅ 검증됨 | RRTConnect, 0.019 s |
+| MoveIt 궤적 실행(Execute) | ✅ **실기 검증됨** | 실제 로봇으로 Plan → Execute 확인 (2026-08-02) |
+| RViz 수동 장애물 회피 | ✅ 설정 완료 | `publish_geometry_updates` 등 4개 활성. [README 5절](README.md#5-시뮬레이션에서-장애물-놓고-회피-디버깅) |
+| **3D 장애물 감지 (octomap)** | ✅ **실기 검증됨** (2026-08-03) | `moveit-ros-perception` 설치·self-filter·장애물 회피 확인. 상세 근거는 `md/review_moveit.md`가 단일 출처 |
+| 그리퍼 MoveIt 제어 | ❌ 미지원 | RG2는 `/onrobot/sendCommand` 서비스로 직접 제어. MoveIt 컨트롤러 없음 |
+| YOLO-seg 인식 (컨테이너→호스트) | ✅ 검증됨 | `/yolo_seg/labels` 호스트 수신 25.6 Hz (2026-08-07 21:15). 이전의 "데이터 안 흐름"은 해소됨 |
+| **물체 종류 선정** (`target_classes`) | ✅ 구현·PASS / ⚠️ 실기 미검증 | 빌드 PASS + 순수함수 24개 PASS + 저장된 실기 씬 이미지로 확인(8검출 → `apple` 1개). 라이브 파이프라인 실행은 안 해봄 (YOLO 주 파이프라인, README 0절·6절) |
+| **물체 개체 선정** (사과 2개 중 하나) | ❌ 미구현 | 설계만 있음 — **정본은 [`md/plans/2026-08-08-vla-integration.md`](plans/2026-08-08-vla-integration.md) §5** (좌표 키 + 클릭/서비스 지정). `graspgenx_perception/README.md` "다음 방향" 절의 옛 2단계 안(`scene_id` 핸들)은 이걸로 대체됐다 |
+| **VLA(`~/M0609_VLA_system`) 통합** | ❌ 미착수 (범위 확정) | **로봇 행동은 이 ws 가 그대로 유지**하고, VLA 는 "어떤 물체를 집을지"만 **외부 PC**(휴대폰 핫스팟 링크) 에서 전달한다. 지시 채널은 `std_msgs/String`(JSON) 하나 — 커스텀 msg·새 패키지 0개. **D435i 영상은 압축 컬러(`color/image_raw/compressed`)만 넘긴다** — 포인트클라우드 ~245 Mbps·raw 컬러 55 Mbps 는 핫스팟에서 불가 |
+
+> 3D 장애물 감지(octomap) 검증 결과·채택 설정값 스냅샷·cuRobo 비교 설계는 `md/review_moveit.md`가 단일 출처다.
+
+### 결합점 — 한 곳만 바꾸면 조용히 깨지는 것들
+
+**에러 없이 기능만 죽는다.** 건드리기 전에 짝을 확인하라.
+
+| # | 값 | 나오는 곳 | 어긋나면 |
+|---|---|---|---|
+| ① | 네임스페이스 `dsr01` | `bringup.launch.py`(`namespace=`), `moveit_controllers.yaml`(컨트롤러 이름 `/dsr01/...`), `moveit.launch.py`(`-c /dsr01/controller_manager`) — **3곳** | **Plan은 되고 Execute만 ABORTED.** 실제로 겪은 버그다 |
+| ② | 캘리브 `T_cam2base.npy` | `corecode/Calibration_Tutorial/`(생성) → `m0609_rg2_bringup/config/`(소비). 동기화는 **수동 `cp` 하나뿐** | 옛 값으로 TF가 발행된다. 340 mm 어긋난 전례 있음 |
+| ③ | xacro 파일명 `m0609_with_rg2.urdf.xacro` | `bringup.launch.py`, `moveit.launch.py` 양쪽이 경로로 직접 읽는다 | moveit이 런타임에 깨진다 |
+| ④ | 관절 이름 `joint_1..6` | SRDF, `dsr_controller2.yaml`의 JTC 설정, `moveit_controllers.yaml` | 궤적이 컨트롤러에 거부된다 |
+| ⑤ | `seg_source` **기본값 `yolo`** (2026-08-08 변경, `capture_graspgenx_scene.py:91`) | `grasp_bridge_node`(호스트, 소비) ← `yolo_seg_node`(**컨테이너**, 발행). 기동 명령이 서로 다른 두 터미널이다 | 컨테이너 쪽을 안 띄우면 `/grasp/compute`가 **`seg_source=yolo 인데 라벨맵을 못 받았다`**로 실패한다. 기동 순서는 **`src/PACKAGES.md`** "pick_fsm §2 실행" 3.5/4번이 정본 (2026-08-09 보강. 패키지 README는 같은 날 포인터만 남기고 이관됐다) |
+
+### 알려진 함정
+
+**포인트클라우드가 로봇 옆에 90° 돌아가서 뜬다**
+npy는 OpenCV **optical** 규약(z=전방), ROS `camera_link`는 REP-103 **body** 규약(x=전방)이다.
+`calib_npy_to_tf.py`가 기본으로 보정한다. `inv(T)` 문제가 아니다 — **부호를 만지지 말 것.**
+지문: 출력 RPY의 roll ≈ ±90°. 자세한 채점표는 [[ws/cobot2/context/constraints]].
+
+**`ros2 launch dsr_moveit_config_m0609 demo.launch.py`가 안 된다 — 이건 쓰는 게 아니다**
+① `MoveItConfigsBuilder("m0609")`가 관례상 `m0609_moveit_config` 패키지를 찾는데 실제 이름은
+`dsr_moveit_config_m0609`다 (업스트림 버그). ② 고쳐도 그 config의 URDF엔 **RG2가 없다.**
+→ 이 ws에서는 `m0609_rg2_moveit`을 쓴다.
+
+**Ctrl-C로 끌 때 segfault + 스택트레이스가 쏟아진다**
+MoveIt 2.5.9의 알려진 종료 순서 버그(`class_loader` 언로드 타이밍). 기능에 영향 없다. 무시.
+
+**RViz 창이 두 개 뜬다**
+bringup RViz(관측: RobotModel/TF/PointCloud2)와 MoveIt RViz(조작: MotionPlanning)는 목적이 다르다.
+다만 노드 이름이 둘 다 `rviz2`라 충돌 경고가 뜬다. 하나만 쓰려면 `moveit.launch.py rviz:=false`.
+
+**realsense-viewer와 ROS 드라이버는 동시에 못 쓴다** (USB 장치를 독점한다)
+
+**virtual 모드에서 에뮬레이터가 안 뜬다**
+이전 run의 Docker 컨테이너가 `Exited`로 남은 경우다. bringup이 자동으로 지우지만, 수동은
+`docker rm -f dsr01_emulator`.
+
 ## 계정/환경
 - 공유 랩탑(`rokey`)의 `kimkh` 계정, `cobot2_ws`.
 - git: remote 이름 `personal` = `https://github.com/gwanhuiGIM/0730_cobo2_personal` (**HTTPS**), 브랜치 `init_sett`(main보다 앞섬, 아직 미머지).
@@ -126,6 +190,28 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
+- 🟡 **VLA 통합 — 범위 확정됨(2026-08-08 사용자), 미착수.** 정본은
+  [[ws/cobot2/plans/2026-08-08-vla-integration]]. 여기엔 값을 베끼지 않는다.
+  **로봇 행동(pick_fsm+MoveIt+graspgenx)은 우리가 유지하고, VLA 는 "무엇을 집을지"(나중에
+  "어디에 놓을지")만 전달한다. VLA 는 아예 다른 외부 PC 에서 돈다** — 웹캠·homography·LLM 은
+  우리 역할이 아니다. 이 확정으로 카메라 전제 충돌·`DR_init` 경합·`vla_wrist` 대체안이
+  전부 폐기됐다. **3차 개정(같은 날): 링크는 개인 휴대폰 핫스팟이고 D435i 영상을 VLA PC 로
+  넘긴다** → 대역폭이 첫 제약이 됐고(포인트클라우드·raw 컬러는 못 넘긴다, 압축 컬러만),
+  대신 지시를 **픽셀 좌표**로 보낼 수 있어 좌표계 합의(D3) 문제가 강등됐다.
+  남은 것: **D435i 가 `480x320` 을 지원하는가**(지원 목록에 없어 보임 — 실기에서
+  `rs-enumerate-devices` 로 확인), 핫스팟 실효 대역폭 실측, 두 PC 간 DDS 도달성(우리 93 vs VLA 0).
+- 🟡 **두 패키지가 서로 다른 손끝 모델을 쓴다** (2026-08-08 감사에서 발견).
+  `pick_fsm` 은 `rg2.fingertip_from_rg2_base_m()`(실측 **218 mm**, 폭에 따라 가변)로
+  2026-08-07 에 갈아탔는데, `graspgenx_perception/grasp_bridge_node.py:56` 은 아직
+  `tcp_offset_m: 0.18` 상수다. VLA 도 180 mm 를 쓴다 → 통합 시 **38 mm 얕게 잡는다.**
+  결정(D4)과 근거는 [[ws/cobot2/plans/2026-08-08-vla-integration]] §3. 실측 출처는
+  [[ws/cobot2/context/constraints]]:900-906.
+- 🔴 **`~/.local` 이 다시 오염됐다 — 우리 `pytest` 가 깨져 있다** (2026-08-08 실측).
+  VLA `requirements.txt` 가 `torch 2.7.1`·`opencv-python 4.10`·`ultralytics 8.4.76`·
+  `numpy 1.24.4`·`anyio 4.13` 을 `~/.local` 에 깔았다. `import cv2` 가 apt 4.5.4 가 아니라
+  `~/.local` 4.10.0 을 잡는다. **`pytest` → `ModuleNotFoundError: _pytest.scope`**,
+  우회 `-p no:anyio` 로 24개 PASS 확인. `cv_bridge` 왕복은 아직 정상(segfault 없음).
+  → graspgenx README 의 "우회 불필요(2026-08-07)" 문장은 **지금 사실이 아니다.**
 - ⚪ **개인PC(CPU)에는 YOLO 자산이 없다 — 정상이다, 이슈가 아니다** (2026-08-08).
   `nvidia-smi` 없는 머신에서 확인한 것이므로 **GPU PC 상태에 대해서는 아무것도 말해주지
   않는다**(판별 규칙은 아래 "두 PC 체제"). 여기서 관측된 것: 가중치 `yolo11n-seg.pt`
@@ -231,6 +317,12 @@ alias reals; alias br; alias realsense
    [[ws/cobot2/plans/2026-08-07-graspgenx-target-matching]]).
    ⚠️ **FoundationPose는 마스크를 만들어주지 않는다** — 마스크를 **입력으로 요구**하고 CAD 메시도 필요하다.
    ROI/마스크 출처는 여전히 검출기(YOLO-seg 또는 RT-DETR)다.
+   - **2026-08-09 진행**: 배선(`target_classes`)은 이미 있다 — `seg_source` 기본값이 `yolo`가 되면서
+     클래스 이름으로 대상을 좁히는 경로가 살아 있다(`grasp_bridge_node.py:243-245`).
+     **남은 블로커는 가중치 하나다**: `yolo11n-seg.pt`는 COCO 80종뿐이라 우리 물체를 못 잡는다.
+     → 파인튜닝 계획 [[ws/cobot2/plans/2026-08-09-yolo-seg-finetune]] (방법·필요 요소·미결정 4건).
+     어노테이션은 **새 툴 없이** `capture_graspgenx_scene.py`의 depth 세그를 그대로 라벨로 쓴다
+     (`scripts/seg_to_yolo.py`, `--self-check` PASS). 캡처·학습 모두 **`rokey` 머신 필요**.
 0-c. **RG2 개구 폭(`rgwd`) 계산** — grasp에서 폭을 뽑아 그리퍼 명령으로.
    ~~아직 미구현~~ → **정정(2026-08-06 코드 감사)**: 알고리즘은 이미 있다
    (`corecode/GraspSelection/grasp_selector.py`, 442줄, 테스트 통과). 못 한 건 **배선**이다 —
