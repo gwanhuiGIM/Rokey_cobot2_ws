@@ -15,10 +15,12 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 from geometry_msgs.msg import PoseStamped
 from moveit_msgs.msg import AllowedCollisionEntry, AllowedCollisionMatrix
 
 from pick_fsm import geometry as geo
+from pick_fsm.task_manager import PARAM_DEFAULTS
 from pick_fsm.moveit_bridge import OCTOMAP_ACM_NAME, merge_acm
 from pick_fsm.rg2 import (
     RG2_BRACKET_LENGTH_M,
@@ -269,6 +271,50 @@ def test_전이표의_전이가_전부_README_에_그려져_있다():
                for s, dsts in TRANSITIONS.items() for d in dsts
                if d is not State.ABORT and (s, d) not in drawn and (s, d) not in _UNDRAWN]
     assert not missing, f'전이표에는 있는데 그림에 없는 전이: {missing}'
+
+
+# ── 3-2. yaml ↔ declare_parameter 타입 ───────────────────
+# 🔴 2026-08-08: `max_reach_m: 1` 하나 때문에 노드가 기동 즉시 죽었다.
+#    YAML 은 `1` 을 INTEGER 로 읽고 rclpy 는 DOUBLE 기본값과의 불일치를 거부한다
+#    (`InvalidParameterTypeException`). PyYAML 로만 열어보면 멀쩡해 보여서 눈으로는 못 잡는다.
+#    같은 함정을 replan_delay(2026-08-08 이전)에서도 한 번 밟았다 → 여기서 자동화한다.
+_YAML = Path(__file__).resolve().parent.parent / 'config' / 'pick_fsm.yaml'
+
+
+def _yaml_params() -> dict:
+    if not _YAML.exists():                      # 설치 트리에서 돌 때는 경로가 다르다
+        pytest.skip(f'config 없음: {_YAML}')
+    doc = yaml.safe_load(_YAML.read_text(encoding='utf-8'))
+    return doc['task_manager']['ros__parameters']
+
+
+def _kind(v) -> str:
+    """rcl 이 보는 파라미터 타입. bool 이 int 의 서브클래스라 순서가 중요하다."""
+    if isinstance(v, bool):
+        return 'BOOL'
+    if isinstance(v, int):
+        return 'INTEGER'
+    if isinstance(v, float):
+        return 'DOUBLE'
+    if isinstance(v, str):
+        return 'STRING'
+    if isinstance(v, list):
+        # rcl 은 원소 타입이 섞인 배열도 거부한다 ([0, 0.0, 90] 같은 것)
+        return 'ARRAY[' + '|'.join(sorted({_kind(x) for x in v})) + ']'
+    return type(v).__name__
+
+
+def test_yaml_값의_타입이_declare_parameter_기본값과_같다():
+    bad = [f'{k}: {v!r} 는 {_kind(v)} 인데 기본값 {PARAM_DEFAULTS[k]!r} 은 {_kind(PARAM_DEFAULTS[k])}'
+           for k, v in _yaml_params().items()
+           if k in PARAM_DEFAULTS and _kind(v) != _kind(PARAM_DEFAULTS[k])]
+    assert not bad, '노드가 기동 즉시 죽는다 (float 는 `0` 이 아니라 `0.0`):\n  ' + '\n  '.join(bad)
+
+
+def test_yaml_에_선언되지_않은_파라미터가_없다():
+    """오타는 예외 없이 조용히 무시된다 — 값을 바꿨는데 안 먹는 형태로 나타난다."""
+    unknown = sorted(set(_yaml_params()) - set(PARAM_DEFAULTS))
+    assert not unknown, f'declare_parameter 에 없는 키(무시된다): {unknown}'
 
 
 # ── 4. ACM 병합 ──────────────────────────────────────────

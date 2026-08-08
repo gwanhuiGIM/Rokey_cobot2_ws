@@ -66,6 +66,32 @@ def test_filter_drops_labels_missing_from_class_map():
     assert not (out == LABEL_OBJ_BASE + 2).any()
 
 
+def test_filter_before_select_beats_select_before_filter():
+    """**거르고 나서 고른다.** 순서를 뒤집으면 대상이 없는 프레임이 '최선'으로 뽑힌다.
+
+    프레임 A: 사과 4px + dining table 0px.  프레임 B: 사과 0px + dining table 12px.
+    B 가 전체 픽셀은 많지만 사과가 없다 — 먼저 고르면 필터가 B 를 비워 grasp 0개가 된다.
+    """
+    cmap = {LABEL_OBJ_BASE + 1: 'apple', LABEL_OBJ_BASE + 2: 'dining table'}
+    a = np.zeros((4, 4), dtype=np.uint8)
+    a[0, :] = LABEL_OBJ_BASE + 1
+    b = np.zeros((4, 4), dtype=np.uint8)
+    b[1:, :] = LABEL_OBJ_BASE + 2
+
+    frames = [(1, a), (2, b)]
+
+    # 틀린 순서: 고르고 → 거른다
+    _, picked = best_labels(frames)
+    wrong, _ = filter_labels_by_class(picked, cmap, {'apple'})
+    assert picked is b, 'best_labels 는 전체 픽셀로 고른다'
+    assert not (wrong > LABEL_OBJ_BASE).any(), '사과가 있었는데 0개가 된다 — 이 버그의 증상'
+
+    # 맞는 순서: 거르고 → 고른다
+    cands = [(s, filter_labels_by_class(im, cmap, {'apple'})[0]) for s, im in frames]
+    stamp, labels = best_labels(cands)
+    assert stamp == 1 and (labels == LABEL_OBJ_BASE + 1).sum() == 4
+
+
 def test_filter_with_no_match_clears_everything():
     labels, cmap = _two_objects()
     out, diag = filter_labels_by_class(labels, cmap, {'banana'})

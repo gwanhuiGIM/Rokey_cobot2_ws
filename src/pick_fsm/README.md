@@ -187,7 +187,7 @@ anyio 의 pytest 플러그인 문제이고(§7), **위 launch 경로에는 anyio
 테스트를 돌릴 때만 플래그를 붙인다:
 
 ```bash
-python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 23개 통과
+python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 31개 통과
 ```
 
 ## 3. 인터페이스
@@ -344,7 +344,7 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 | 항목 | 상태 | 방법 |
 |---|---|---|
 | `colcon build --packages-select pick_fsm_msgs pick_fsm` | ✅ 통과 | §7 |
-| 단위테스트 23개 | ✅ 통과 | 폭 단위 변환 · 접근축 오프셋 · 전이표 · ACM 병합 · **§1 mermaid 다이어그램 ↔ `TRANSITIONS` 대조**(2026-08-07 추가). 실행: `python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio` |
+| 단위테스트 31개 | ✅ 통과 | 폭 단위 변환 · 접근축 오프셋 · 전이표 · ACM 병합 · **§1 mermaid 다이어그램 ↔ `TRANSITIONS` 대조**(2026-08-07 추가) · **`config/pick_fsm.yaml` ↔ `PARAM_DEFAULTS` 타입/키 대조**(2026-08-08 추가 — `max_reach_m: 1` 로 노드가 기동 즉시 죽은 뒤). 실행: `python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio` |
 | `colcon test --packages-select pick_fsm` | ❌ **이 랩탑에서 실행 불가** | 이 패키지 문제가 아니다 — 아래 "colcon test 가 안 도는 이유" 참고. `colcon` 에는 `-p no:anyio` 를 넣을 자리가 없다. 2026-08-07 확인 |
 | 사용하는 MoveIt 메시지 필드명·상수 | ✅ 확인 | `moveit_msgs` 를 import 해 `get_fields_and_field_types()` 로 대조 |
 | `<octomap>` ACM 이름 | ✅ 확인 | `libmoveit_planning_scene.so` 문자열 |

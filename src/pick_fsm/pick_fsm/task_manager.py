@@ -63,6 +63,90 @@ DEFAULT_TIMEOUTS = {
 MAX_FAIL_STREAK = 3
 
 
+#: 파라미터 기본값 = 타입의 정본. `config/pick_fsm.yaml` 의 값은 여기 적힌 타입과
+#: 같아야 한다 (float 는 `0` 이 아니라 `0.0`). test_pick_fsm.py 가 이 대조를 자동화한다.
+PARAM_DEFAULTS = {
+    # 안전
+    'dry_run': True,                 # true = plan_only. 궤적만 만들고 실행하지 않는다
+    'require_approval': True,        # false 로 두면 사람 승인 없이 실행한다
+    'approval_timeout_sec': 300.0,
+
+    # MoveIt
+    'planning_group': 'manipulator',
+    # 🔴 `tool0` 이 아니다 (2026-08-07 정정). tool0 의 접근축은 +Z 가 아니라 +X 라
+    #    (`onrobot_rg2.xacro:40` rpy="1.5708 0 1.5708"), grasp 포즈를 tool0 에
+    #    그대로 걸면 그리퍼가 90° 누운 채 진입한다. `rg2_base_link` 는 GraspGenX 의
+    #    그리퍼 base 와 같은 프레임이라 브라켓 22 mm 오프셋도 같이 해소된다.
+    #    MoveIt 은 solver tip(tool0)에 고정조인트로 붙은 링크를 ik_link 로 받는다.
+    'ee_link': 'rg2_base_link',
+    'base_frame': 'base_link',       # ⚠️ world 아님. planning scene 이 world 를 모른다
+    'joint_names': ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'],
+    'vel_scale': 0.1,                # 실기 첫 시도는 느리게
+    'acc_scale': 0.1,
+    'planning_time': 5.0,
+    'planning_attempts': 10,
+    'joint_tolerance': 0.001,
+    'ik_timeout_sec': 0.2,
+    'ik_avoid_collisions': True,
+    # 'ompl' | 'isaac_ros_cumotion' (scripts/bench_planning_time.py 와 같은 이름).
+    # IK 는 이 값과 무관 — move_group 의 GetPositionIK 는 파이프라인을 안 탄다.
+    'planning_pipeline': 'ompl',
+    'planner_id': '',
+    'replan': True,                  # 실행 중 씬이 바뀌면 move_group 이 다시 계획한다
+    'replan_attempts': 3,
+    'replan_delay': 0.5,
+    'motion_retries': 2,             # move_group 실패 시 FSM 바깥 재시도 횟수
+
+    # 자세
+    'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
+    'grasp_standoff_m': 0.0,         # DESCEND 종점을 grasp 의 -Z 로 덜 내리는 양
+    'lift_offset_m': 0.15,           # LIFT: 월드 +Z
+    # tcp_offset_m 은 더 이상 파라미터가 아니다 — rg2.fingertip_length_m(width_m)이
+    # 2026-08-07 실측(폭에 따라 손끝이 짧아지는 비선형 보정표)으로 대체했다.
+    'max_reach_m': 0.900,            # M0609 URDF 실측 (shoulder 기준)
+    'home_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],     # robot_control JReady
+    'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS
+
+    # 씬
+    'object_id': 'pick_target',
+    'object_radius_m': 0.04,
+    'clear_octomap_before_descend': False,
+    'allow_gripper_octomap_collision': False,
+    'gripper_links': ['rg2_base_link',
+                      'rg2_left_outer_knuckle', 'rg2_left_inner_knuckle',
+                      'rg2_left_inner_finger', 'rg2_right_outer_knuckle',
+                      'rg2_right_inner_knuckle', 'rg2_right_inner_finger'],
+
+    # 그리퍼
+    'gripper_backend': 'real',       # real | virtual (숫자 명령의 의미가 다르다)
+    'gripper_service': '/onrobot/sendCommand',
+    'grip_detected_topic': '/onrobot/grip_detected',
+    'grip_clearance_m': 0.008,       # UNVERIFIED: 실측 튜닝값. 도면값 아님
+    'max_grip_width_m': RG2_MODEL_WIDTH_M,
+    'force_down_steps': 0,           # 'd' 반복 횟수. 0 = 드라이버 기본(=40 N, RG2 최대)
+    'gripper_settle_sec': 1.5,
+    'verify_required': False,        # true 면 grip_detected 를 못 받았을 때도 실패 처리
+    'grip_retries': 1,
+
+    # 인식
+    'grasp_source': 'compute_grasp',  # compute_grasp | legacy_trigger | manual
+    'grasp_service': '/grasp/compute_grasp',
+    'grasp_trigger_service': '/grasp/compute',
+    'grasp_best_topic': '/grasp/best',
+    'grasp_candidates_topic': '/grasp/candidates',
+    'min_confidence': 0.5,
+    'default_width_m': 0.06,         # legacy/manual 경로에는 폭 정보가 없다
+    'max_alternatives': 5,
+
+    # 음성
+    'voice_enabled': True,
+    'keyword_service': '/get_keyword',
+    'target': '',                    # voice_enabled=false 일 때 쓸 고정 타겟
+
+    'tick_hz': 10.0,
+}
+
+
 class TaskManager(Node):
 
     def __init__(self):
@@ -154,89 +238,9 @@ class TaskManager(Node):
     # 파라미터
     # ────────────────────────────────────────────────────────
     def _declare_params(self):
-        d = {
-            # 안전
-            'dry_run': True,                 # true = plan_only. 궤적만 만들고 실행하지 않는다
-            'require_approval': True,        # false 로 두면 사람 승인 없이 실행한다
-            'approval_timeout_sec': 300.0,
-
-            # MoveIt
-            'planning_group': 'manipulator',
-            # 🔴 `tool0` 이 아니다 (2026-08-07 정정). tool0 의 접근축은 +Z 가 아니라 +X 라
-            #    (`onrobot_rg2.xacro:40` rpy="1.5708 0 1.5708"), grasp 포즈를 tool0 에
-            #    그대로 걸면 그리퍼가 90° 누운 채 진입한다. `rg2_base_link` 는 GraspGenX 의
-            #    그리퍼 base 와 같은 프레임이라 브라켓 22 mm 오프셋도 같이 해소된다.
-            #    MoveIt 은 solver tip(tool0)에 고정조인트로 붙은 링크를 ik_link 로 받는다.
-            'ee_link': 'rg2_base_link',
-            'base_frame': 'base_link',       # ⚠️ world 아님. planning scene 이 world 를 모른다
-            'joint_names': ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6'],
-            'vel_scale': 0.1,                # 실기 첫 시도는 느리게
-            'acc_scale': 0.1,
-            'planning_time': 5.0,
-            'planning_attempts': 10,
-            'joint_tolerance': 0.001,
-            'ik_timeout_sec': 0.2,
-            'ik_avoid_collisions': True,
-            # 'ompl' | 'isaac_ros_cumotion' (scripts/bench_planning_time.py 와 같은 이름).
-            # IK 는 이 값과 무관 — move_group 의 GetPositionIK 는 파이프라인을 안 탄다.
-            'planning_pipeline': 'ompl',
-            'planner_id': '',
-            'replan': True,                  # 실행 중 씬이 바뀌면 move_group 이 다시 계획한다
-            'replan_attempts': 3,
-            'replan_delay': 0.5,
-            'motion_retries': 2,             # move_group 실패 시 FSM 바깥 재시도 횟수
-
-            # 자세
-            'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
-            'grasp_standoff_m': 0.0,         # DESCEND 종점을 grasp 의 -Z 로 덜 내리는 양
-            'lift_offset_m': 0.15,           # LIFT: 월드 +Z
-            # tcp_offset_m 은 더 이상 파라미터가 아니다 — rg2.fingertip_length_m(width_m)이
-            # 2026-08-07 실측(폭에 따라 손끝이 짧아지는 비선형 보정표)으로 대체했다.
-            'max_reach_m': 0.900,            # M0609 URDF 실측 (shoulder 기준)
-            'home_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],     # robot_control JReady
-            'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS
-
-            # 씬
-            'object_id': 'pick_target',
-            'object_radius_m': 0.04,
-            'clear_octomap_before_descend': False,
-            'allow_gripper_octomap_collision': False,
-            'gripper_links': ['rg2_base_link',
-                              'rg2_left_outer_knuckle', 'rg2_left_inner_knuckle',
-                              'rg2_left_inner_finger', 'rg2_right_outer_knuckle',
-                              'rg2_right_inner_knuckle', 'rg2_right_inner_finger'],
-
-            # 그리퍼
-            'gripper_backend': 'real',       # real | virtual (숫자 명령의 의미가 다르다)
-            'gripper_service': '/onrobot/sendCommand',
-            'grip_detected_topic': '/onrobot/grip_detected',
-            'grip_clearance_m': 0.008,       # UNVERIFIED: 실측 튜닝값. 도면값 아님
-            'max_grip_width_m': RG2_MODEL_WIDTH_M,
-            'force_down_steps': 0,           # 'd' 반복 횟수. 0 = 드라이버 기본(=40 N, RG2 최대)
-            'gripper_settle_sec': 1.5,
-            'verify_required': False,        # true 면 grip_detected 를 못 받았을 때도 실패 처리
-            'grip_retries': 1,
-
-            # 인식
-            'grasp_source': 'compute_grasp',  # compute_grasp | legacy_trigger | manual
-            'grasp_service': '/grasp/compute_grasp',
-            'grasp_trigger_service': '/grasp/compute',
-            'grasp_best_topic': '/grasp/best',
-            'grasp_candidates_topic': '/grasp/candidates',
-            'min_confidence': 0.5,
-            'default_width_m': 0.06,         # legacy/manual 경로에는 폭 정보가 없다
-            'max_alternatives': 5,
-
-            # 음성
-            'voice_enabled': True,
-            'keyword_service': '/get_keyword',
-            'target': '',                    # voice_enabled=false 일 때 쓸 고정 타겟
-
-            'tick_hz': 10.0,
-        }
-        for k, v in d.items():
+        for k, v in PARAM_DEFAULTS.items():
             self.declare_parameter(k, v)
-        return {k: self.get_parameter(k).value for k in d}
+        return {k: self.get_parameter(k).value for k in PARAM_DEFAULTS}
 
     def p(self, key):
         return self.get_parameter(key).value

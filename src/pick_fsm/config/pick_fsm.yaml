@@ -50,7 +50,10 @@ task_manager:
     lift_offset_m: 0.15         # UNVERIFIED
     # tcp_offset_m 파라미터는 삭제됨(2026-08-07) — rg2.fingertip_length_m(width_m)이
     # 실측 보정표(닫힘 0.240 m, 폭에 따라 비선형 감소)로 대체했다. pick_fsm/rg2.py 가 정본.
-    max_reach_m: 1          # M0609 URDF 실측 (shoulder 기준 flange 까지)
+    max_reach_m: 1.0        # ⚠️ `1` 로 쓰면 INTEGER 로 읽혀 노드가 죽는다 (replan_delay 와 같은 함정)
+                            # M0609 URDF 실측 (shoulder 기준 flange 까지)
+                            # ⚠️ 코드 기본값은 0.900 이다. 여기서 1.0 으로 넓혀 놓은 것이므로
+                            #    "실측 0.9 인데 왜 1.0?" 이라면 이 값을 확인할 것
     # ⚠️ 아래 둘은 robot_control.py 의 JReady/BUCKET_POS 와 값이 다르다. 실기에서 다시 잡은
     #    값으로 보이므로 "원본과 맞춰야 한다"며 되돌리지 말 것. (원본: JReady [0,0,90,0,90,0],
     #    BUCKET_POS [4,38,64,-0.1,78,4])

@@ -1070,24 +1070,57 @@ Error: Sequence should be of same type. Value type 'integer' do not belong at li
 
 ## ⚠️ `docker exec` 로 띄운 노드는 Ctrl-C 로 안 죽는다 — 인스턴스가 누적된다 (2026-08-08)
 
-- **증상**: `yolo_seg_node` 가 컨테이너(`od_kimkh`) 안에 **9개** 동시에 살아 있었다.
-  RAM 12GB · VRAM 2.6GB · CPU 8코어 상시 · swap 2GB 전량 소진.
-  `ros2 topic info /yolo_seg/mask` 의 **Publisher count: 9** — 소비자는 프레임마다 다른
-  인스턴스의 마스크를 받게 되고, 어느 것인지 구분할 방법이 없다.
+- **증상**: `yolo_seg_node` 가 컨테이너(`od_kimkh`) 안에 **재실행 1회당 1개씩** 쌓였다
+  (실측 9개 → 같은 날 10개). RAM 12GB · VRAM 2.6GB · CPU 8코어 상시 · swap 2GB 전량 소진.
+  `ros2 topic info /yolo_seg/mask` 의 **Publisher count** 가 인스턴스 수만큼 — 소비자는
+  프레임마다 다른 인스턴스의 마스크를 받게 되고, 어느 것인지 구분할 방법이 없다.
   ROS 2 는 이름이 겹치는 노드를 막지 않는다(경고 한 줄만 찍고 둘 다 돈다).
+  숫자는 스냅샷일 뿐이고 **"재실행마다 +1"이 사실이다.**
 - **근본 원인**: `docker exec` 에는 `--sig-proxy` 가 **없다**(`docker exec --help`, docker
   29.7.0 확인 — `docker run` 에만 있다). `-t` 를 안 붙이면 컨테이너 안에 제어 터미널이
   없어서(`ps` 의 `TT` 가 `?`) 호스트 Ctrl-C 는 호스트 쪽 docker 클라이언트만 죽이고,
   컨테이너 안 `ros2 launch` 는 containerd-shim 밑에 고아로 **살아 남는다.** 재실행마다 +1.
 - **왜 오래 못 잡았나**: `graspgenx_perception/README.md` 가 **정반대를 가르치고 있었다** —
-  "`-it` 대신 그냥 `docker exec` 라 Ctrl-C 로 끝낼 수 있다". 그리고 잔존물을
-  "`<defunct>` 좀비"로 적어 뒀는데, 실제로는 `Z` 가 아니라 CPU 90% 를 쓰며 도는 `Sl` 이다.
-  "좀비니까 무해"로 읽혀서 더 위험했다. 문서의 틀린 절차가 원인인 버그였다.
+  "`-it` 대신 그냥 `docker exec` 라 Ctrl-C 로 끝낼 수 있다". 문서의 틀린 절차가 원인인 버그였다.
+- **"좀비" 서술은 절반만 틀렸다 — 이 구분이 진단의 핵심이다.**
+  README 는 잔존물을 `<defunct>` 좀비로 적고 "기능에 영향 없음"이라 했는데:
+  - **살아 있는 동안**은 `Z` 가 아니라 **CPU 90% 를 쓰며 도는 `Sl`** 이고, 토픽을 오염시킨다.
+    여기가 틀렸고, "좀비니까 무해"로 읽혀 **실제 문제를 문서가 가렸다.**
+  - **죽인 뒤**에는 진짜 좀비가 된다. reap 메커니즘 설명("PID 1 이 `sleep infinity` 라 자식을
+    거두지 않는다")은 **맞았다** — 누적된 10개를 `pkill` 했더니 부모가 PID 1 인
+    `Z <defunct>` 가 정확히 10개 생겼다(2026-08-08 실측). 무해하고, `docker restart` 로만 없앤다.
+  - 교훈: `ps` 로 볼 때 **`STAT` 을 반드시 읽는다.** `Z` 와 `Sl` 은 정반대 상황이다.
 - **규칙**: 컨테이너 안 노드는 **`scripts/graspx_container.sh`** 로 띄운다
   (기존 인스턴스 정리 → `-t` 로 pty 부착 → `trap` 으로 종료 시 재정리).
   `docker exec` 직접 호출은 `pgrep`/`pkill` 같은 일회성 진단에만 쓴다.
-- **마지막 방어선**: `yolo_seg_node.acquire_singleton()` 이 `/tmp/<node_name>.lock` 에
-  `flock` 을 건다. 래퍼를 안 거쳐 띄워도 두 번째 인스턴스는 가중치 로드 전에 죽는다.
-  `flock` 은 SIGKILL 로 죽어도 커널이 풀어주므로 stale 락이 남지 않는다.
-- **미검증**: `-t` 를 붙이면 Ctrl-C 가 전달된다는 것은 pty 동작에서 나온 추론이고 실측하지
-  않았다. 그래서 래퍼는 `-t` 에만 기대지 않고 `trap` 정리를 함께 건다.
+- **마지막 방어선**: `yolo_seg_node.acquire_singleton()` 이
+  `/tmp/yolo_seg_node-<mask_topic>-<uid>.lock` 에 `flock` 을 건다. 래퍼를 안 거쳐 띄워도
+  두 번째 인스턴스는 가중치 로드 전에 죽는다. `flock` 은 SIGKILL 로 죽어도 커널이
+  풀어주므로 stale 락이 남지 않는다.
+  - **키가 노드 이름이 아니라 `mask_topic` 인 이유**: 지키려는 불변식이 "이 토픽의
+    publisher 는 하나"다. 이름으로 잠그면 `__node:=other` 가 락을 우회하고도 같은 토픽에
+    2중 발행하고(막아야 하는데 통과), 카메라 2대를 다른 토픽으로 돌리는 정당한 구성이
+    막힌다(통과해야 하는데 막힘). 방향이 둘 다 반대다.
+  - **파일명에 uid 를 넣는 이유**: `/tmp` 는 sticky(1777) 라 다른 계정이 먼저 만든 파일은
+    열지도 지우지도 못한다. 이 랩탑은 계정을 여러 개 쓰므로 공용 이름이면 남이 남긴 파일
+    하나가 **영구 차단**이 된다.
+  - **한계 — 호스트↔컨테이너 경계는 못 막는다.** 바인드 마운트는 ws 와 `/tmp/.X11-unix`
+    뿐이라 `/tmp` 가 분리돼 있다. 같은 ROS 도메인이라 중복은 성립하는데 락은 모른다.
+    지금은 이 노드가 컨테이너에서만 도니(호스트엔 ultralytics 가 없다) 실제 문제가 아니다.
+- **동시성 정책은 "먼저 뜬 것이 이긴다"가 정본이다.** 래퍼의 기동 전 정리는 그 예외가 아니라
+  "직전에 남긴 고아를 치운다"는 좁은 용도이고, 무엇을 죽였는지 반드시 출력한다.
+  **래퍼는 종료 시(EXIT)에는 정리하지 않는다** — 터미널 B 가 뜨면서 A 를 죽이면 A 의
+  `docker exec` 이 반환하고, A 의 EXIT 트랩이 방금 뜬 B 를 죽인다. 실제로 성립한다.
+- **✅ 래퍼 실사용 검증 (2026-08-08, 사용자가 직접 실행)**:
+  `scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true classes:=[...]`
+  한 번으로 **누적 10개 → 1개**가 됐다. 확인한 것:
+  - 컨테이너 `pgrep -fc`: `yolo_seg_node` 1, `graspx.launch.py` 1
+  - `ros2 topic info /yolo_seg/mask` → **Publisher count: 1** (직전 10)
+  - GPU 프로세스 1개 360MB(직전 7~10개 ~2.6GB), swap 2.0Gi 전량 소진 → 581Mi
+  - 락 파일 `/tmp/yolo_seg_node-yolo_seg-mask-0.lock`(0600, 내용=노드 PID)이 생성됨
+    — 새 코드로 떴고 락이 실제로 걸렸다는 증거
+  - 살아남은 프로세스의 `TT` 가 `?` 가 아니라 **pts/3**, `STAT` 이 `Sl+`(포그라운드)
+    — `-t` 로 pty 가 붙었다
+- **미검증(남음)**: **`-t` 가 붙은 상태에서 Ctrl-C 가 실제로 컨테이너 안까지 전달되는지**는
+  아직 안 눌러 봤다. pty 가 붙은 것까지만 확인됐다. 그래서 래퍼는 `-t` 에만 기대지 않고
+  INT/TERM/HUP 트랩 정리를 함께 건다. 다음에 Ctrl-C 로 끝낼 때 잔존 프로세스가 0인지 볼 것.

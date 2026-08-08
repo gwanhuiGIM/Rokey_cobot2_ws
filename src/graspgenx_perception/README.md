@@ -61,15 +61,46 @@ ros2 run graspgenx_perception yolo_seg_node --ros-args -p publish_overlay:=true 
 scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true classes:='[46,47,49]'
 ```
 
+**표준 2터미널 구성 (2026-08-08~, YOLO 가 주 파이프라인)** — 컨테이너가 "무엇이 보이나",
+호스트가 "무엇을 잡나"를 맡는다. `classes` 는 넓게, `target_classes` 는 좁게 둔다:
+
+```bash
+# [컨테이너] 탐지 — person(0) 을 넣지 않는다. yolo 경로엔 self-filter 가 없다
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true \
+  classes:='[39,41,44,46,47,49,64]'
+
+# [호스트] 파지 계산 — 집을 것만 지정
+export ROS_DOMAIN_ID=93
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo \
+  target_classes:=apple
+```
+
+> ✅ **2026-08-08 실사용 확인.** 이 한 줄로 누적돼 있던 **10개 → 1개**가 됐다
+> (`ros2 topic info /yolo_seg/mask` 의 Publisher count 10 → **1**, GPU 프로세스 1개 360MB,
+> swap 2.0Gi 소진 → 581Mi). 락 파일 `/tmp/yolo_seg_node-<mask_topic>-<uid>.lock` 이 생기고
+> 프로세스에 pty 가 붙는다(`ps` 의 `TT` 가 `?` 가 아니라 `pts/N`).
+> **아직 미검증**: 그 상태에서 Ctrl-C 가 실제로 전달되는지는 눌러 보지 않았다 —
+> 그래서 래퍼는 `-t` 외에 INT/TERM/HUP 트랩 정리를 보험으로 함께 건다.
+
 > 🔴 **`docker exec` 를 직접 쓰지 말 것 — Ctrl-C 가 컨테이너 안까지 가지 않는다.**
 > `docker exec` 에는 `--sig-proxy` 가 **없다**(`docker exec --help`, docker 29.7.0 확인).
 > `-t` 를 안 붙이면 컨테이너 안에 제어 터미널이 없어서(`ps` 의 `TT` 가 `?`) 호스트 Ctrl-C 는
 > 호스트 쪽 docker 클라이언트만 죽이고, `ros2 launch` 는 containerd-shim 밑에 **살아서**
-> 남는다. 2026-08-08 에 이 방식으로 `yolo_seg_node` 가 **9개** 누적됐다 — RAM 12GB,
-> VRAM 2.6GB, CPU 8코어, 그리고 `/yolo_seg/mask` 의 **publisher 9개**.
+> 남는다. **재실행 1회 = 인스턴스 +1** 이다. 2026-08-08 에 이 방식으로 `yolo_seg_node` 가
+> **10개**까지 쌓였다 — RAM 12GB, VRAM 2.6GB, CPU 8코어, `/yolo_seg/mask` 의 publisher 10개.
+> (숫자는 그때의 스냅샷이다. 고정값이 아니라 "재실행마다 +1"이 사실이다.)
 >
 > ~~종료 후 `<defunct>` 좀비로 남는다~~ 는 **오진이었다.** 남는 것은 `Z` 가 아니라 CPU 를
 > 90% 쓰며 계속 도는 `Sl` 프로세스다. "좀비니까 무해하다"로 읽혀서 더 위험했다.
+>
+> **단, 상태는 두 가지다 (2026-08-08 추가).** 위는 *정리되지 않은* 경우다. 래퍼나 `pkill` 로
+> **정리한 뒤에는 진짜 좀비(`Z`)로 남고, 그건 영원히 안 사라진다** — 컨테이너 PID 1 이
+> `sleep infinity` 라 `wait()` 를 호출하지 않아 자식을 수거하지 못한다(실측: 좀비 10개,
+> 부모 PID 1 = `sleep infinity`). 좀비는 RAM·GPU 를 쓰지 않으므로(같은 시각 GPU compute
+> apps 0개, VRAM 65/8188 MiB) 자원 문제는 아니다. **문제는 오독이다** — `pgrep -af
+> yolo_seg_node` 가 10줄을 뱉으니 "돌고 있다"고 읽게 된다. 실제로 2026-08-08 에 이걸로
+> "토픽이 안 온다"를 한참 헤맸다. **`ps -eo pid,stat,cmd` 로 `STAT` 를 같이 볼 것.**
+> `Z` 뿐이면 아무도 안 돌고 있는 것이다. 정리는 `docker restart od_kimkh`.
 >
 > 대화형 셸(위 `docker exec -it od_kimkh bash`)은 pty 가 붙으므로 Ctrl-C 가 정상 동작한다.
 > 문제는 **`-t` 없는 한 줄 실행**이다.
@@ -106,6 +137,13 @@ ros2 run rqt_image_view rqt_image_view
 | 3 | 오버레이가 켜져 있는가 | `-p publish_overlay:=true` 를 줬는가 | 안 주면 `/yolo_seg/overlay` **토픽 자체가 없다** |
 | 4 | 양쪽에 프로파일이 걸렸는가 | `echo $FASTRTPS_DEFAULT_PROFILES_FILE` | 빈 값이면 **토픽은 보이는데 데이터가 0** |
 | 5 | 데이터가 오는가 | `ros2 topic hz /yolo_seg/labels` | 카메라 fps 와 같은 값 |
+| **6** | **인스턴스가 하나뿐인가** | `ros2 topic info /yolo_seg/mask` | **Publisher count: 1.** 2 이상이면 프레임마다 다른 인스턴스의 마스크가 섞여 온다 |
+
+**노드가 뜨자마자 죽고 `'/yolo_seg/mask' 에 발행하는 인스턴스가 이미 PID N 로 돌고 있다` 가
+찍히면** 중복 방지 락(`acquire_singleton`)이 막은 것이다. 버그가 아니라 설계된 실패다 —
+메시지에 적힌 `kill -INT N` 으로 기존 것을 끝내거나 `scripts/graspx_container.sh` 로 다시
+띄운다. 락 파일은 `/tmp/yolo_seg_node-<mask_topic>-<uid>.lock` 이고, 키가 **노드 이름이 아니라
+`mask_topic`** 이라 카메라 2대를 서로 다른 토픽으로 돌리는 구성은 정상적으로 공존한다.
 
 **1번과 4번은 증상이 다르다.** 이걸 구분하면 진단이 빨라진다 (2026-08-07 A/B 실측. 그날
 호스트 스택이 도메인 0 에 떠 있었으므로 "맞음"이 0 이었다 — 규약대로면 93 이다):
@@ -193,11 +231,25 @@ root 소유 `/dev/shm/fastrtps_*` 잔재(현재 5개), (3) 호스트 스택 재�
 | 없음 | **0 Hz** (watchdog 경고 3회/18초) |
 | 있음 | **26.6 Hz** (참고: 호스트에서 24.6 Hz) |
 
-**2. 컨테이너 PID 1 이 `sleep infinity` 라 `yolo_seg_node` 를 돌릴 때마다 좀비가 하나씩 쌓인다.**
-`sleep` 은 자식을 거두지(reap) 않는다. 이 세션에서 4개 → 6회 실행 후 **10개**로 정확히
-1:1 증가하는 것을 확인했다. 기능에는 영향이 없지만 PID 를 잡아먹고, `ps` 로 "노드가 떠 있나"를
-볼 때 착시를 준다(`Z <defunct>` 는 죽은 것이다). 정리는 `docker restart od_kimkh` 뿐이고,
-근본 해결은 컨테이너를 `--init` 으로 재생성하는 것이다.
+**2. `yolo_seg_node` 를 돌릴 때마다 인스턴스가 하나씩 쌓인다** — 실행 횟수와 1:1 로 증가한다.
+
+> 🔴 **2026-08-08 정정.** 이 절은 원래 "좀비(`Z <defunct>`)가 쌓인다 / 기능에는 영향이 없다 /
+> 정리는 `docker restart` 뿐"이라고 적혀 있었다. **두 상태를 하나로 뭉갠 것이 문제였다.**
+>
+> | | 살아 있는 동안 | 죽인 뒤 |
+> |---|---|---|
+> | 상태 | **`Sl`/`Rl` — CPU 90% 를 쓰며 돈다** | `Z <defunct>` |
+> | 영향 | **`/yolo_seg/mask` publisher 가 인스턴스 수만큼.** 소비자가 프레임마다 다른 인스턴스의 마스크를 받는다. RAM 12GB · VRAM 2.6GB · swap 2GB 전량 소진 | PID 만 소모. 기능 영향 없음 |
+> | 원인 | **`docker exec` 에 `--sig-proxy` 가 없어 Ctrl-C 가 컨테이너 안까지 안 간다** (위 "빠른 실행" 🔴 박스) | PID 1 이 `sleep infinity` 라 자식을 reap 하지 않는다 |
+> | 정리 | `docker exec od_kimkh pkill -f graspgenx_perception` | `docker restart od_kimkh` |
+>
+> **옛 서술의 reap 메커니즘은 맞았다** — 2026-08-08 에 누적된 10개를 `pkill` 했더니 부모가
+> PID 1 인 `Z <defunct>` 가 정확히 10개 생겼다(실측). 틀린 것은 **"쌓이는 동안의 상태와
+> 영향"** 이다. 아직 죽지 않은 프로세스를 좀비로 적어 두는 바람에 "좀비니까 무해하다"로
+> 읽혔고, CPU 90% 를 쓰며 토픽을 오염시키는 실제 문제가 **문서에 가려졌다.**
+>
+> 예방은 `scripts/graspx_container.sh` 로 띄우는 것, 마지막 방어선은 노드 자신의 flock 이다.
+> 죽인 뒤 남는 좀비는 무해하지만 신경 쓰이면 `docker restart od_kimkh`(도는 노드도 같이 죽는다).
 
 **3. 프로파일을 걸었는데도 프레임이 0인 실행이 4회 중 1회 있었다** (첫 실행, 35초 내내
 watchdog 경고). 같은 명령의 이후 3회는 전부 정상이었다. **원인 미특정** — 그래서 실행할 때마다
@@ -272,7 +324,14 @@ watchdog 경고). 같은 명령의 이후 3회는 전부 정상이었다. **원�
 **겹침 처리**: 입력이 신뢰도 내림차순이라 **역순으로 칠해 고신뢰가 최상위**에 온다.
 겹침으로 픽셀이 0개가 되거나 `min_pixels` 미만으로 깎인 인스턴스는 버리고 남은 것에
 101부터 **연속으로** 다시 매긴다 — 라벨이 비면(`101,103,…`) 소비자의 "obj_N = N번째 물체"
-가정이 깨진다.
+가정이 깨진다. `build_label_map` 이 `kept` 를 같이 돌려주는 것도 이 재번호 매기기 때문이다:
+번호를 다시 매기고 나면 라벨에서 원래 인스턴스(=클래스)로 되돌아갈 길이 없다.
+
+⚠️ **단, 이 연속성은 발행 시점의 규약일 뿐 하류의 불변식이 아니다.** 브리지의
+`target_classes` 는 대상 외 라벨을 지워 일부러 구멍을 낸다(`101…108` → `107` 만).
+GraspGenX 로더는 `label_map` 을 순회할 뿐 연속성을 가정하지 않으므로(`scene_loaders.py:92`,
+2026-08-08 원문 확인) 무해하다. **필터 뒤에 "일관성 회복"이라며 재번호를 매기면 안 된다** —
+클래스맵의 라벨 키가 통째로 어긋난다.
 
 ## 파라미터
 
@@ -427,7 +486,7 @@ ros2 run graspgenx_perception capture_graspgenx_scene --ros-args \
 | `run_yolo` / `run_bridge` | `true` | 어느 쪽을 띄울지 |
 | `image_topic` | `/camera/camera/color/image_raw` | |
 | `publish_overlay` | `true` | |
-| `device` / `conf` / `min_pixels` | `0` / `0.25` / `300` | |
+| `device` / `conf` / `min_pixels` | `0` / **`0.1`** / `300` | 런치의 `conf` 기본은 노드 기본(0.25)보다 낮다 — 의도한 값이다. 낮출수록 검출은 늘고 오검출도 는다 |
 | `classes` | `'[]'` | **탐지할 물체 지정** — COCO 인덱스 목록. 아래 절 참고 |
 
 ## 탐지할 물체를 바꾸려면 — `classes` 파라미터 (banana 등)
@@ -588,11 +647,35 @@ ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
 | 라이브 씬 (2026-08-07) | — | `apple`/`cup`/`person` — **여전히 COCO 클래스** |
 | **실기 `/grasp/compute`** | **성공** (score 0.703, 46개) | **0개 통과** (충돌 필터 전멸) |
 
-**속도는 YOLO 가 7배 빠르지만 지금도 기하가 정답이다.** 현재 가중치가 COCO 80종이라
-이 워크스페이스의 공구 5종을 모른다. 2026-08-07 라이브 카메라에 그대로 돌려도 검출 클래스가
-`apple`/`cup`/`person` 이었다 — 실제 테이블 위 물체가 무엇이든 COCO 로 억지 매핑된다.
-공구 seg 데이터셋으로 재학습하기 전에는 `geometric` 을 쓴다. 어느 쪽이든 병목은 GraspGenX
-추론이라 세그 38.8ms 는 실질적으로 문제가 아니다.
+### 2026-08-08: 주 파이프라인을 **YOLO 로 바꾼다**
+
+이전 결론은 "지금도 기하가 정답"이었다. 근거는 **공구 5종을 잡는 것이 목표**라는 전제였다 —
+COCO 가 공구를 모르니 YOLO 는 쓸 수 없다는 논리다. 목표가 바뀌면 그 논리도 바뀐다.
+
+**지금 목표는 "어떤 물체를 집을지 고르는 것"이다.** 그러면 두 경로의 우열이 뒤집힌다:
+
+| | 기하 (`geometric`) | YOLO (`yolo`) |
+|---|---|---|
+| 물체를 **고를 수 있나** | ❌ **불가능** — 라벨이 `obj_1,obj_2`뿐이고 그게 뭔지 모른다 | ✅ `target_classes` |
+| 붙어 있는 물체 | 하나로 뭉친다 | 분리한다 |
+| 로봇 팔 self-filter | `obj_max_h` 로 자름 | ⚠️ **없다** — `person` 으로 잡힌다 |
+
+**기하 경로는 물체 선정이 원리적으로 불가능하다.** depth 덩어리에는 정체가 없다. 사람이
+`obj_3` 을 눈으로 보고 고르는 것 외에 방법이 없고, `obj_N` 은 프레임마다 바뀐다.
+LLM/GUI 가 "사과를 집어"라고 말하는 순간 기하 경로에는 그 말을 받을 자리가 없다.
+
+**그래서 COCO 80종이라는 한계를 받아들이고 YOLO 를 주 경로로 쓴다.** 잡을 물체를 COCO 안에서
+고른다(사과·컵·병·바나나·가위…). 공구 5종은 seg 재학습 전까지 **대상에서 뺀다** — 억지로
+`apple` 로 잡히는 것을 쓰느니 못 잡는 게 낫다.
+
+`geometric` 은 지우지 않는다. **폴백**이다: 컨테이너/GPU 가 없을 때, COCO 밖 물체를 일단
+집어야 할 때, YOLO 오검출을 의심할 때 같은 씬을 두 경로로 떠서 대조한다.
+
+⚠️ **바꾸면서 같이 생기는 문제 하나**: 기하 경로의 self-filter(`obj_max_h`)가 yolo 경로엔
+없다. COCO 0 = `person` 이라 로봇 팔·사람이 `obj_N` 으로 들어온다. 지금 막는 수단은
+`classes` 에서 0 을 빼는 것뿐이다 (`classes:='[39,41,44,46,47,49]'` 처럼 **person 을 넣지 않는다**).
+
+속도는 부차적이다 — 어느 쪽이든 병목은 GraspGenX 추론이라 세그 38.8ms 는 문제가 아니다.
 
 ## 가중치
 
@@ -645,10 +728,12 @@ docker exec -it od_kimkh bash -lc \
 | 항목 | 상태 |
 |---|---|
 | `colcon build --symlink-install --packages-select graspgenx_perception` | **PASS** |
-| 순수 함수 테스트 18개 (`test_yolo_seg`, `test_best_labels`) | **PASS** |
+| 순수 함수 테스트 24개 (`test_yolo_seg`, `test_best_labels`) | **PASS** |
+| **거르고 나서 고른다** — 순서를 뒤집으면 대상이 깜빡인 컷이 뽑혀 grasp 0개 | cross-review 2026-08-08 지적, 수정 + 회귀 테스트(`test_filter_before_select_beats_select_before_filter`) |
 | `class_payload()` — 저장된 실제 씬 `rgb.png`(1280×720) 로 컨테이너에서 실행 | **검증됨** — 8 인스턴스 → 라벨 101~108, `{107: apple, 106: cup, 105: dining table, …}` |
 | `res.boxes.cls` 와 `res.masks` 인덱스 정렬 | **검증됨** — ultralytics 8.4.113, 마스크 2개 ↔ `boxes.cls` 길이 2 |
-| `filter_labels_by_class()` — 위 클래스맵으로 `apple` 만 남기기 | **검증됨** — `[101…108]` → `[0, 107]`, 원본 배열 불변 |
+| `filter_labels_by_class()` — 위 클래스맵으로 `apple` 만 남기기 | **검증됨** — `[101…108]` → `[0, 107]` (3,330 px), 원본 배열 불변 |
+| GraspGenX 로더가 라벨 구멍(101 없이 107만)을 견디는가 | **확인됨** — `scene_loaders.py:92` 가 `label_map` 순회, 연속성 미가정 |
 | 라이브 파이프라인에서 `/yolo_seg/classes` 실제 발행·수신 | ⚠️ **미검증** — 카메라+컨테이너 기동 필요 |
 | `target_classes` 로 grasp 연산 시간이 실제로 줄어드는지 | ⚠️ **미검증** — 워커 실행 필요 |
 
@@ -749,15 +834,16 @@ python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out
 - ⚠️ **미검증**: 실제 카메라로 "흔들린 프레임 하나 때문에 탐지가 비었다가 다른 프레임에서
   살아나는" 상황을 재현해서 개선을 실측하지는 않았다 — 논리상 개선이지 관측한 적은 없다.
 
-## graspx 에 YOLO 를 쓰기 전에
+## YOLO 를 주 파이프라인으로 쓸 때 남은 것
 
-배선은 끝났다(`seg_source:=yolo`). 남은 건 하나다.
+배선은 끝났다(`seg_source:=yolo` + `classes` + `target_classes`).
 
-1. **클래스 불일치.** `yolo11n-seg.pt` 는 COCO 80종이라 이 프로젝트의 공구 5종
-   (drill/hammer/pliers/screwdriver/wrench)이 없다. 실기 캡처
-   `data/graspgenx_scene/10/rgb.png` 에서는 `['person','cell phone','sink']`,
-   2026-08-07 라이브 카메라에서는 `['apple','cup','person']` 로 오검출한다.
-   공구 seg 데이터셋 재학습이 필요하다.
+1. ~~**클래스 불일치.**~~ → **한계로 확정하고 목표를 좁혔다** (위 "2026-08-08" 절).
+   `yolo11n-seg.pt` 는 COCO 80종이라 공구 5종(drill/hammer/pliers/screwdriver/wrench)이
+   없다. 실기 캡처 `data/graspgenx_scene/10/rgb.png` 에서는 `['person','cell phone','sink']`,
+   2026-08-07 라이브 카메라에서는 `['apple','cup','person']` 로 오검출했다. **공구는 대상에서
+   뺀다.** 공구가 필요해지면 그때 seg 데이터셋 재학습이고, 그건 `classes`/`target_classes`
+   배선을 하나도 안 바꾼다 — 가중치만 갈아끼우면 된다(`model_path` 파라미터).
 
 2. ~~컨테이너 → 호스트 전송이 막혀 있다.~~ **2026-08-07 21:15 재측정에서 뚫렸다** — 라벨맵이
    호스트에 25.6 Hz 로 도달하고, 라벨맵(1280×720)과 정렬 depth(1280×720)의 해상도도 같아
@@ -770,6 +856,105 @@ python3 -c "from graspgenx_perception.capture_graspgenx_scene import default_out
 > "YOLO 가 어느 물체인지, 기하가 닿을 수 있는 곳인지"다. 박스가 없으면 COCO 의 `dining table`
 > 같은 라벨이 화면 대부분을 덮어 GraspGenX 가 죽는다 — 2026-08-06 에 67,879 px 라벨로 41.7GB
 > 할당을 시도한 사고가 그래서 코드에 박스가 들어간 이유다.
+
+## TensorRT `.engine` 으로 바꿔야 하나 — **아니다** (2026-08-08 실측 근거)
+
+결론부터: **바꿔도 되지만 실익이 없다.** 파이프라인이 추론에 묶여 있지 않다.
+
+| 구간 | 실측 | 근거 |
+|---|---|---|
+| YOLO 추론 (PyTorch, RTX 4060 Laptop) | **6.7 ms/frame (149 fps)** | 1280×720 실제 씬, 30회 평균, `torch.cuda.synchronize()` 포함 |
+| 카메라 공급 | **~26 Hz (38.5 ms/frame)** | `/camera/camera/color/image_raw` 실측 |
+| GraspGenX 워커 | **수십 초** | 이 파이프라인의 진짜 병목 |
+
+**추론이 카메라보다 이미 5.7배 빠르다.** engine 으로 6.7ms → 3ms 가 돼도 파이프라인은
+1 프레임도 더 처리하지 못한다. 카메라 바운드다.
+
+**VRAM 도 문제가 아니다**: YOLO 상주는 `alloc 50 MiB / reserved 120 MiB` (8188 MiB 중 1.5%).
+GPU 경합의 실체는 **GraspGenX 워커**와 **cuMotion/nvblox** 다 — GPU 가 하나뿐이라
+(`md/context/constraints.md:314`) 팀원이 cuMotion 을 돌리면 그쪽에서 모자란다. YOLO 를
+engine 으로 바꿔 아낄 수 있는 건 최대 120 MiB 다.
+
+**바꿀 때 치르는 비용 (전부 확인함):**
+
+1. **`tensorrt`·`onnx` 가 컨테이너에 없다** (2026-08-08 확인). 설치 휠이 1~2 GB다.
+2. **`.engine` 은 이식이 안 된다.** GPU 아키텍처 + 드라이버 + TensorRT 버전에 묶인다.
+   `.pt` 는 다른 PC 로 복사되지만 `.engine` 은 그 PC 에서 다시 빌드해야 한다 — 팀 공유
+   랩탑에서 `git pull` 로 굴러가던 방식이 깨진다.
+3. **변환 자체가 GPU 를 수 분간 크게 점유한다.** cuMotion/nvblox 가 도는 중이면 하면 안 된다.
+4. **FP16 이 기본이라 마스크 경계가 미세하게 달라진다.** 지금 `conf` 를 0.1 로 **낮게** 쓰고
+   있어 경계 검출이 뒤바뀔 수 있고, 그러면 `min_pixels=300`·`obj_radius_m=0.05` 같은
+   실측 튜닝값의 근거가 함께 흔들린다.
+5. **`retina_masks=True` 가 engine 에서도 되는지 별도 확인이 필요하다.** 이 코드는 그걸
+   강하게 의존한다 — 안 되면 `build_label_map` 이 shape mismatch 로 예외를 던진다
+   (그건 조용히 틀리는 것보다는 낫지만, 파이프라인은 선다).
+
+**언제 재검토하나**: 카메라를 60 fps 이상으로 올리거나, 한 프레임에 여러 모델을 태우거나,
+YOLO 를 GraspGenX 와 **동시에** 돌려 VRAM 이 실제로 모자랄 때. 지금은 셋 다 아니다.
+
+## 다음 방향 — "어떤 물체를 집을지" 고르기 (설계, 미구현)
+
+> 이 절은 **방향만** 적는다. 코드는 아직 없다. 결정을 하고 나서 짠다.
+
+### 지금 어디까지 왔나
+
+| 단계 | 질문 | 수단 | 상태 |
+|---|---|---|---|
+| 1 | 무엇이 **보이나** | `/yolo_seg/classes` | ✅ 구현됨 |
+| 2 | 무슨 **종류**를 집나 | `target_classes=apple` | ✅ 구현됨 |
+| 3 | **어느 개체**를 집나 | — | ❌ **여기가 다음** |
+| 4 | 누가 **고르나** (LLM/GUI) | — | ❌ 3 이 먼저 |
+
+사과가 2개 놓이면 3번에서 막힌다. `target_classes=apple` 은 "사과 종류"까지만 좁히고,
+둘 중 점수 높은 쪽이 그냥 뽑힌다.
+
+### 막고 있는 것은 구조다 — 고를 **틈**이 없다
+
+`/grasp/compute` 는 **캡처 → 세그 → 워커 → 선택**을 한 호출에 끝낸다. 워커가 수십 초를
+쓰고 나서야 결과가 나오는데, 그 사이에 사람이든 LLM이든 개입할 지점이 없다. `target` 과
+`target_classes` 가 둘 다 "부르기 **전에** 정해두는 값"인 것도 그래서다.
+
+### 제안: 서비스를 둘로 쪼갠다
+
+```
+/grasp/scene    (빠름, 수백 ms — 세그까지만)  →  후보 목록 발행
+        ↓  사람 / GUI / LLM 이 고른다
+/grasp/compute  (느림, 수십 초 — 워커)        →  고른 것 하나만 연산
+```
+
+`/grasp/scene` 이 내는 후보 하나 = `{scene_id, obj_N, class, conf, base XYZ(표면중심), px}`.
+**`scene_id` 를 핸들에 붙이는 것이 핵심이다** — `obj_N` 은 프레임마다 바뀌므로 그것만으로는
+지목이 성립하지 않는다. 씬은 이미 호출마다 타임스탬프 디렉토리로 **영구 저장**되므로
+(`data/graspgenx_scene/<scene_id>/`), 지목이 오면 그 씬의 depth/seg 를 **다시 캡처하지 않고
+그대로** 워커에 넘긴다. 그러면 "고르는 사이에 장면이 변했다"는 문제가 원리적으로 사라진다.
+저장을 진단용으로 만들어 둔 것이 그대로 핸들 저장소가 된다.
+
+### VLA 통합 — id 가 아니라 **좌표**로 잇는다
+
+`M0609_VLA_system` 은 **고정 Webcam + homography** 로 장면을 보고, graspgenx 는 **손목
+RealSense** 로 본다. 카메라가 다르므로 **`apple_17` 같은 id 는 경계를 넘지 못한다.**
+LLM 이 지목한 것을 graspgenx 후보와 잇는 유일한 실용적 키는 **base 프레임 XY 근사 + 클래스
+일치**다.
+
+```
+Webcam + LLM        →  "무엇을"  (의도·정체·대화 맥락)   → class + base XY (±수 cm)
+손목 RealSense      →  "어디를"  (정밀 6D 파지)          → 그 XY 근처의 obj_N
+```
+
+이 역할 분담은 VLA README 가 이미 스스로 내린 결론과 같다 — homography 좌표는 "올바른 물체로
+팔을 보내기엔 충분하지만 손가락을 닫기엔 부족하다". 그 부족분을 메우는 것이 graspgenx다.
+**매칭에는 homography 정확도로 충분하고, 파지에는 RealSense 좌표를 쓴다.**
+
+### 결정해야 할 것 (이 순서로)
+
+1. **선정 주체**: 사람(CLI/rqt) 먼저인가, 바로 LLM 인가. 사람 경로가 없으면 LLM 이 틀렸을 때
+   무엇이 틀렸는지 분리할 수 없다 — 사람 경로를 먼저 만드는 쪽을 권한다.
+2. **동점 처리 정책**: 지목이 없을 때(`target_classes` 만) 무엇을 고르나. 점수 최고(현재) /
+   가장 가까운 / 가장 왼쪽. 지금은 점수 최고인데 이게 의도인지 우연인지 코드에 안 적혀 있다.
+3. **씬 유효기간**: 고른 씬이 몇 초까지 유효한가. 무한이면 물체가 치워진 뒤에도 잡으러 간다.
+   `pick_fsm` 에 `max_scene_age_s` 에 해당하는 값이 필요하다.
+4. **person 제외를 어디서**: `classes` 에서 0 을 빼는 것(탐지 자체를 안 함)과 `target_classes`
+   에 안 넣는 것(탐지는 하되 안 잡음)은 다르다. 후자는 사람이 씬에 **장애물로** 남는다.
 
 ## 수동 통합 확인
 

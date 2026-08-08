@@ -5,10 +5,16 @@ ultralytics 는 도커 컨테이너에만 있으므로 노드 모듈이 호스�
 호스트에서 통과한다는 것 자체가 그 지연 import 가 유지되고 있다는 회귀 검사다.
 """
 
+import os
+
 import numpy as np
 import pytest
 
-from graspgenx_perception.yolo_seg_node import LABEL_OBJ_BASE, MAX_OBJECTS, build_label_map
+from graspgenx_perception import yolo_seg_node
+from graspgenx_perception.yolo_seg_node import (
+    LABEL_OBJ_BASE, MAX_OBJECTS, AlreadyRunning, acquire_singleton, build_label_map,
+    lock_path,
+)
 
 
 def test_empty_masks_gives_zero_label_map():
@@ -104,3 +110,48 @@ def test_max_objects_matches_capture_script():
         pytest.skip('capture_graspgenx_scene.py 가 없다')
     m = re.search(r'^MAX_OBJECTS\s*=\s*(\d+)', src.read_text(), re.M)
     assert m and int(m.group(1)) == MAX_OBJECTS
+
+
+# --- 중복 인스턴스 방지 락 (acquire_singleton) ---------------------------------
+# 배경: `docker exec` 에 --sig-proxy 가 없어 Ctrl-C 가 컨테이너 안까지 가지 않고,
+# 재실행마다 yolo_seg_node 가 1개씩 쌓여 같은 토픽에 10중 발행까지 갔다 (2026-08-08).
+
+def test_lock_path_is_keyed_by_topic_not_node_name():
+    """키가 토픽이어야 한다. 노드 이름이면 `__node:=other` 가 락을 우회해 2중 발행한다."""
+    assert lock_path('/yolo_seg/mask') == lock_path('/yolo_seg/mask')
+    assert lock_path('/yolo_seg/mask') != lock_path('/cam2/mask')
+
+
+def test_lock_path_contains_uid():
+    """/tmp 는 sticky 라 남이 만든 파일을 못 연다 — uid 가 없으면 영구 차단이 생긴다."""
+    assert f'-{os.getuid()}.lock' in lock_path('/yolo_seg/mask')
+
+
+def test_second_acquire_on_same_topic_is_blocked(tmp_path, monkeypatch):
+    monkeypatch.setattr(yolo_seg_node, 'LOCK_DIR', str(tmp_path))
+    fd = acquire_singleton('/yolo_seg/mask')
+    try:
+        with pytest.raises(AlreadyRunning) as exc:
+            acquire_singleton('/yolo_seg/mask')
+        # 메시지가 실행 가능한 안내를 담아야 한다 — 빈 PID 는 `kill -INT ?` 가 된다.
+        assert str(os.getpid()) in str(exc.value)
+        assert 'kill -INT' in str(exc.value)
+    finally:
+        os.close(fd)
+
+
+def test_different_topics_coexist(tmp_path, monkeypatch):
+    """카메라 2대를 서로 다른 mask_topic 으로 돌리는 구성은 막지 않는다."""
+    monkeypatch.setattr(yolo_seg_node, 'LOCK_DIR', str(tmp_path))
+    a = acquire_singleton('/yolo_seg/mask')
+    b = acquire_singleton('/cam2/mask')
+    os.close(a)
+    os.close(b)
+
+
+def test_lock_is_released_when_holder_dies(tmp_path, monkeypatch):
+    """flock 은 SIGKILL 에도 커널이 푼다 — stale 락이 남으면 안 된다."""
+    monkeypatch.setattr(yolo_seg_node, 'LOCK_DIR', str(tmp_path))
+    fd = acquire_singleton('/yolo_seg/mask')
+    os.close(fd)                                   # 프로세스 사망과 같은 효과
+    os.close(acquire_singleton('/yolo_seg/mask'))  # 다시 잡혀야 한다

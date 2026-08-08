@@ -244,24 +244,43 @@ class GraspBridge(SceneCapture):
             return False, (f"target_classes='{p['target_classes']}' 는 seg_source='yolo' 에서만 "
                            f"쓴다. 지금은 '{p['seg_source']}' 라 클래스를 알 수 없다")
         hist = self.yolo_labels_history
+        cdiag = None
         if use_yolo and wanted:
-            # 클래스맵이 딸린 프레임만 후보로 둔다. 두 토픽이 따로 오므로(둘 다 BEST_EFFORT)
-            # 라벨맵만 도착한 프레임이 섞일 수 있는데, 하필 그게 "픽셀 최다"로 뽑히면
-            # 필터가 통째로 무력해진다 — 조용히 전부 연산하는 것이 최악이다.
+            # 클래스맵이 딸린 프레임만 후보로 둔다. 라벨맵은 RELIABLE 로 나가지만 구독이
+            # BEST_EFFORT 라 두 토픽이 따로 떨어질 수 있는데, 하필 라벨만 온 프레임이
+            # "픽셀 최다"로 뽑히면 필터가 통째로 무력해진다 — 조용히 전부 연산하는 게 최악이다.
             hist = [f for f in hist if f[0] in self.yolo_classes]
             if not hist:
                 return False, (f"target_classes='{p['target_classes']}' 인데 "
                                f"{p['class_topic']} 를 한 프레임도 못 받았다. yolo_seg_node 가 "
                                '이 클래스맵을 발행하는 버전인지 확인할 것')
-        # 아래 5) 의 발행 stamp 와 다른 값이다 — 이건 **고른 라벨 프레임**의 stamp 다.
-        frame_stamp, labels = best_labels(hist) if use_yolo else (None, None)
+            # ⚠️ **거르고 나서 고른다.** 순서를 뒤집으면 best_labels 가 전체 클래스 픽셀 합으로
+            # 고르므로, dining table 처럼 큰 물체가 점수를 지배해 대상(사과)이 깜빡인 컷이
+            # "최선"으로 뽑히고 필터가 그걸 전부 지운다 → 사과가 있었는데 grasp 0개
+            # (cross-review 2026-08-08). 프레임 10장 필터링은 grasp 연산 수십 초에 비해 공짜다.
+            diags = {}
+            cands = []
+            for s, im in hist:
+                out, d = filter_labels_by_class(im, self.yolo_classes[s], wanted)
+                cands.append((s, out))
+                diags[s] = d
+            frame_stamp, labels = best_labels(cands)
+            cdiag = diags[frame_stamp]
+        else:
+            # 아래 5) 의 발행 stamp 와 다른 값이다 — 이건 **고른 라벨 프레임**의 stamp 다.
+            frame_stamp, labels = best_labels(hist) if use_yolo else (None, None)
         class_map = self.yolo_classes.get(frame_stamp, {}) if use_yolo else {}
         if use_yolo:
             self.get_logger().info('클래스맵: ' + (', '.join(
                 f'obj_{v - LABEL_OBJ_BASE}={n}' for v, n in sorted(class_map.items())) or '없음'))
-        if use_yolo and wanted:
-            labels, cdiag = filter_labels_by_class(labels, class_map, wanted)
+        if cdiag:
             self.get_logger().info(cdiag)
+            if not (labels > LABEL_OBJ_BASE).any():
+                # segment_from_labels 는 빈 seg 를 None 이 아니라 전부 0 으로 돌려준다. 그대로
+                # 두면 씬을 쓰고 워커를 왕복한 뒤 '물체 없음'만 가서 원인이 안 보인다.
+                return False, (f"target_classes='{p['target_classes']}' 에 해당하는 물체가 "
+                               f'없다. 이름이 맞는지(COCO 인덱스가 아니라 **이름**, 대소문자 '
+                               f'구분) 확인할 것.\n{cdiag}')
 
         seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels)
         if seg is None:

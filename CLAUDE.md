@@ -26,7 +26,7 @@
 - **yaml만 고쳐도 `colcon build`를 다시 돌린다.** `--symlink-install`이어도 `config/*.yaml`은 심볼릭 링크가 아니라 복사본이라 소스 수정이 반영되지 않는다 (`.py`는 반영돼서 착각하기 쉽다). — 2026-08-08
 - **실수형 파라미터·리스트에는 예외 없이 소수점을 붙인다 (`0` ✗ → `0.0` ✓).** rcl YAML 파서는 리스트 안 int/float 혼합을 거부하고, 스칼라도 INTEGER로 읽혀 `declare_parameter`(DOUBLE)와 타입이 어긋나면 노드가 죽는다. PyYAML은 통과시키므로 파이썬 검증으로는 안 걸린다. — 2026-08-08
 - **`pick_fsm.yaml`의 `home_joints_deg`/`place_joints_deg`를 `robot_control.py`의 JReady/BUCKET_POS에 "맞추지" 않는다.** 다른 게 정상이다. — 2026-08-08
-- **컨테이너 안 노드를 `docker exec`로 직접 띄우지 않는다 → `scripts/graspx_container.sh`.** `docker exec`엔 `--sig-proxy`가 없어 호스트 Ctrl-C가 전달되지 않고, 재실행마다 인스턴스가 쌓인다(실측 9개, `/yolo_seg/mask` publisher 9). — 2026-08-08
+- **컨테이너 안 노드를 `docker exec`로 직접 띄우지 않는다 → `scripts/graspx_container.sh`.** `docker exec`엔 `--sig-proxy`가 없어 호스트 Ctrl-C가 전달되지 않고, **재실행 1회당 인스턴스가 +1** 된다(실측 10개까지, `/yolo_seg/mask` publisher 10). — 2026-08-08
 
 ## 5. 채워야 할 항목
 - [x] 하드웨어 (로봇 모델, 네임스페이스, 그리퍼, 센서) — 2026-08-02 실기 확인 완료 (2절 참고)

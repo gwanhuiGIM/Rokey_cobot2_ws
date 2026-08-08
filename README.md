@@ -4,7 +4,7 @@
 
 - 대상: `m0609_rg2_bringup`, `m0609_rg2_moveit` (둘 다 `src/cobot_rg2/rg2/`)
 - 전제: **환경(카메라 위치·조명)이 바뀌지 않는다.** 카메라를 옮기면 캘리브부터 다시 해야 한다 → [재캘리브](#재캘리브-카메라를-옮겼다면)
-- 최종 갱신: 2026-08-05
+- 최종 갱신: 2026-08-08 (9-1b **YOLO 주 파이프라인** 추가 — 물체를 골라서 집는 경로)
 
 ---
 
@@ -179,6 +179,9 @@ RViz MotionPlanning 패널에서:
 | RViz 수동 장애물 회피 | ✅ 설정 완료 | `publish_geometry_updates` 등 4개 활성. [8절](#8-시뮬레이션에서-장애물-놓고-회피-디버깅) |
 | **3D 장애물 감지 (octomap)** | ✅ **실기 검증됨** (2026-08-03) | `moveit-ros-perception` 설치·self-filter·장애물 회피 확인. 상세 근거는 `md/review_moveit.md`가 단일 출처 |
 | 그리퍼 MoveIt 제어 | ❌ 미지원 | RG2는 `/onrobot/sendCommand` 서비스로 직접 제어. MoveIt 컨트롤러 없음 |
+| YOLO-seg 인식 (컨테이너→호스트) | ✅ 검증됨 | `/yolo_seg/labels` 호스트 수신 25.6 Hz (2026-08-07 21:15). 이전의 "데이터 안 흐름"은 해소됨 |
+| **물체 종류 선정** (`target_classes`) | ✅ 구현·PASS / ⚠️ 실기 미검증 | 빌드 PASS + 순수함수 24개 PASS + 저장된 실기 씬 이미지로 확인(8검출 → `apple` 1개). 라이브 파이프라인 실행은 안 해봄 ([9-1b](#9-1b-yolo-세그--주-파이프라인-터미널-7--8)) |
+| **물체 개체 선정** (사과 2개 중 하나) | ❌ 미구현 | 설계만 있음 — `src/graspgenx_perception/README.md` "다음 방향" 절 |
 
 ### 3D 장애물 감지 (octomap) — 상태
 
@@ -313,9 +316,89 @@ ros2 run graspgenx_perception grasp_bridge_node
 에서만 의미가 있다. 이 PC에서 흐름만 보려면 아래 "GPU 없이" 참고.
 
 기본 `seg_source:=geometric`(신경망 0개, 작업공간 박스+connectedComponents)라 YOLO 컨테이너
-없이도 도는 경로다. `seg_source:=yolo`로 바꾸는 옵션도 있지만 **2026-08-07 기준 컨테이너→호스트
-데이터가 안 흐르는 미해결 버그**가 있다(`src/graspgenx_perception/README.md` "🔴 미해결" 절) —
-지금은 쓰지 말 것.
+없이도 도는 경로다. **다만 2026-08-08 부터 주 파이프라인은 `yolo` 다** — 아래 9-1b 참고.
+
+> ~~컨테이너→호스트 데이터가 안 흐르는 미해결 버그~~ 는 **2026-08-07 21:15 재측정에서
+> 해소됐다**(라벨맵 호스트 수신 25.6 Hz). 이 문단의 이전 경고는 낡은 것이었다.
+
+### 9-1b. YOLO 세그 — 주 파이프라인 (터미널 7 + 8)
+
+**왜 기본을 바꿨나**: 기하 경로는 depth 덩어리라 `obj_1`,`obj_2` 가 **무엇인지 모른다.**
+"사과를 집어"라는 지시를 받을 자리가 원리적으로 없다. 물체를 골라서 집으려면 YOLO 여야 한다.
+대신 COCO 80종 밖(공구 5종)은 포기한다. 상세·근거는
+`src/graspgenx_perception/README.md` "2026-08-08: 주 파이프라인을 YOLO 로 바꾼다" 절.
+
+#### 🔴 어디서 실행하나 — 이걸 틀리면 토픽이 하나도 안 온다
+
+**두 프로세스가 서로 다른 머신에서 돈다. 한 터미널에 다 치면 아무것도 안 나온다.**
+2026-08-08 에 실제로 이걸로 막혔다 — 증상은 "`/yolo_seg/*` 토픽이 없다"였고 원인은 둘이었다.
+
+| 무엇 | **어디서** | 왜 거기서만 되나 |
+|---|---|---|
+| `yolo_seg_node` (탐지) | **컨테이너 `od_kimkh`** | 호스트 시스템 파이썬에 `ultralytics` 가 없다. 넣으면 torch 가 numpy 를 올려 apt `cv_bridge` 를 깬다 |
+| `grasp_bridge_node` (파지 계산) | **호스트** | GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 `uv` 가 없다** |
+| 카메라 (`camera.launch.py`) | **호스트** | USB 장치. 한 프로세스만 잡을 수 있다 |
+
+**그래서 `run_yolo` / `run_bridge` 로 반씩 나눠 띄운다. 같은 머신에서 둘 다 `true` 로 두면 안 된다.**
+
+⚠️ **`run_yolo:=false` 는 "YOLO 를 안 띄운다"는 뜻이다.** 이 인자만 주고 컨테이너 쪽을
+안 띄우면 `/yolo_seg/*` 발행자가 **0개**다. 브리지는 라벨맵을 영원히 기다린다.
+
+⚠️ **호스트 셸의 `ROS_DOMAIN_ID` 는 기본이 0 이다.** 컨테이너는 이미지에 `93` 이 박혀 있다.
+호스트에서 `export` 를 빠뜨리면 갈라져서 **카메라 토픽조차 안 보인다.** 터미널을 새로 열
+때마다 다시 해야 한다 (`~/.bashrc` 에 넣어두는 편이 안전하다).
+
+```bash
+# --- [터미널 7] 탐지 — 호스트에서 실행하지만 내용은 컨테이너 안에서 돈다 (래퍼가 docker exec) ---
+cd ~/cobot2_ws
+#   ⚠️ person(0) 을 넣지 말 것 — yolo 경로엔 self-filter 가 없어 로봇 팔이 물체로 잡힌다
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true \
+  classes:='[39,41,44,46,47,49,64]'
+
+# --- [터미널 8] 파지 계산 — 호스트 ---
+cd ~/cobot2_ws
+export ROS_DOMAIN_ID=93                    # ← 빠뜨리면 아무것도 안 보인다
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo \
+  target_classes:=apple,banana             # ← 콤마 뒤 공백 금지 (셸이 인자를 쪼갠다)
+```
+
+> `target_classes:=apple, banana` 처럼 **공백을 넣으면** 셸이 `banana` 를 별개 인자로 쪼개
+> `malformed launch argument 'banana'` 로 죽는다. 공백을 쓰려면 `target_classes:='apple, banana'`.
+
+#### 안 되면 이 순서로 (2026-08-08 실제 진단 순서)
+
+```bash
+# 1) 발행자가 살아 있나 — 좀비(Z/<defunct>)는 살아 있는 게 아니다
+docker exec od_kimkh ps -eo pid,stat,cmd | grep yolo_seg_node
+#    STAT 가 Z 뿐이면 아무도 안 돌고 있다 → 터미널 7 을 다시 띄운다
+
+# 2) 도메인이 맞나 — 호스트 0, 컨테이너 93 이면 서로 안 보인다
+echo "host=[$ROS_DOMAIN_ID]" && docker exec od_kimkh printenv ROS_DOMAIN_ID
+
+# 3) 토픽이 실제로 있나
+ROS_DOMAIN_ID=93 ros2 topic list | grep yolo    # 없으면 발행자가 0개다
+ROS_DOMAIN_ID=93 ros2 topic hz /yolo_seg/labels
+
+# 4) GPU 에 모델이 올라갔나 — 0개면 노드가 안 떴거나 죽은 것이다
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv
+```
+
+> **좀비는 컨테이너를 재시작해야만 사라진다.** 컨테이너 PID 1 이 `sleep infinity` 라
+> `wait()` 를 안 해서 자식 좀비를 영원히 수거하지 못한다(2026-08-08 확인, 10개 누적).
+> 좀비는 RAM·GPU 를 쓰지 않으므로 급하진 않다 — 다만 `pgrep` 결과를 "돌고 있다"로
+> **오독하게 만든다.** 정리하려면 `docker restart od_kimkh`.
+
+`target_classes` 는 **워커 호출 전에** 대상 외 라벨을 지우므로 GraspGenX 연산 자체가 줄어든다.
+런타임 변경도 먹는다: `ros2 param set /grasp_bridge_node target_classes apple,cup`.
+
+| 파라미터 | 어디 | 뜻 |
+|---|---|---|
+| `classes` | yolo_seg_node (**컨테이너**) | 무엇을 **탐지**할지. COCO **인덱스** 목록. 넓게 |
+| `target_classes` | grasp_bridge_node (**호스트**) | 무엇을 **잡을지**. 클래스 **이름**, 콤마 구분. 좁게 |
+
+⚠️ **아직 "종류"까지만 고를 수 있다.** 사과가 2개면 둘 중 점수 높은 쪽이 그냥 뽑힌다.
+개체 단위 선정은 미구현 — 설계는 `src/graspgenx_perception/README.md` "다음 방향" 절.
 
 ### 9-2. 상태머신 (터미널 9)
 
@@ -403,3 +486,5 @@ ros2 run m0609_rg2_bringup calib_npy_to_tf.py \
 - `md/context/constraints.md` — 실기로 알아낸 제약. **코드보다 이걸 먼저 읽어라**
 - `md/state.md` — 현재 진행 상황과 다음 할 일
 - `CLAUDE.md` — 이 워크스페이스 작업 규칙
+- `src/graspgenx_perception/README.md` — 인식·파지. **`classes`/`target_classes` 로 무엇을
+  집을지 고르는 법**과 개체 단위 선정 설계("다음 방향" 절)의 단일 출처

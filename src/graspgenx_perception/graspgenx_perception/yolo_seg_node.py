@@ -27,6 +27,8 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
+# `import rclpy` 만으로는 `rclpy.logging` 이 안 붙는다 (AttributeError). 명시적으로 가져온다.
+from rclpy.logging import get_logger
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
@@ -52,37 +54,69 @@ DEFAULT_WEIGHT_NAME = 'yolo11n-seg.pt'
 LOCK_DIR = '/tmp'
 
 
-def acquire_singleton(name: str) -> int:
-    """같은 이름의 노드가 이미 돌고 있으면 RuntimeError. 반환한 fd 는 열어 둬야 락이 유지된다.
+class AlreadyRunning(RuntimeError):
+    """같은 토픽에 발행하는 인스턴스가 이미 있다. 버그가 아니라 정상 실패 경로다."""
 
-    ROS 2 는 이름이 겹치는 노드를 막지 않는다 — 경고 한 줄만 찍고 둘 다 돈다. 그러면
-    `/yolo_seg/mask` 에 publisher 가 N개 붙고, 소비자는 어느 인스턴스의 마스크를 받은 건지
-    구분할 방법이 없다(프레임마다 다른 인스턴스의 결과가 섞인다).
+
+def lock_path(topic: str) -> str:
+    """락 파일 경로. **uid 를 파일명에 넣는 것이 핵심이다.**
+
+    `/tmp` 는 sticky(1777) 라 다른 계정이 먼저 만든 파일은 열지도 지우지도 못한다. 이 랩탑은
+    OS 계정을 여러 개 쓰므로(`kimkh`/`jjh`/`rokey`/…) 공용 이름을 쓰면 남이 남긴 파일 하나가
+    **영구 차단**이 된다. uid 를 붙이면 그 상황 자체가 생기지 않는다.
+    """
+    key = topic.strip('/').replace('/', '-') or 'default'
+    return os.path.join(LOCK_DIR, f'yolo_seg_node-{key}-{os.getuid()}.lock')
+
+
+def acquire_singleton(topic: str) -> int:
+    """`topic` 에 발행하는 인스턴스가 이미 있으면 `AlreadyRunning`. 반환한 fd 는 열어 둬야 한다.
+
+    **키가 노드 이름이 아니라 토픽인 이유**: 지키려는 불변식이 "이 토픽의 publisher 는 하나"
+    이기 때문이다. 이름으로 잠그면 `__node:=other` 로 이름만 바꾼 인스턴스가 락을 우회하고도
+    같은 토픽에 2중 발행하고(막아야 하는데 통과), 반대로 카메라 2대를 서로 다른 `mask_topic`
+    으로 돌리는 정당한 구성이 막힌다(통과해야 하는데 막힘). 둘 다 방향이 반대다.
+
+    ROS 2 는 이름이 겹치는 노드를 막지 않는다 — 경고 한 줄만 찍고 둘 다 돈다. 그러면 소비자는
+    프레임마다 다른 인스턴스의 마스크를 받고, 어느 것인지 구분할 방법이 없다.
 
     이게 실제로 터졌다: `docker exec` 에는 `--sig-proxy` 가 없어서(docker 29.7.0) 호스트
     Ctrl-C 가 컨테이너 안까지 가지 않고, 재실행할 때마다 고아가 1개씩 쌓였다
-    (2026-08-08 실측 9개 · RAM 12GB · VRAM 2.6GB · CPU 8코어). 운영 절차는
+    (2026-08-08 실측 10개 · RAM 12GB · VRAM 2.6GB · CPU 8코어). 운영 절차는
     `scripts/graspx_container.sh` 로 고쳤지만, 그걸 안 거치고 띄우는 경로가 남아 있으므로
     노드 자신이 마지막으로 한 번 더 막는다.
 
+    **한계**: 호스트와 컨테이너는 `/tmp` 를 공유하지 않으므로(바인드 마운트는 ws 와
+    `/tmp/.X11-unix` 뿐) 이 락은 **경계를 넘어서는 못 막는다.** 같은 ROS 도메인이라 중복은
+    성립하는데 락은 모른다. 지금은 이 노드가 컨테이너에서만 도니(호스트엔 ultralytics 가 없다)
+    실제 문제가 아니지만, 호스트에서도 돌게 되면 이 가정이 깨진다.
+
     flock 은 프로세스가 SIGKILL 로 죽어도 커널이 풀어준다 — stale 락이 남지 않는다.
     """
-    path = os.path.join(LOCK_DIR, f'{name}.lock')
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    path = lock_path(topic)
+    try:
+        # uid 별 경로라 남의 파일과 겹치지 않지만, /tmp 가 없거나 읽기전용인 환경도 있다.
+        # 여기서 터지면 "중복 방지 장치가 못 떴다"는 뜻이라 원문을 그대로 올린다.
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise RuntimeError(f'중복 방지 락을 열 수 없다: {path} ({exc})') from exc
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        # 이미 연 fd 에서 읽는다. 경로를 다시 열면 소유자가 다를 때 PermissionError 가
-        # 진짜 메시지를 덮는다 (컨테이너는 root, 호스트는 kimkh 로 띄운다).
+        # 이미 연 fd 에서 읽는다 — 경로를 다시 여는 것보다 실패 경로가 하나 적다.
         owner = os.pread(fd, 32, 0).decode(errors='replace').strip() or '?'
         os.close(fd)
-        raise RuntimeError(
-            f"'{name}' 가 이미 PID {owner} 로 돌고 있다 ({path}). 같은 토픽에 둘이 발행하면 "
-            '소비자가 둘을 구분하지 못한다. 먼저 끝내고 다시 띄운다:\n'
+        raise AlreadyRunning(
+            f"'{topic}' 에 발행하는 인스턴스가 이미 PID {owner} 로 돌고 있다 ({path}). "
+            '둘이 같은 토픽에 발행하면 소비자가 어느 쪽 마스크인지 구분하지 못한다. '
+            '먼저 끝내고 다시 띄운다:\n'
             f'  kill -INT {owner}    # 컨테이너 안이면 docker exec <container> kill -INT {owner}\n'
             '  scripts/graspx_container.sh <launch 인자> 로 띄우면 이 정리가 자동이다') from None
-    os.ftruncate(fd, 0)
-    os.write(fd, f'{os.getpid()}\n'.encode())
+    # write 를 먼저 하고 truncate 를 뒤에 한다. 반대로 하면 그 사이에 읽은 경합자가 빈 파일을
+    # 보고 `kill -INT ?` 라는 실행 불가능한 안내를 받는다.
+    pid = f'{os.getpid()}\n'.encode()
+    os.pwrite(fd, pid, 0)
+    os.ftruncate(fd, len(pid))
     return fd
 
 
@@ -133,9 +167,6 @@ def build_label_map(masks: np.ndarray, height: int, width: int,
 class YoloSegNode(Node):
     def __init__(self):
         super().__init__('yolo_seg_node')
-        # 중복 기동은 여기서 끊는다. 가중치 로드(수 초 + VRAM 300MB) 전이라 실패가 싸고,
-        # `__node:=` 로 이름을 바꿔 띄운 경우는 키가 달라 정상적으로 공존한다.
-        self._lock_fd = acquire_singleton(self.get_name())
         self.declare_parameter('model_path', '')
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('mask_topic', '/yolo_seg/mask')
@@ -175,6 +206,10 @@ class YoloSegNode(Node):
         self.overlay_compressed = bool(self.get_parameter('overlay_compressed').value)
         self.jpeg_quality = int(self.get_parameter('overlay_jpeg_quality').value)
         self._warned_truncate = False
+
+        # 중복 기동은 **가중치 로드 전에** 끊는다 — 로드는 수 초 + VRAM 300MB 라 실패가 비싸다.
+        # 파라미터를 다 읽은 뒤여야 `mask_topic` 을 키로 쓸 수 있어서 여기가 가장 이른 자리다.
+        self._lock_fd = acquire_singleton(self.get_parameter('mask_topic').value)
 
         self.bridge = CvBridge()
         self.model = self._load_model(self.get_parameter('model_path').value)
@@ -290,6 +325,9 @@ class YoloSegNode(Node):
                     f'인스턴스 {len(masks)}개 > max_objects={self.max_objects} — 나머지는 버린다')
                 self._warned_truncate = True
             labels, kept = build_label_map(masks, h, w, self.max_objects, self.min_pixels)
+            # 이것도 try 안이다 — torch 인덱싱이라 여기서 터질 수 있고, 밖에 두면 위 주석이
+            # 약속한 "프레임 하나 버리고 계속"이 이 코드에만 적용되지 않는다.
+            class_json = json.dumps(self.class_payload(res, kept, msg.header), ensure_ascii=False)
         except Exception as exc:                       # noqa: BLE001 - 프레임 하나 버리고 계속
             self.get_logger().error(f'프레임 처리 실패: {exc}')
             return
@@ -297,8 +335,7 @@ class YoloSegNode(Node):
         label_msg = self.bridge.cv2_to_imgmsg(labels, encoding='mono8')
         label_msg.header = msg.header
         self.label_pub.publish(label_msg)
-        self.class_pub.publish(String(data=json.dumps(
-            self.class_payload(res, kept, msg.header), ensure_ascii=False)))
+        self.class_pub.publish(String(data=class_json))
 
         # labels > 0 과 정보량이 같다. sam_mask_node 의 0/255 mono8 계약과 맞춰
         # 세그멘테이션 백엔드를 바꿔 끼울 수 있게 남긴다 (README "토픽" 참고).
@@ -328,6 +365,7 @@ class YoloSegNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = None
+    rc = 0
     try:
         # 생성도 try 안이다. 가중치 부재·detect 가중치·ultralytics 부재는 **정상 실패
         # 경로**인데, 밖에 두면 그때 rclpy.shutdown() 이 실행되지 않는다.
@@ -335,6 +373,11 @@ def main(args=None):
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass                                   # Ctrl-C / SIGTERM 은 정상 종료다
+    except AlreadyRunning as exc:
+        # 이것도 정상 실패 경로다. 스택트레이스로 내보내면 `ros2 launch` 가 줄마다
+        # `[yolo_seg_node-1]` 을 붙여 정작 읽어야 할 안내가 파이썬 프레임에 묻힌다.
+        get_logger('yolo_seg_node').fatal(str(exc))
+        rc = 1
     finally:
         if node is not None:
             node.destroy_node()
@@ -342,7 +385,8 @@ def main(args=None):
         # 내린 뒤라 다시 부르면 RCLError 로 터진다 — 정상 종료가 스택트레이스를 남긴다.
         if rclpy.ok():
             rclpy.shutdown()
+    return rc
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

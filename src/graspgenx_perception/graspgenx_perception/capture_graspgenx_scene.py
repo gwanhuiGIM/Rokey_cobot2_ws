@@ -66,7 +66,10 @@ DEFAULTS = {
     # 0.12 는 2026-08-08 실측 튜닝값이다(씬 cmp_geo): 그리퍼가 상판 위 17.9~33.0 cm 에
     # 걸쳐 4182 px 짜리 obj_1 로 잡혔고, 같은 씬의 사과는 상판 위 최대 7.2 cm 였다.
     # 그 사이를 자르면 그리퍼만 사라진다. 기하 경로 전용이다 — yolo 경로(segment_from_labels)
-    # 는 이 값을 안 쓴다(YOLO 가 팔을 클래스로 갖고 있지 않아 애초에 안 잡힌다).
+    # 는 이 값을 안 쓴다.
+    # ⚠️ 그래서 **yolo 경로에는 self-filter 가 없다.** COCO 0 = person 이고 README 실측에
+    # person 검출이 기록돼 있다 — `classes` 기본값이 전체라 사람·팔이 obj_N 으로 들어온다.
+    # yolo 경로에서 이걸 막는 수단은 `classes`(탐지 제한)와 `target_classes`(연산 제한)뿐이다.
     # ⚠️ 키가 12 cm 를 넘는 물체도 같이 잘린다. 그런 물체를 잡으려면 올릴 것. nan 이면 무제한.
     'obj_max_h': 0.12,
     'min_pixels': 300,        # 이보다 작은 덩어리는 버린다(노이즈)
@@ -150,9 +153,10 @@ class SceneCapture(Node):
         self.create_subscription(
             CameraInfo, p['info_topic'], self._on_info, qos_profile_sensor_data)
         # seg_source='yolo' 일 때만 쓴다. 없는 토픽 구독은 무해하므로 항상 걸어둔다.
-        self.yolo_labels = None
         self.yolo_labels_history = []   # [(stamp_ns, 라벨맵)] — best_labels() 가 최고를 고른다
-        self.yolo_classes = {}          # stamp_ns -> {라벨값: 클래스 이름}
+        # stamp_ns -> {라벨값: 클래스 이름}. **이 클래스 자체는 안 쓴다** — grasp_bridge_node
+        # 의 target_classes 가 쓴다. 이 노드를 CLI 로 단독 실행하면 클래스 필터는 없다.
+        self.yolo_classes = {}
         self.create_subscription(
             Image, p['label_topic'], self._on_labels, qos_profile_sensor_data)
         self.create_subscription(
@@ -163,20 +167,24 @@ class SceneCapture(Node):
 
     def _on_labels(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
-        self.yolo_labels = img
         self.yolo_labels_history.append((stamp_ns(msg.header.stamp), img))
         # depth 버퍼와 같은 상한을 재사용한다 — 실패 경로에서 무한히 쌓이는 것을 막는 목적이 같다.
         if len(self.yolo_labels_history) > MAX_DEPTH_BUFFER:
             del self.yolo_labels_history[:-MAX_DEPTH_BUFFER]
 
     def _on_classes(self, msg):
-        """라벨맵과 **다른 토픽**이라 최신값 하나만 들면 짝이 어긋난다 — stamp 로 보관한다."""
+        """라벨맵과 **다른 토픽**이라 최신값 하나만 들면 짝이 어긋난다 — stamp 로 보관한다.
+
+        `std_msgs/String` 은 범용 타입이라 아무나 이 토픽에 아무 문자열이나 발행할 수 있다.
+        형태가 어긋난 것 하나로 구독 콜백이 죽으면 노드가 통째로 내려가므로 넓게 잡는다.
+        """
         try:
             d = json.loads(msg.data)
-        except json.JSONDecodeError:
+            parsed = {int(o['label']): str(o['class']) for o in d['objects']}
+            stamp = int(d['stamp_ns'])
+        except (ValueError, TypeError, KeyError, AttributeError):
             return                       # 프레임 하나 버린다. 라벨맵 경로는 영향받지 않는다
-        self.yolo_classes[int(d['stamp_ns'])] = {
-            int(o['label']): str(o['class']) for o in d.get('objects', [])}
+        self.yolo_classes[stamp] = parsed
         if len(self.yolo_classes) > MAX_DEPTH_BUFFER:
             for k in list(self.yolo_classes)[:-MAX_DEPTH_BUFFER]:
                 del self.yolo_classes[k]
