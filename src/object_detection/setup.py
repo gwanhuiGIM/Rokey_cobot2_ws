@@ -26,9 +26,6 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [
-            'object_detection = object_detection.detection:main',
-            'object_detection_seg = object_detection.segmentation:main',
-        ],
+        'console_scripts': [],
     },
 )

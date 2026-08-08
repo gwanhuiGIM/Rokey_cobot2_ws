@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-06 12:00
+updated: 2026-08-08
 status:  live
 owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 -->
@@ -38,11 +38,13 @@ owns:    문서를 어디에 쓰는지 규칙 · md/ 전체 문서 지도
 | [M0609_perception_motion_sprint_plan.md](M0609_perception_motion_sprint_plan.md) | 🟢 현행 — Day1~5 스프린트 원본. **어느 PC에서 하느냐는 아래 두 문서가 나눈다** |
 | [plans/2026-08-01-pc-role-split.md](plans/2026-08-01-pc-role-split.md) | 🟢 현행 — 개인PC(CPU) vs GPU PC 역할 분담 |
 | [plans/2026-08-03-octomap-integration.md](plans/2026-08-03-octomap-integration.md) | ✅ **완료(08-03)** — 결과는 `review_moveit.md`. 계획서 자체는 이력으로 보존 |
-| [plans/2026-08-03-c270-webcam-plan.md](plans/2026-08-03-c270-webcam-plan.md) | ⏸ 미착수 — C270 eye-in-hand. GPU 불필요 |
+| [plans/2026-08-03-c270-webcam-plan.md](plans/2026-08-03-c270-webcam-plan.md) | ⏸ 미착수 — C270 eye-in-hand. GPU 불필요. ⚠️ **본문 §1이 전제하던 `src/usb_cam`은 2026-08-08 삭제됨**(어디서도 안 씀) — 재개하려면 `v4l2_camera`부터 다시 판단 |
 | [plans/2026-08-03-gpu-dependent-candidates.md](plans/2026-08-03-gpu-dependent-candidates.md) | ⏸ 보류 — GPU 머신 확보 전엔 **어떤 명령도 실행하지 않는다** |
 | [plans/2026-08-04-gpu-rental-checklist.md](plans/2026-08-04-gpu-rental-checklist.md) | 🟢 **종료(2026-08-05, 로컬 GPU PC로 전환).** 대여 GPU 세션은 끝났지만 **밟은 지뢰 §6**과 컨테이너 실측 사실 §8은 로컬 Isaac ROS 작업에서도 계속 유효 |
 | [plans/2026-08-05-foundationpose-graspgenx-pick.md](plans/2026-08-05-foundationpose-graspgenx-pick.md) | 🟢 **현행 원본** — 음성 타겟팅 + GraspGenX + 동적 회피 아키텍처 (같은 날 3차 개정) |
 | [plans/2026-08-05-cumotion-bringup.md](plans/2026-08-05-cumotion-bringup.md) | 🔴 **진행 중** — 게이트 A~F. §4-3 "cuMotion은 MoveIt octomap을 안 본다"가 nvblox 필수화의 근거 |
+| [plans/2026-08-07-graspgenx-target-matching.md](plans/2026-08-07-graspgenx-target-matching.md) | 🟢 현행 — "GraspGenX가 원하는 물체를 감지했는지" 배선 상태·남은 작업 |
+| [plans/2026-08-08-ws-cleanup.md](plans/2026-08-08-ws-cleanup.md) | ✅ **완료(08-08)** — pick_fsm 기준 패키지 지도 + 삭제 실행(7개 패키지 제거, object_detection 죽은 코드 정리). 결과는 `CLAUDE.md` 1절 |
 | [plans/archive/2026-08-05-graspgenx-gpu-sprint.md](plans/archive/2026-08-05-graspgenx-gpu-sprint.md) | 🗄 **이력** — 2026-08-05 GraspGenX 실기 파이프라인 관통으로 목적 달성. 전제였던 "팀 공유 RTX 4070 좌석"은 폐기(실제는 로컬 RTX 4060 8GB) |
 
 ## 산출물 · 이력

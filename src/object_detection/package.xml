@@ -3,17 +3,10 @@
 <package format="3">
   <name>object_detection</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>graspgenx_perception의 YOLO 가중치(.pt) share 경로 제공용. 노드 코드는 2026-08-08 정리로
+  전부 제거됐다 (graspgenx_perception/yolo_seg_node.py가 대체) — resource/만 쓰인다.</description>
   <maintainer email="rokey@todo.todo">rokey</maintainer>
   <license>TODO: License declaration</license>
-
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>od_msg</exec_depend>
-  <!-- ultralytics(YOLO)는 rosdep 키가 없는 pip 패키지입니다.
-       pip install ultralytics opencv-python numpy 로 별도 설치해주세요. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

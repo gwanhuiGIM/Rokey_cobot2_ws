@@ -292,164 +292,41 @@ MoveIt의 씬 저장은 warehouse(mongodb)에 의존한다. 지금은 안 붙어
 
 ---
 
-## 9. 상태머신 + GraspGenX 실행
+## 9. 상태머신 + GraspGenX — 실행 흐름
 
-`pick_fsm`(상태머신)과 `graspgenx_perception`(인식·grasp 계산) 두 패키지만의 실행법이다.
-**로봇·카메라·nvblox/cuMotion GPU 플로우는 여기 없다** — 그건 위 3절(로봇+MoveIt)과
-`config/testcommand.md`(cuMotion+nvblox)가 각각 단일 출처다. 이 절의 전제:
+`pick_fsm`(상태머신) + `graspgenx_perception`(인식·grasp 계산)로 물체를 골라 집는 전체 경로다.
+**여기는 "무엇을 어디서 띄우나"까지만 남긴다** — 인자·트러블슈팅·설계 근거는 각 패키지
+README가 단일 출처다. 전제: **터미널 1(로봇)·터미널 3(MoveIt)이 3절 기준으로 이미 떠
+있다**(`standalone:=false` 필수). 카메라(터미널 2)는 인식을 실제로 쓸 때만 필요하다.
 
-- **터미널 1(로봇)·터미널 3(MoveIt)이 3절 기준으로 이미 떠 있다.**
-  `standalone:=false` 필수 — 안 지키면 TF가 중복 실행되고 원인 로그 없이 실기 관절값이 덮인다.
-- 카메라(터미널 2)는 인식을 실제로 쓸 때만 필요하다. `grasp_source:=manual`로 흐름만
-  확인할 때는 필요 없다(아래 "GPU 없이 흐름만 보기" 참고).
-
-### 9-1. GraspGenX 브리지 (터미널 8)
-# [터미널 8]
-```bash
-source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 run graspgenx_perception grasp_bridge_node
-```
-
-⚠️ **GPU 필요.** 이 노드는 `/grasp/compute` 호출마다 GraspGenX GPU 워커(`uv run`, torch)를
-자식 프로세스로 띄운다(`graspgenx_perception/graspgenx_perception/grasp_bridge_node.py`).
-**GPU 없는 이 PC에서는 뜨긴 뜨지만 `/grasp/compute`를 부르면 워커 기동에서 실패한다** — GPU PC
-에서만 의미가 있다. 이 PC에서 흐름만 보려면 아래 "GPU 없이" 참고.
-
-기본 `seg_source:=geometric`(신경망 0개, 작업공간 박스+connectedComponents)라 YOLO 컨테이너
-없이도 도는 경로다. **다만 2026-08-08 부터 주 파이프라인은 `yolo` 다** — 아래 9-1b 참고.
-
-> ~~컨테이너→호스트 데이터가 안 흐르는 미해결 버그~~ 는 **2026-08-07 21:15 재측정에서
-> 해소됐다**(라벨맵 호스트 수신 25.6 Hz). 이 문단의 이전 경고는 낡은 것이었다.
-
-### 9-1b. YOLO 세그 — 주 파이프라인 (터미널 7 + 8)
-
-**왜 기본을 바꿨나**: 기하 경로는 depth 덩어리라 `obj_1`,`obj_2` 가 **무엇인지 모른다.**
-"사과를 집어"라는 지시를 받을 자리가 원리적으로 없다. 물체를 골라서 집으려면 YOLO 여야 한다.
-대신 COCO 80종 밖(공구 5종)은 포기한다. 상세·근거는
-`src/graspgenx_perception/README.md` "2026-08-08: 주 파이프라인을 YOLO 로 바꾼다" 절.
-
-#### 🔴 어디서 실행하나 — 이걸 틀리면 토픽이 하나도 안 온다
-
-**두 프로세스가 서로 다른 머신에서 돈다. 한 터미널에 다 치면 아무것도 안 나온다.**
-2026-08-08 에 실제로 이걸로 막혔다 — 증상은 "`/yolo_seg/*` 토픽이 없다"였고 원인은 둘이었다.
-
-| 무엇 | **어디서** | 왜 거기서만 되나 |
-|---|---|---|
-| `yolo_seg_node` (탐지) | **컨테이너 `od_kimkh`** | 호스트 시스템 파이썬에 `ultralytics` 가 없다. 넣으면 torch 가 numpy 를 올려 apt `cv_bridge` 를 깬다 |
-| `grasp_bridge_node` (파지 계산) | **호스트** | GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 `uv` 가 없다** |
-| 카메라 (`camera.launch.py`) | **호스트** | USB 장치. 한 프로세스만 잡을 수 있다 |
-
-**그래서 `run_yolo` / `run_bridge` 로 반씩 나눠 띄운다. 같은 머신에서 둘 다 `true` 로 두면 안 된다.**
-
-⚠️ **`run_yolo:=false` 는 "YOLO 를 안 띄운다"는 뜻이다.** 이 인자만 주고 컨테이너 쪽을
-안 띄우면 `/yolo_seg/*` 발행자가 **0개**다. 브리지는 라벨맵을 영원히 기다린다.
-
-⚠️ **호스트 셸의 `ROS_DOMAIN_ID` 는 기본이 0 이다.** 컨테이너는 이미지에 `93` 이 박혀 있다.
-호스트에서 `export` 를 빠뜨리면 갈라져서 **카메라 토픽조차 안 보인다.** 터미널을 새로 열
-때마다 다시 해야 한다 (`~/.bashrc` 에 넣어두는 편이 안전하다).
+| 터미널 | 무엇 | 어디서 | 왜 거기서만 | 상세 |
+|---|---|---|---|---|
+| 7 | YOLO 탐지 (`yolo_seg_node`) | **컨테이너** `od_kimkh` | 호스트엔 `ultralytics` 없음(넣지 말 것 — `cv_bridge` 깨짐) | `src/graspgenx_perception/README.md` |
+| 8 | grasp 계산 (`grasp_bridge_node`, GPU) | **호스트** | GraspGenX 워커를 `uv`로 띄우는데 컨테이너엔 `uv` 없음 | 〃 |
+| 9 | 상태머신 + 안전감시 | 호스트 | — | `src/pick_fsm/README.md` §2 |
+| 10 | (선택) 감시 UI | 호스트 | — | 〃 §9 |
 
 ```bash
-# --- [터미널 7] 탐지 — 호스트에서 실행하지만 내용은 컨테이너 안에서 돈다 (래퍼가 docker exec) ---
-cd ~/cobot2_ws
-#   ⚠️ person(0) 을 넣지 말 것 — yolo 경로엔 self-filter 가 없어 로봇 팔이 물체로 잡힌다
+# [터미널 7] 컨테이너 — 탐지. person(0) 넣지 말 것(yolo 경로엔 self-filter 없음)
 scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true \
   classes:='[39,41,44,46,47,49,64]'
 
-# --- [터미널 8] 파지 계산 — 호스트 ---
-cd ~/cobot2_ws
-export ROS_DOMAIN_ID=93                    # ← 빠뜨리면 아무것도 안 보인다
-source /opt/ros/humble/setup.bash && source install/setup.bash
+# [터미널 8] 호스트 — 파지 계산. ROS_DOMAIN_ID=93 빠뜨리면 아무것도 안 보인다
+export ROS_DOMAIN_ID=93
 ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo \
-  target_classes:=apple,banana             # ← 콤마 뒤 공백 금지 (셸이 인자를 쪼갠다)
-```
+  target_classes:=apple
 
-> `target_classes:=apple, banana` 처럼 **공백을 넣으면** 셸이 `banana` 를 별개 인자로 쪼개
-> `malformed launch argument 'banana'` 로 죽는다. 공백을 쓰려면 `target_classes:='apple, banana'`.
-
-#### 안 되면 이 순서로 (2026-08-08 실제 진단 순서)
-
-```bash
-# 1) 발행자가 살아 있나 — 좀비(Z/<defunct>)는 살아 있는 게 아니다
-docker exec od_kimkh ps -eo pid,stat,cmd | grep yolo_seg_node
-#    STAT 가 Z 뿐이면 아무도 안 돌고 있다 → 터미널 7 을 다시 띄운다
-
-# 2) 도메인이 맞나 — 호스트 0, 컨테이너 93 이면 서로 안 보인다
-echo "host=[$ROS_DOMAIN_ID]" && docker exec od_kimkh printenv ROS_DOMAIN_ID
-
-# 3) 토픽이 실제로 있나
-ROS_DOMAIN_ID=93 ros2 topic list | grep yolo    # 없으면 발행자가 0개다
-ROS_DOMAIN_ID=93 ros2 topic hz /yolo_seg/labels
-
-# 4) GPU 에 모델이 올라갔나 — 0개면 노드가 안 떴거나 죽은 것이다
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv
-```
-
-> **좀비는 컨테이너를 재시작해야만 사라진다.** 컨테이너 PID 1 이 `sleep infinity` 라
-> `wait()` 를 안 해서 자식 좀비를 영원히 수거하지 못한다(2026-08-08 확인, 10개 누적).
-> 좀비는 RAM·GPU 를 쓰지 않으므로 급하진 않다 — 다만 `pgrep` 결과를 "돌고 있다"로
-> **오독하게 만든다.** 정리하려면 `docker restart od_kimkh`.
-
-`target_classes` 는 **워커 호출 전에** 대상 외 라벨을 지우므로 GraspGenX 연산 자체가 줄어든다.
-런타임 변경도 먹는다: `ros2 param set /grasp_bridge_node target_classes apple,cup`.
-
-| 파라미터 | 어디 | 뜻 |
-|---|---|---|
-| `classes` | yolo_seg_node (**컨테이너**) | 무엇을 **탐지**할지. COCO **인덱스** 목록. 넓게 |
-| `target_classes` | grasp_bridge_node (**호스트**) | 무엇을 **잡을지**. 클래스 **이름**, 콤마 구분. 좁게 |
-
-⚠️ **아직 "종류"까지만 고를 수 있다.** 사과가 2개면 둘 중 점수 높은 쪽이 그냥 뽑힌다.
-개체 단위 선정은 미구현 — 설계는 `src/graspgenx_perception/README.md` "다음 방향" 절.
-
-### 9-2. 상태머신 (터미널 9)
-
-```bash
-# 계획만(기본, 안전) — 실기 실행은 dry_run:=false 를 명시해야 한다
-ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
-
-# 음성 없이 고정 타겟으로
+# [터미널 9] 상태머신 (계획만, 기본/안전 — 실기 실행은 dry_run:=false 명시 필요)
 ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger voice:=false target:=apple
-```
 
-`task_manager`(FSM)와 `robot_safety_node`(안전정지 감시)가 같은 launch로 함께 뜬다.
-`grasp_source`는 `compute_grasp`(정본 계약이나 서버 노드가 아직 없음) \| `legacy_trigger`
-(지금 실제로 도는 경로, 9-1의 브리지가 필요) \| `manual`(아래 참고) 셋 중 하나다.
-
-### 9-3. (선택) 상태 감시 UI (터미널 10)
-
-```bash
+# [터미널 10] (선택) 감시 UI
 rqt --standalone pick_fsm
 ```
 
-### 9-4. 조작 명령 [ 터미널 11 or rqt]
-
-```bash
-ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서만)
-ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인 (WAIT_APPROVAL 에서만)
-ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
-ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → IDLE
-ros2 topic echo /pick/state                               # 현재 상태
-```
-
-### GPU 없이 흐름만 보기 (이 PC)
-
-GraspGenX 워커도, 로봇도 없이 상태 전이만 확인하려면 `grasp_source:=manual`로 띄우고
-`/grasp/best`를 직접 쏜다 — 9-1(브리지)조차 필요 없다:
-
-```bash
-ros2 launch pick_fsm pick_fsm.launch.py \
-  voice:=false target:=apple grasp_source:=manual gripper_backend:=virtual
-# 그리고 /grasp/best 로 포즈를 직접 쏜다 (base_link 프레임, tool0 목표 자세)
-```
-
-grasp 결과를 Doosan `move_line` 커맨드로 변환해 보기만 하려면(로봇을 움직이지 않는다 — 문자열만
-출력):
-
-```bash
-python3 src/graspgenx_perception/test/manual_grasp_to_movel.py
-```
-
-자세한 설계·상태 전이표·파라미터 표는 `src/pick_fsm/README.md`, GraspGenX 노드 상세는
-`src/graspgenx_perception/README.md`가 각각 단일 출처다 — 여기서 값을 다시 적지 않는다.
+조작 명령(`/pick/start`·`/pick/approve`·`/pick/abort`·`/pick/reset`), `grasp_source` 세 값의
+차이, GPU 없이 상태 전이만 보는 법(`grasp_source:=manual`), 집을 물체 클래스 바꾸는 법
+(`classes`/`target_classes`), 안 될 때 진단 순서 — 전부 `src/pick_fsm/README.md`·
+`src/graspgenx_perception/README.md`가 단일 출처다. 여기서 값을 다시 적지 않는다.
 
 ---
 

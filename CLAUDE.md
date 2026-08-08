@@ -7,7 +7,7 @@
 > git 상태(브랜치·remote·push 방식·커밋 이력)는 [[ws/cobot2/state]] "계정/환경"이 단일 출처다. 여기서 값을 다시 적지 않는다.
 
 - `.claude/agents/{cross-review,devils-advocate,ros-verifier}.md`, `.claude/commands/{debug,dump,quiz}.md`도 커밋됨(2026-08-01) — cobot1_ws에서 검증되어 전역(`~/.claude/`)으로 승격됐던 것을 프로젝트-로컬로 복사. 전역 설정 없는 다른 PC/계정에서도 `git pull`만으로 동일하게 동작.
-- `src/`에 패키지 9개 존재: `cobot_rg2`, `object_detection`, `od_msg`, `pick_and_place_text`, `pick_and_place_voice`, `robot_control`, `rokey`, `usb_cam`, `voice_processing`. `build/ install/ log/`는 이미 생성돼 있고 `.gitignore`에 정상적으로 제외됨.
+- `src/`에 패키지 7개 존재 (2026-08-08 정리 — `md/plans/2026-08-08-ws-cleanup.md` 근거): `cobot_rg2`(로봇/그리퍼/카메라 bringup+moveit), `cumotion`(GPU 대체 planning pipeline, 옵션), `graspgenx_perception`(인식·grasp 계산, pick_fsm이 부르는 주 경로), `object_detection`(코드 없음 — graspgenx가 쓰는 YOLO 가중치 share 경로 전용), `pick_fsm`(상태머신, task_manager+robot_safety_node), `pick_fsm_msgs`(ComputeGrasp 인터페이스), `voice_processing`(`/get_keyword`, task_manager가 호출). `pick_and_place_text/pick_and_place_voice/robot_control/rokey/od_msg/usb_cam/webcam_perception`은 pick_fsm 경로에서 참조 0건 확인 후 삭제. `build/ install/ log/`는 이미 생성돼 있고 `.gitignore`에 정상적으로 제외됨.
 - `.claude/settings.json` + `.claude/hooks/{guard.sh,format.sh}`는 이미 repo에 커밋되어 동작 중 (rm -rf 방지, opencv-python/numpy2/pydantic2 설치 차단, 실기 모션 명령 차단, build 산출물 커밋 차단, 저장 시 ruff 포맷).
 - **commit/push 단위는 이 `cobot2_ws` repo 하나다.** 다른 ws나 홈 디렉토리 전역에 영향을 주는 git 작업은 하지 않는다.
 
@@ -30,9 +30,8 @@
 
 ## 5. 채워야 할 항목
 - [x] 하드웨어 (로봇 모델, 네임스페이스, 그리퍼, 센서) — 2026-08-02 실기 확인 완료 (2절 참고)
-- [ ] 패키지 지도 — 패키지 9개는 존재하나 각각의 역할·완성도 설명은 아직 없음
+- [x] 패키지 지도 — 1절 참고 (2026-08-08). 각 패키지 역할·완성도까지의 상세 설명은 아직 없음
 - [x] 이 ws에서 실기로 확인한 사실 — **`md/context/constraints.md`** 가 단일 출처(1000줄+ 축적됨)
-- [ ] 1절 패키지 목록이 낡았다 — `src/`에 `pick_fsm`, `graspgenx_perception`, `yolo_seg_grasp` 등이 늘어 있음
 - ⚠️ **문서 디렉토리는 `docs/`가 아니라 `md/`다.** `.gitignore:72`가 `docs/`를 통째로 무시한다(PDF 서고용). 공통 규칙(`~/.claude/CLAUDE.md` 5절)이 말하는 `docs/state.md`·`docs/plans/`·`docs/decisions/`는 이 ws에서 각각 `md/state.md`·`md/plans/`·`md/decisions/`로 읽는다
 - [ ] 검증 절차 (`scripts/verify.sh`를 쓸지 — cobot1_ws의 스크립트는 이 계정에서 접근 불가하므로 필요하면 사용자가 직접 옮겨야 함)
 
