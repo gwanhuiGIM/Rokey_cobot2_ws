@@ -12,19 +12,22 @@ from graspgenx_perception.yolo_seg_node import LABEL_OBJ_BASE, MAX_OBJECTS, buil
 
 
 def test_empty_masks_gives_zero_label_map():
-    labels = build_label_map(None, 480, 640)
+    labels, kept = build_label_map(None, 480, 640)
     assert labels.shape == (480, 640)
     assert labels.dtype == np.uint8
     assert not labels.any()
 
-    assert not build_label_map(np.empty((0, 480, 640), dtype=np.float32), 480, 640).any()
+    assert not kept
+
+    assert not build_label_map(np.empty((0, 480, 640), dtype=np.float32), 480, 640)[0].any()
 
 
 def test_labels_start_at_101_and_increment():
     masks = np.zeros((2, 10, 10), dtype=np.float32)
     masks[0, 0:3, 0:3] = 1.0
     masks[1, 5:8, 5:8] = 1.0
-    labels = build_label_map(masks, 10, 10)
+    labels, kept = build_label_map(masks, 10, 10)
+    assert kept == [0, 1]
     assert labels[1, 1] == LABEL_OBJ_BASE + 1
     assert labels[6, 6] == LABEL_OBJ_BASE + 2
     assert labels[9, 0] == 0
@@ -32,9 +35,9 @@ def test_labels_start_at_101_and_increment():
 
 def test_threshold_is_half():
     masks = np.full((1, 4, 4), 0.5, dtype=np.float32)
-    assert not build_label_map(masks, 4, 4).any(), '0.5 는 임계 초과가 아니다'
+    assert not build_label_map(masks, 4, 4)[0].any(), '0.5 는 임계 초과가 아니다'
     masks[:] = 0.51
-    assert build_label_map(masks, 4, 4).all()
+    assert build_label_map(masks, 4, 4)[0].all()
 
 
 def test_higher_confidence_wins_on_overlap():
@@ -42,7 +45,7 @@ def test_higher_confidence_wins_on_overlap():
     masks = np.zeros((2, 4, 4), dtype=np.float32)
     masks[0, 0, 0] = 1.0      # 고신뢰, 작음
     masks[1] = 1.0            # 저신뢰, 전체
-    labels = build_label_map(masks, 4, 4)
+    labels, _ = build_label_map(masks, 4, 4)
     assert labels[0, 0] == LABEL_OBJ_BASE + 1, '고신뢰가 최상위 z-order'
     assert labels[3, 3] == LABEL_OBJ_BASE + 2
 
@@ -54,7 +57,8 @@ def test_fully_covered_instance_is_dropped_and_labels_stay_contiguous():
     masks[1, 0, 0] = 1.0      # 완전히 가려짐 -> 버려야 한다
     masks[2] = 0.0
     masks[2, :, :] = 0.0
-    labels = build_label_map(masks, 4, 4)
+    labels, kept = build_label_map(masks, 4, 4)
+    assert kept == [0], '버려진 인스턴스는 kept 에서도 빠져야 클래스가 밀리지 않는다'
     assert sorted(np.unique(labels).tolist()) == [LABEL_OBJ_BASE + 1]
 
 
@@ -62,7 +66,8 @@ def test_min_pixels_drops_small_instances():
     masks = np.zeros((2, 10, 10), dtype=np.float32)
     masks[0, 0:5, 0:5] = 1.0   # 25픽셀
     masks[1, 9, 9] = 1.0       # 1픽셀
-    labels = build_label_map(masks, 10, 10, min_pixels=10)
+    labels, kept = build_label_map(masks, 10, 10, min_pixels=10)
+    assert kept == [0]
     assert sorted(np.unique(labels).tolist()) == [0, LABEL_OBJ_BASE + 1]
 
 
@@ -70,7 +75,7 @@ def test_max_objects_truncates():
     masks = np.zeros((5, 4, 4), dtype=np.float32)
     for i in range(5):
         masks[i, i % 4, :] = 1.0
-    labels = build_label_map(masks, 4, 4, max_objects=2)
+    labels, _ = build_label_map(masks, 4, 4, max_objects=2)
     assert len(np.unique(labels)) - 1 <= 2, '3번째부터는 칠하지 않는다'
 
 
@@ -78,7 +83,7 @@ def test_max_objects_is_clamped_to_uint8_safe_range():
     """상한을 파라미터로 키워도 uint8 랩어라운드(100+156 -> 0)로 못 넘어간다."""
     masks = np.zeros((1, 4, 4), dtype=np.float32)
     masks[0, 0, 0] = 1.0
-    assert build_label_map(masks, 4, 4, max_objects=10_000).max() <= 255
+    assert build_label_map(masks, 4, 4, max_objects=10_000)[0].max() <= 255
     assert LABEL_OBJ_BASE + MAX_OBJECTS <= 255
 
 

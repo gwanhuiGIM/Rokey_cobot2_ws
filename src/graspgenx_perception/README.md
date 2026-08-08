@@ -54,19 +54,32 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml
 ros2 run graspgenx_perception yolo_seg_node --ros-args -p publish_overlay:=true -p device:=0
 ```
 
-한 줄로(대화형 셸 없이). `-it` 대신 그냥 `docker exec` 라 Ctrl-C 로 끝낼 수 있다:
+한 줄로(대화형 셸 없이) 띄울 때는 **래퍼 스크립트를 쓴다.** 기존 인스턴스 정리 · pty 부착 ·
+종료 시 정리를 한 번에 한다. 인자는 `graspx.launch.py` 로 그대로 넘어간다:
 
 ```bash
-docker start od_kimkh
-docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
-  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
-    source /home/kimkh/cobot2_ws/install/setup.bash
-    ros2 run graspgenx_perception yolo_seg_node --ros-args \
-      -p device:=0 -p publish_overlay:=true -p classes:="[46,47]"'
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true classes:='[46,47,49]'
 ```
 
-> `docker exec` 로 띄운 노드는 종료 후 `<defunct>` 좀비로 남는다(컨테이너 PID 1 이
-> `sleep infinity` 라 거두지 않는다). 쌓이면 `docker restart od_kimkh`.
+> 🔴 **`docker exec` 를 직접 쓰지 말 것 — Ctrl-C 가 컨테이너 안까지 가지 않는다.**
+> `docker exec` 에는 `--sig-proxy` 가 **없다**(`docker exec --help`, docker 29.7.0 확인).
+> `-t` 를 안 붙이면 컨테이너 안에 제어 터미널이 없어서(`ps` 의 `TT` 가 `?`) 호스트 Ctrl-C 는
+> 호스트 쪽 docker 클라이언트만 죽이고, `ros2 launch` 는 containerd-shim 밑에 **살아서**
+> 남는다. 2026-08-08 에 이 방식으로 `yolo_seg_node` 가 **9개** 누적됐다 — RAM 12GB,
+> VRAM 2.6GB, CPU 8코어, 그리고 `/yolo_seg/mask` 의 **publisher 9개**.
+>
+> ~~종료 후 `<defunct>` 좀비로 남는다~~ 는 **오진이었다.** 남는 것은 `Z` 가 아니라 CPU 를
+> 90% 쓰며 계속 도는 `Sl` 프로세스다. "좀비니까 무해하다"로 읽혀서 더 위험했다.
+>
+> 대화형 셸(위 `docker exec -it od_kimkh bash`)은 pty 가 붙으므로 Ctrl-C 가 정상 동작한다.
+> 문제는 **`-t` 없는 한 줄 실행**이다.
+
+쌓인 것을 손으로 정리하려면(컨테이너 안 PID 기준):
+
+```bash
+docker exec od_kimkh pgrep -af yolo_seg_node        # 확인
+docker exec od_kimkh pkill -f graspgenx_perception  # 전부 종료
+```
 
 오버레이를 보려면 **호스트** 터미널에서:
 
@@ -238,6 +251,7 @@ watchdog 경고). 같은 명령의 이후 3회는 전부 정상이었다. **원�
 |---|---|---|---|
 | sub | `/camera/camera/color/image_raw` | `sensor_msgs/Image` (**rgb8**) | BEST_EFFORT, **depth=1** |
 | pub | `/yolo_seg/labels` | `sensor_msgs/Image` (mono8) | 인스턴스 라벨맵. `obj_1`→101, `obj_2`→102 … |
+| pub | `/yolo_seg/classes` | `std_msgs/String` (JSON) | 라벨값→클래스 이름. 라벨맵과 같은 stamp |
 | pub | `/yolo_seg/mask` | `sensor_msgs/Image` (mono8) | 전경 이진 마스크 0/255 |
 | pub | `/yolo_seg/overlay/compressed` | `sensor_msgs/CompressedImage` (jpeg) | `publish_overlay:=true` 일 때. **기본** |
 | pub | `/yolo_seg/overlay` | `sensor_msgs/Image` (bgr8) | `overlay_compressed:=false` 일 때만 |
@@ -267,6 +281,7 @@ watchdog 경고). 같은 명령의 이후 3회는 전부 정상이었다. **원�
 | `model_path` | `''` | 비우면 `object_detection` share 의 `resource/yolo11n-seg.pt` |
 | `image_topic` | `/camera/camera/color/image_raw` | 구독할 컬러 토픽. depth=1 이라 추론이 느리면 묵은 프레임 대신 최신만 본다 |
 | `mask_topic` / `label_topic` / `overlay_topic` | `/yolo_seg/{mask,labels,overlay}` | 발행 토픽 |
+| `class_topic` | `/yolo_seg/classes` | 라벨값→클래스 이름 매핑(JSON). 아래 "클래스맵" 절 |
 | `publish_overlay` | `false` | 오버레이 발행 여부 |
 | `conf` | `0.25` | 신뢰도 임계 |
 | `device` | `'0'` | `'0'`=첫 GPU, `'cpu'` |
@@ -312,13 +327,11 @@ ros2 service call /grasp/compute std_srvs/srv/Trigger
 **터미널 1 — 컨테이너**(GPU 추론. 프로파일 없으면 프레임 0장이다):
 
 ```bash
-docker start od_kimkh
-docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
-  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
-    source /home/kimkh/cobot2_ws/install/setup.bash
-    ros2 launch graspgenx_perception graspx.launch.py \
-      run_bridge:=false device:=0 publish_overlay:=true classes:="[46,47]"'
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true classes:='[46,47]'
 ```
+
+> 이 자리에 `docker exec` 를 직접 쓰면 Ctrl-C 가 안 먹어 인스턴스가 누적된다.
+> 위 "빠른 실행" 의 🔴 박스 참고.
 
 **터미널 2 — 호스트**(브리지만. `seg_source:=yolo` 로 라벨맵을 쓰게 한다):
 
@@ -431,12 +444,8 @@ ros2 launch graspgenx_perception graspx.launch.py run_bridge:=false classes:="[4
 # 2) 노드 단독 실행
 ros2 run graspgenx_perception yolo_seg_node --ros-args -p classes:="[46,47]" -p device:=0
 
-# 3) 컨테이너 한 줄 (위 "빠른 실행" 의 docker exec 형태 안에 그대로)
-docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml \
-  od_kimkh bash -lc 'source /opt/ros/humble/setup.bash
-    source /home/kimkh/cobot2_ws/install/setup.bash
-    ros2 run graspgenx_perception yolo_seg_node --ros-args \
-      -p device:=0 -p classes:="[46,47]"'
+# 3) 컨테이너 한 줄 — 래퍼를 쓴다 (docker exec 직접 호출은 Ctrl-C 가 안 먹는다)
+scripts/graspx_container.sh run_bridge:=false device:=0 classes:='[46,47]'
 ```
 
 ⚠️ **`ros2 param set` 으로는 안 바뀐다.** 노드가 `__init__` 에서 한 번만 읽어
@@ -458,6 +467,39 @@ docker exec -e FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_
 docker exec od_kimkh python3 -c "from ultralytics import YOLO; \
   print(YOLO('/home/kimkh/cobot2_ws/install/object_detection/share/object_detection/resource/yolo11n-seg.pt').names)"
 ```
+
+## 클래스맵 — `/yolo_seg/classes` 와 `target_classes`
+
+`classes` 를 넓히면 탐지가 늘지만, **`/yolo_seg/labels` 는 정수 라벨(101,102,…)뿐이라
+"obj_2 가 사과였다"를 담지 못한다.** 그래서 `yolo_seg_node` 가 매 프레임 클래스맵을
+`std_msgs/String`(JSON)으로 같이 낸다. 라벨맵과 **같은 `header.stamp`** 를 `stamp_ns` 로
+싣는다 — 소비자가 여러 프레임을 모아 그중 하나를 고르므로, 최신값 하나만 들면 짝이 어긋난다.
+
+```json
+{"stamp_ns": 1754640000123456789, "frame_id": "camera_color_optical_frame",
+ "objects": [{"label": 107, "class": "apple", "cls_id": 47, "conf": 0.237}]}
+```
+
+`grasp_bridge_node` 의 **`target_classes`** 가 이걸 써서 대상을 좁힌다. 콤마 구분
+문자열이다(리스트가 아닌 이유: rcl YAML 파서의 리스트 타입 함정 — `CLAUDE.md` §4).
+
+```bash
+# 탐지는 7종, grasp 연산은 사과만
+scripts/graspx_container.sh run_bridge:=false device:=0 classes:='[39,41,44,46,47,49,64]'
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false seg_source:=yolo \
+    target_classes:=apple
+
+# 런타임 변경이 먹는다 (compute() 마다 다시 읽는다 — yolo 쪽 classes 와 다른 점)
+ros2 param set /grasp_bridge_node target_classes apple,cup
+```
+
+**두 파라미터의 역할이 다르다**: `classes`(yolo) = 무엇을 **탐지**할지, 넓게. 
+`target_classes`(bridge) = 무엇을 **잡을지**, 좁게. 브리지는 대상 외 라벨을 **워커에
+넘기기 전에** 0 으로 지우므로 GraspGenX 연산 자체가 줄어든다 — `target`(obj_N) 은 이미
+계산이 끝난 결과에서 고르는 것이라 시간이 줄지 않는다.
+
+클래스맵을 한 프레임도 못 받으면 브리지는 **실패로 끝낸다.** 조용히 전부 연산하면
+"지정한 물체만"이 거짓말이 되기 때문이다.
 
 **`classes` 는 필터지 학습이 아니다.** 이 가중치는 COCO 80종만 안다 — 이 프로젝트의 공구 5종
 (drill/hammer/pliers/screwdriver/wrench)은 **어떤 인덱스로도 안 잡힌다.** 테이블 위 공구를
@@ -597,6 +639,18 @@ docker exec -it od_kimkh bash -lc \
 | `color`/`aligned_depth_to_color` 해상도 일치 (848×480) | **검증됨** |
 | TF `base_link → camera_color_optical_frame` 존재 | **검증됨** |
 | `/grasp/compute_grasp` 서버 부재 (pick_fsm 기본값이 이걸 부른다) | **확인됨** — 소스 전수 grep, 구현 없음 |
+
+**클래스맵 / `target_classes` (2026-08-08 추가):**
+
+| 항목 | 상태 |
+|---|---|
+| `colcon build --symlink-install --packages-select graspgenx_perception` | **PASS** |
+| 순수 함수 테스트 18개 (`test_yolo_seg`, `test_best_labels`) | **PASS** |
+| `class_payload()` — 저장된 실제 씬 `rgb.png`(1280×720) 로 컨테이너에서 실행 | **검증됨** — 8 인스턴스 → 라벨 101~108, `{107: apple, 106: cup, 105: dining table, …}` |
+| `res.boxes.cls` 와 `res.masks` 인덱스 정렬 | **검증됨** — ultralytics 8.4.113, 마스크 2개 ↔ `boxes.cls` 길이 2 |
+| `filter_labels_by_class()` — 위 클래스맵으로 `apple` 만 남기기 | **검증됨** — `[101…108]` → `[0, 107]`, 원본 배열 불변 |
+| 라이브 파이프라인에서 `/yolo_seg/classes` 실제 발행·수신 | ⚠️ **미검증** — 카메라+컨테이너 기동 필요 |
+| `target_classes` 로 grasp 연산 시간이 실제로 줄어드는지 | ⚠️ **미검증** — 워커 실행 필요 |
 
 **이전 세션 값 — 이번에 재확인하지 않았다:**
 

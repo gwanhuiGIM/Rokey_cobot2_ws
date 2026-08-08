@@ -38,7 +38,8 @@ from rclpy.executors import MultiThreadedExecutor
 from std_srvs.srv import Trigger
 
 from graspgenx_perception.capture_graspgenx_scene import (
-    SceneCapture, best_labels, default_out_dir, segment, write_scene,
+    LABEL_OBJ_BASE, SceneCapture, best_labels, default_out_dir, filter_labels_by_class,
+    segment, write_scene,
 )
 
 EXTRA_DEFAULTS = {
@@ -56,7 +57,14 @@ EXTRA_DEFAULTS = {
     'min_score': 0.5,
     'max_reach_m': 0.900,       # M0609 도달. constraints.md 의 URDF 실측
     'max_approach_z': -0.3,     # grasp +Z(접근축)가 아래를 향하는 것만: R[2,2] < 이 값
-    'target': '',               # 비우면 점수 최고 물체. 이름 지정은 YOLO 붙인 뒤
+    'target': '',               # 비우면 점수 최고 물체. 라벨 이름(obj_2)으로 고른다
+    # **클래스 이름**으로 대상을 좁힌다 (예: 'apple' 또는 'apple,cup'). 비우면 전부.
+    # 리스트가 아니라 콤마 문자열인 이유: rcl YAML 파서가 리스트 안 타입 혼합·빈 리스트에서
+    # 죽는 사례를 이 ws 에서 반복해 밟았다(CLAUDE.md §4). 문자열은 그 함정이 없다.
+    # seg_source='yolo' 전용 — geometric 경로는 클래스를 모른다.
+    # `ros2 param set` 으로 런타임 변경이 먹는다. extra() 가 compute() 마다 다시 읽는다
+    # (yolo_seg_node 의 classes 와 다른 점이다. 그쪽은 __init__ 에서 한 번만 읽는다).
+    'target_classes': '',
 }
 
 
@@ -205,6 +213,7 @@ class GraspBridge(SceneCapture):
         # 1) 최신 프레임만 쓴다 — 이전 요청 때 쌓인 것을 섞지 않는다
         self.depths.clear()
         self.yolo_labels_history.clear()
+        self.yolo_classes.clear()
         n = max(1, p['frames'])
         # ⚠️ 여기서 rclpy.spin_once 를 부르면 안 된다 — 이미 executor 가 이 노드를 돌리고 있고
         #    콜백 안에서 다시 spin 하면 재진입으로 엉킨다. 구독 콜백은 다른 스레드에서
@@ -228,7 +237,32 @@ class GraspBridge(SceneCapture):
         # seg_source='yolo' 면 최신 한 장이 아니라 방금 모은 n장 중 탐지 픽셀이 가장 많은
         # 프레임을 쓴다(best_labels) — grasp 연산(수십 초)에 비하면 프레임 몇 장 더 보는
         # 비용은 무시할 만하고, 흔들린 한 컷 때문에 seg 가 통째로 비는 걸 줄인다.
-        labels = best_labels(self.yolo_labels_history) if p.get('seg_source') == 'yolo' else None
+        use_yolo = p.get('seg_source') == 'yolo'
+        wanted = {s.strip() for s in p['target_classes'].split(',') if s.strip()}
+        if wanted and not use_yolo:
+            # 조용히 무시하면 "사과만 잡는다"고 믿은 채 전부 연산한다 — 가장 나쁜 실패다.
+            return False, (f"target_classes='{p['target_classes']}' 는 seg_source='yolo' 에서만 "
+                           f"쓴다. 지금은 '{p['seg_source']}' 라 클래스를 알 수 없다")
+        hist = self.yolo_labels_history
+        if use_yolo and wanted:
+            # 클래스맵이 딸린 프레임만 후보로 둔다. 두 토픽이 따로 오므로(둘 다 BEST_EFFORT)
+            # 라벨맵만 도착한 프레임이 섞일 수 있는데, 하필 그게 "픽셀 최다"로 뽑히면
+            # 필터가 통째로 무력해진다 — 조용히 전부 연산하는 것이 최악이다.
+            hist = [f for f in hist if f[0] in self.yolo_classes]
+            if not hist:
+                return False, (f"target_classes='{p['target_classes']}' 인데 "
+                               f"{p['class_topic']} 를 한 프레임도 못 받았다. yolo_seg_node 가 "
+                               '이 클래스맵을 발행하는 버전인지 확인할 것')
+        # 아래 5) 의 발행 stamp 와 다른 값이다 — 이건 **고른 라벨 프레임**의 stamp 다.
+        frame_stamp, labels = best_labels(hist) if use_yolo else (None, None)
+        class_map = self.yolo_classes.get(frame_stamp, {}) if use_yolo else {}
+        if use_yolo:
+            self.get_logger().info('클래스맵: ' + (', '.join(
+                f'obj_{v - LABEL_OBJ_BASE}={n}' for v, n in sorted(class_map.items())) or '없음'))
+        if use_yolo and wanted:
+            labels, cdiag = filter_labels_by_class(labels, class_map, wanted)
+            self.get_logger().info(cdiag)
+
         seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels)
         if seg is None:
             return False, diag
@@ -287,6 +321,9 @@ class GraspBridge(SceneCapture):
 
         t = T[:3, 3]
         tcp = tcp_of(T, p['tcp_offset_m'])[0]
+        # 'obj_2' 만 찍으면 어느 물체였는지 로그로 되짚을 수 없다 — 클래스를 붙여 남긴다.
+        cls = class_map.get(label_map.get(label))
+        label = f'{label}({cls})' if cls else label
         return True, (f'{label} 선택: score={score:.3f}, '
                       f'**손끝**=({tcp[0]:+.3f}, {tcp[1]:+.3f}, {tcp[2]:+.3f}) {p["base_frame"]}, '
                       f'그리퍼base=({t[0]:+.3f}, {t[1]:+.3f}, {t[2]:+.3f}), '

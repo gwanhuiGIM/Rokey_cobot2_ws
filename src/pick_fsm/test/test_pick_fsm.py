@@ -105,6 +105,39 @@ def test_lift_는_접근축이_아니라_월드_위쪽이다():
     assert up.pose.position.x == pytest.approx(0.50)
 
 
+def test_standoff_는_하강_종점과_lift_를_같이_민다():
+    """LIFT 를 grasp 원점 기준으로 두면 물체를 문 채 접근축으로 도로 밀고 들어간다."""
+    s = math.sin(math.pi / 4)
+    tilted = _pose(0.5, 0.0, 0.3, quat=(0.0, s, 0.0, s))     # 로컬 +Z 가 월드 +X
+    poses = geo.plan_poses(tilted, approach_offset_m=0.10, standoff_m=0.025,
+                           lift_offset_m=0.15)
+    assert poses['pre_grasp'].pose.position.x == pytest.approx(0.40)
+    # 종점은 grasp 원점(0.50)이 아니라 접근축으로 25 mm 앞
+    assert poses['grasp'].pose.position.x == pytest.approx(0.475)
+    # 🔴 lift 의 x 가 0.50 이면 물체를 문 채 25 mm 밀고 들어간 것이다
+    assert poses['lift'].pose.position.x == pytest.approx(0.475)
+    assert poses['lift'].pose.position.z == pytest.approx(0.45)
+
+
+def test_standoff_는_approach_를_넘지_못하고_부호도_무시한다():
+    """하강이 후진이 되는 설정을 만들 수 없어야 한다. 실기에서 튜닝하는 값이다."""
+    assert geo.clamped_standoff(0.025, 0.10) == pytest.approx(0.025)
+    assert geo.clamped_standoff(-0.025, 0.10) == pytest.approx(0.025)
+    assert geo.clamped_standoff(0.30, 0.10) == pytest.approx(0.10)
+
+    p = _pose(0.5, 0.0, 0.3)                                 # 접근축 = 월드 +Z
+    poses = geo.plan_poses(p, approach_offset_m=0.10, standoff_m=0.30, lift_offset_m=0.15)
+    # 클램프가 없으면 종점 z 가 pre_grasp(0.20)보다 위로 올라가 하강이 뒤집힌다
+    assert poses['grasp'].pose.position.z == pytest.approx(poses['pre_grasp'].pose.position.z)
+
+
+def test_standoff_0_이면_예전_동작_그대로다():
+    p = _pose(0.5, 0.0, 0.3)
+    poses = geo.plan_poses(p, approach_offset_m=0.10, standoff_m=0.0, lift_offset_m=0.15)
+    assert poses['grasp'].pose.position.z == pytest.approx(0.30)
+    assert poses['lift'].pose.position.z == pytest.approx(0.45)
+
+
 def test_tcp_는_grasp_원점이_아니다():
     """접근이 기울면 그리퍼 base 는 물체에서 크게 벗어난다 (2026-08-05 오진 사례)."""
     s = math.sin(math.pi / 4)

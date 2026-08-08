@@ -16,6 +16,8 @@ cv_bridge 를 깬다 — `~/.claude/CLAUDE.md` §3). 도커 컨테이너 안에�
 import 되고, 순수 함수 테스트가 GPU 없이 돈다.
 """
 
+import fcntl
+import json
 import os
 
 import cv2
@@ -28,6 +30,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import String
 
 # 라벨맵 규약은 형제 모듈 capture_graspgenx_scene.py 와 맞춘다.
 # GraspGenX 로더가 `obj_` 접두어 라벨만 보므로 obj_1 -> 101, obj_2 -> 102 ...
@@ -46,20 +49,59 @@ IMAGE_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 DEFAULT_WEIGHT_PKG = 'object_detection'
 DEFAULT_WEIGHT_NAME = 'yolo11n-seg.pt'
 
+LOCK_DIR = '/tmp'
+
+
+def acquire_singleton(name: str) -> int:
+    """같은 이름의 노드가 이미 돌고 있으면 RuntimeError. 반환한 fd 는 열어 둬야 락이 유지된다.
+
+    ROS 2 는 이름이 겹치는 노드를 막지 않는다 — 경고 한 줄만 찍고 둘 다 돈다. 그러면
+    `/yolo_seg/mask` 에 publisher 가 N개 붙고, 소비자는 어느 인스턴스의 마스크를 받은 건지
+    구분할 방법이 없다(프레임마다 다른 인스턴스의 결과가 섞인다).
+
+    이게 실제로 터졌다: `docker exec` 에는 `--sig-proxy` 가 없어서(docker 29.7.0) 호스트
+    Ctrl-C 가 컨테이너 안까지 가지 않고, 재실행할 때마다 고아가 1개씩 쌓였다
+    (2026-08-08 실측 9개 · RAM 12GB · VRAM 2.6GB · CPU 8코어). 운영 절차는
+    `scripts/graspx_container.sh` 로 고쳤지만, 그걸 안 거치고 띄우는 경로가 남아 있으므로
+    노드 자신이 마지막으로 한 번 더 막는다.
+
+    flock 은 프로세스가 SIGKILL 로 죽어도 커널이 풀어준다 — stale 락이 남지 않는다.
+    """
+    path = os.path.join(LOCK_DIR, f'{name}.lock')
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # 이미 연 fd 에서 읽는다. 경로를 다시 열면 소유자가 다를 때 PermissionError 가
+        # 진짜 메시지를 덮는다 (컨테이너는 root, 호스트는 kimkh 로 띄운다).
+        owner = os.pread(fd, 32, 0).decode(errors='replace').strip() or '?'
+        os.close(fd)
+        raise RuntimeError(
+            f"'{name}' 가 이미 PID {owner} 로 돌고 있다 ({path}). 같은 토픽에 둘이 발행하면 "
+            '소비자가 둘을 구분하지 못한다. 먼저 끝내고 다시 띄운다:\n'
+            f'  kill -INT {owner}    # 컨테이너 안이면 docker exec <container> kill -INT {owner}\n'
+            '  scripts/graspx_container.sh <launch 인자> 로 띄우면 이 정리가 자동이다') from None
+    os.ftruncate(fd, 0)
+    os.write(fd, f'{os.getpid()}\n'.encode())
+    return fd
+
 
 def build_label_map(masks: np.ndarray, height: int, width: int,
-                    max_objects: int = MAX_OBJECTS, min_pixels: int = 0) -> np.ndarray:
-    """(N,H,W) 인스턴스 마스크 -> (H,W) uint8 라벨맵.
+                    max_objects: int = MAX_OBJECTS, min_pixels: int = 0):
+    """(N,H,W) 인스턴스 마스크 -> (라벨맵 uint8, kept).
 
     - 입력은 **신뢰도 내림차순**(ultralytics 규약)이라고 본다. 역순으로 칠해서
       고신뢰 인스턴스가 최상위 z-order 를 갖게 한다.
     - 겹침으로 픽셀이 0개가 되거나 `min_pixels` 미만으로 깎인 인스턴스는 버리고,
       남은 것에 **101 부터 연속으로** 다시 매긴다. 라벨이 비면(101,103,…) 소비자의
       "obj_N = N번째 물체" 가정이 깨진다.
+    - `kept[j]` 는 라벨 `101+j` 가 원래 몇 번째 인스턴스였는지다. 이 재번호 매기기가
+      끝나면 클래스 정보로 되돌아갈 길이 사라지므로(라벨맵은 정수 하나뿐) 여기서
+      같이 돌려준다 — 호출자가 `res.boxes.cls[kept[j]]` 로 클래스를 붙인다.
     """
     labels = np.zeros((height, width), dtype=np.uint8)
     if masks is None or len(masks) == 0:
-        return labels
+        return labels, []
 
     # retina_masks=True 가 보장하는 것을 코드로 확인한다. 어긋나면 아래 불리언 인덱싱이
     # IndexError 로 터지는데, 여기서 먼저 잡아 원인이 드러나는 메시지를 남긴다.
@@ -77,23 +119,29 @@ def build_label_map(masks: np.ndarray, height: int, width: int,
     for i in range(len(sel) - 1, -1, -1):    # 뒤(저신뢰)부터 칠하고 앞(고신뢰)이 덮는다
         tmp[sel[i]] = i + 1
 
-    next_id = 0
+    next_id, kept = 0, []
     for i in range(len(sel)):
         keep = tmp == i + 1
         if int(keep.sum()) < max(1, min_pixels):
             continue                          # 완전히 덮였거나 너무 작다 — 버린다
         next_id += 1
         labels[keep] = LABEL_OBJ_BASE + next_id
-    return labels
+        kept.append(i)
+    return labels, kept
 
 
 class YoloSegNode(Node):
     def __init__(self):
         super().__init__('yolo_seg_node')
+        # 중복 기동은 여기서 끊는다. 가중치 로드(수 초 + VRAM 300MB) 전이라 실패가 싸고,
+        # `__node:=` 로 이름을 바꿔 띄운 경우는 키가 달라 정상적으로 공존한다.
+        self._lock_fd = acquire_singleton(self.get_name())
         self.declare_parameter('model_path', '')
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('mask_topic', '/yolo_seg/mask')
         self.declare_parameter('label_topic', '/yolo_seg/labels')
+        # 라벨맵은 정수 하나라 "obj_2 가 사과였다"를 담을 수 없다. 클래스는 여기로 뺀다.
+        self.declare_parameter('class_topic', '/yolo_seg/classes')
         self.declare_parameter('overlay_topic', '/yolo_seg/overlay')
         self.declare_parameter('publish_overlay', False,
                                ParameterDescriptor(dynamic_typing=True))
@@ -133,6 +181,10 @@ class YoloSegNode(Node):
 
         self.mask_pub = self.create_publisher(Image, self.get_parameter('mask_topic').value, 10)
         self.label_pub = self.create_publisher(Image, self.get_parameter('label_topic').value, 10)
+        # 라벨맵과 **같은 header.stamp** 를 실어 보낸다. 소비자(grasp_bridge)는 여러 프레임을
+        # 모아 그중 하나를 고르므로, 최신값 하나만 들고 있으면 고른 프레임과 짝이 어긋난다.
+        self.class_pub = self.create_publisher(
+            String, self.get_parameter('class_topic').value, 10)
         overlay_topic = self.get_parameter('overlay_topic').value
         self.overlay_pub = None
         if self.publish_overlay:
@@ -189,6 +241,35 @@ class YoloSegNode(Node):
         self.get_logger().info(f'model={model_path} classes={len(model.names)}')
         return model
 
+    def class_payload(self, res, kept, header) -> dict:
+        """라벨값 -> 클래스 이름 매핑을 JSON 으로. 소비자는 stamp_ns 로 라벨맵과 짝짓는다.
+
+        `res.boxes` 와 `res.masks` 는 인덱스가 정렬돼 있다(ultralytics 8.4.113 실측:
+        마스크 2개면 `boxes.cls` 도 길이 2). `kept[j]` 가 라벨 `101+j` 의 원래 인덱스다.
+        탐지가 0개여도 발행한다 — "아직 못 받았다"와 "아무것도 없다"를 구분해야 한다.
+        """
+        stamp = header.stamp
+        objects = []
+        boxes = getattr(res, 'boxes', None)
+        if boxes is not None and kept:
+            cls_ids = boxes.cls.cpu().numpy().astype(int)
+            confs = boxes.conf.cpu().numpy()
+            for j, i in enumerate(kept):
+                if i >= len(cls_ids):      # 마스크/박스 개수가 어긋나면 조용히 밀리지 않게 끊는다
+                    self.get_logger().warn(f'boxes({len(cls_ids)}) < masks 인덱스 {i} — 클래스 생략')
+                    break
+                objects.append({
+                    'label': LABEL_OBJ_BASE + j + 1,
+                    'class': str(res.names.get(int(cls_ids[i]), cls_ids[i])),
+                    'cls_id': int(cls_ids[i]),
+                    'conf': round(float(confs[i]), 3),
+                })
+        return {
+            'stamp_ns': int(stamp.sec) * 10**9 + int(stamp.nanosec),
+            'frame_id': header.frame_id,
+            'objects': objects,
+        }
+
     def image_callback(self, msg: Image) -> None:
         # 콜백에서 나간 예외는 rclpy 가 잡지 않아 spin() 밖으로 튀고 노드가 죽는다.
         # 한 프레임 실패(인코딩 불일치·CUDA OOM)로 노드를 잃지 않는다.
@@ -208,7 +289,7 @@ class YoloSegNode(Node):
                 self.get_logger().warn(
                     f'인스턴스 {len(masks)}개 > max_objects={self.max_objects} — 나머지는 버린다')
                 self._warned_truncate = True
-            labels = build_label_map(masks, h, w, self.max_objects, self.min_pixels)
+            labels, kept = build_label_map(masks, h, w, self.max_objects, self.min_pixels)
         except Exception as exc:                       # noqa: BLE001 - 프레임 하나 버리고 계속
             self.get_logger().error(f'프레임 처리 실패: {exc}')
             return
@@ -216,6 +297,8 @@ class YoloSegNode(Node):
         label_msg = self.bridge.cv2_to_imgmsg(labels, encoding='mono8')
         label_msg.header = msg.header
         self.label_pub.publish(label_msg)
+        self.class_pub.publish(String(data=json.dumps(
+            self.class_payload(res, kept, msg.header), ensure_ascii=False)))
 
         # labels > 0 과 정보량이 같다. sam_mask_node 의 0/255 mono8 계약과 맞춰
         # 세그멘테이션 백엔드를 바꿔 끼울 수 있게 남긴다 (README "토픽" 참고).

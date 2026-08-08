@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-07 10:40
+updated: 2026-08-08
 status:  live
 owns:    실기·현장에서 확인된 사실 (하드웨어, TF, MoveIt, QoS, 리소스)
 -->
@@ -1021,3 +1021,73 @@ GraspGenX **자체 loader**를 통과시켜 확인했다
 > 📤 **2026-08-04에 [[ws/cobot2/plans/2026-08-04-gpu-rental-checklist]]로 전부 옮겼다.**
 > 대여 GPU(클라우드) 환경의 사실은 **실기 제약이 아니다** — 이 문서는 로컬 실물 하드웨어만 소유한다.
 > Foxglove, FoundationPose 걸림돌은 그쪽 §6~§8에 있다. nvblox/DDS 보편 사실은 위 절로 옮겼다.
+
+## 🔴 `--symlink-install` 이어도 `config/*.yaml` 은 심볼릭 링크가 아니라 **복사본**이다 (2026-08-08, 실측)
+
+- 증상: `src/pick_fsm/config/pick_fsm.yaml` 을 고쳤는데 실행하면 **고치기 전 값으로 죽는다.**
+- 확인: `ls -la install/pick_fsm/share/pick_fsm/config/pick_fsm.yaml` → 일반 파일(링크 아님).
+  소스와 install 의 같은 줄 내용이 실제로 달랐다.
+- **`.py` 는 symlink 라 리빌드 없이 반영되는데 yaml 은 아니다.** 이 비대칭이 착각의 원인이다 —
+  "파이썬 고친 건 바로 먹혔으니 yaml 도 먹히겠지"가 성립하지 않는다.
+- 규칙: **yaml 만 고쳤어도 `colcon build --packages-select <pkg>` 를 다시 돌린다.**
+
+## 🔴 rcl YAML 파서는 시퀀스 안의 int/float 혼합을 거부한다 — PyYAML 은 통과시킨다 (2026-08-08, 실측)
+
+```
+RCLError: failed to initialize rcl: Couldn't parse params file: '.../pick_fsm.yaml'.
+Error: Sequence should be of same type. Value type 'integer' do not belong at line_num 55
+```
+
+- 원인: `place_joints_deg: [77.0, 4.0, 80.0, 0, 62.0, 0.0]` — 네 번째만 `0` (integer).
+- **PyYAML 로 로드해보는 검증은 이걸 못 잡는다.** rcl 만 거부한다. 원소별 타입을 직접 봐야 한다:
+  ```bash
+  python3 -c "
+  import yaml,sys
+  d=yaml.safe_load(open(sys.argv[1]))['task_manager']['ros__parameters']
+  for k,v in d.items():
+      if isinstance(v,list) and len({type(x) for x in v})>1: print('MIXED:',k,v)
+  " src/pick_fsm/config/pick_fsm.yaml
+  ```
+- 스칼라에도 같은 함정: `replan_delay: 1` 은 INTEGER 로 읽혀 `declare_parameter` 기본값(DOUBLE)과
+  타입이 어긋나 노드가 죽는다.
+- 규칙: **실수형 파라미터·리스트에는 예외 없이 소수점을 붙인다. `0` 이 아니라 `0.0`.**
+  "끈다"는 의미로 `0` 을 쓰고 싶을 때 재발한다 (`grasp_standoff_m`, `lift_offset_m`).
+
+## ⚠️ `pick_fsm` 의 home/place 자세는 `robot_control.py` 원본과 다른 게 정상이다 (2026-08-08)
+
+> 현재값의 정본은 `src/pick_fsm/config/pick_fsm.yaml` 이다. 아래는 변경 이력·근거일 뿐이다.
+
+- `home_joints_deg` / `place_joints_deg` 는 `robot_control.py` 의 `JReady [0,0,90,0,90,0]` /
+  `BUCKET_POS [4,38,64,-0.1,78,4]` 와 값이 일치하지 않는다. 그런데 yaml 주석이
+  `# robot_control.py JReady` 라고 근거를 대고 있어 **"원본과 안 맞으니 맞추자"는 오판을 부른다.**
+  주석을 지우고 "되돌리지 말 것"을 yaml 에 명시했다.
+- **joint_5 오타 정정**: `home_joints_deg` 의 joint_5 가 `400.0` 이었다 → `40.0` (사용자 확인).
+  400° 는 M0609 joint_5 가동범위 밖이라 movej 가 거부하거나 MoveIt 이 IK 에서 실패한다.
+- **미검증 1**: 두 자세가 실기 튜닝값이라는 것은 "원본과 다르다"에서 나온 추론이다. 누가 언제 왜
+  바꿨는지 확인하지 못했다.
+- **미검증 2**: 정정 후 `[0, 0, 40, 0, 40, 0]` 이 실제로 원하는 대기자세인지 실기·RViz 로 보지 않았다.
+  joint_3·joint_5 가 둘 다 40° 라 팔이 접힌 자세이며 카메라 시야를 가릴 가능성이 있다.
+
+## ⚠️ `docker exec` 로 띄운 노드는 Ctrl-C 로 안 죽는다 — 인스턴스가 누적된다 (2026-08-08)
+
+- **증상**: `yolo_seg_node` 가 컨테이너(`od_kimkh`) 안에 **9개** 동시에 살아 있었다.
+  RAM 12GB · VRAM 2.6GB · CPU 8코어 상시 · swap 2GB 전량 소진.
+  `ros2 topic info /yolo_seg/mask` 의 **Publisher count: 9** — 소비자는 프레임마다 다른
+  인스턴스의 마스크를 받게 되고, 어느 것인지 구분할 방법이 없다.
+  ROS 2 는 이름이 겹치는 노드를 막지 않는다(경고 한 줄만 찍고 둘 다 돈다).
+- **근본 원인**: `docker exec` 에는 `--sig-proxy` 가 **없다**(`docker exec --help`, docker
+  29.7.0 확인 — `docker run` 에만 있다). `-t` 를 안 붙이면 컨테이너 안에 제어 터미널이
+  없어서(`ps` 의 `TT` 가 `?`) 호스트 Ctrl-C 는 호스트 쪽 docker 클라이언트만 죽이고,
+  컨테이너 안 `ros2 launch` 는 containerd-shim 밑에 고아로 **살아 남는다.** 재실행마다 +1.
+- **왜 오래 못 잡았나**: `graspgenx_perception/README.md` 가 **정반대를 가르치고 있었다** —
+  "`-it` 대신 그냥 `docker exec` 라 Ctrl-C 로 끝낼 수 있다". 그리고 잔존물을
+  "`<defunct>` 좀비"로 적어 뒀는데, 실제로는 `Z` 가 아니라 CPU 90% 를 쓰며 도는 `Sl` 이다.
+  "좀비니까 무해"로 읽혀서 더 위험했다. 문서의 틀린 절차가 원인인 버그였다.
+- **규칙**: 컨테이너 안 노드는 **`scripts/graspx_container.sh`** 로 띄운다
+  (기존 인스턴스 정리 → `-t` 로 pty 부착 → `trap` 으로 종료 시 재정리).
+  `docker exec` 직접 호출은 `pgrep`/`pkill` 같은 일회성 진단에만 쓴다.
+- **마지막 방어선**: `yolo_seg_node.acquire_singleton()` 이 `/tmp/<node_name>.lock` 에
+  `flock` 을 건다. 래퍼를 안 거쳐 띄워도 두 번째 인스턴스는 가중치 로드 전에 죽는다.
+  `flock` 은 SIGKILL 로 죽어도 커널이 풀어주므로 stale 락이 남지 않는다.
+- **미검증**: `-t` 를 붙이면 Ctrl-C 가 전달된다는 것은 pty 동작에서 나온 추론이고 실측하지
+  않았다. 그래서 래퍼는 `-t` 에만 기대지 않고 `trap` 정리를 함께 건다.

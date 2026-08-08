@@ -44,6 +44,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from std_msgs.msg import String
 
 # 전부 실측 튜닝값이다. 도면값 아님 — 첫 캡처 로그를 보고 다시 잡는다.
 DEFAULTS = {
@@ -61,7 +62,13 @@ DEFAULTS = {
     'z_min': -0.05, 'z_max': 0.60,
     'table_z': float('nan'),  # nan이면 박스 안 z 중앙값으로 자동 추정
     'obj_min_h': 0.015,       # 테이블면 위 이 높이부터 물체로 본다
-    'obj_max_h': float('nan'),  # nan이면 무제한. 로봇 팔은 xy로 못 빼므로 높이로 자른다
+    # 로봇 팔·그리퍼는 작업공간 박스 **안**에 있어 xy 로 뺄 수 없다 — 높이로 자른다.
+    # 0.12 는 2026-08-08 실측 튜닝값이다(씬 cmp_geo): 그리퍼가 상판 위 17.9~33.0 cm 에
+    # 걸쳐 4182 px 짜리 obj_1 로 잡혔고, 같은 씬의 사과는 상판 위 최대 7.2 cm 였다.
+    # 그 사이를 자르면 그리퍼만 사라진다. 기하 경로 전용이다 — yolo 경로(segment_from_labels)
+    # 는 이 값을 안 쓴다(YOLO 가 팔을 클래스로 갖고 있지 않아 애초에 안 잡힌다).
+    # ⚠️ 키가 12 cm 를 넘는 물체도 같이 잘린다. 그런 물체를 잡으려면 올릴 것. nan 이면 무제한.
+    'obj_max_h': 0.12,
     'min_pixels': 300,        # 이보다 작은 덩어리는 버린다(노이즈)
     # 단일 시점 depth 는 물체 뒤 가림영역을 전경 깊이로 메운다(occlusion shadow).
     # 그 꼬리가 덩어리에 붙어 OBB 를 부풀리고, 심하면 grasp 가 0개가 된다
@@ -78,6 +85,8 @@ DEFAULTS = {
     # 변환이 필요 없다. yolo 는 학습한 클래스만 잡으므로 공구 seg 모델이 없으면 geometric 이 낫다.
     'seg_source': 'geometric',
     'label_topic': '/yolo_seg/labels',
+    # yolo_seg_node 가 내는 "라벨값 -> 클래스 이름" 매핑. target_classes 필터가 이걸 쓴다.
+    'class_topic': '/yolo_seg/classes',
 }
 
 # LABEL_TABLE 은 **사람용**이다. GraspGenX 로더는 `obj_` 접두어가 아닌 라벨을 전부 무시하고
@@ -88,6 +97,11 @@ LABEL_TABLE = 2
 LABEL_OBJ_BASE = 100          # obj_1 -> 101, obj_2 -> 102 ... (샘플 데이터와 같은 규약)
 MAX_OBJECTS = 155             # seg.png 가 uint8 이라 100+156 은 조용히 0으로 랩어라운드한다
 MAX_DEPTH_BUFFER = 120        # 실패 경로에서 depth 프레임이 무한히 쌓이는 것을 막는다
+
+
+def stamp_ns(stamp):
+    """builtin_interfaces/Time -> int ns. 라벨맵과 클래스맵을 짝짓는 유일한 키다."""
+    return int(stamp.sec) * 10**9 + int(stamp.nanosec)
 
 
 def quat_to_matrix(x, y, z, w):
@@ -137,9 +151,12 @@ class SceneCapture(Node):
             CameraInfo, p['info_topic'], self._on_info, qos_profile_sensor_data)
         # seg_source='yolo' 일 때만 쓴다. 없는 토픽 구독은 무해하므로 항상 걸어둔다.
         self.yolo_labels = None
-        self.yolo_labels_history = []   # best_labels() 가 이 중 탐지 품질 최고를 고른다
+        self.yolo_labels_history = []   # [(stamp_ns, 라벨맵)] — best_labels() 가 최고를 고른다
+        self.yolo_classes = {}          # stamp_ns -> {라벨값: 클래스 이름}
         self.create_subscription(
             Image, p['label_topic'], self._on_labels, qos_profile_sensor_data)
+        self.create_subscription(
+            String, p['class_topic'], self._on_classes, qos_profile_sensor_data)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -147,10 +164,22 @@ class SceneCapture(Node):
     def _on_labels(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
         self.yolo_labels = img
-        self.yolo_labels_history.append(img)
+        self.yolo_labels_history.append((stamp_ns(msg.header.stamp), img))
         # depth 버퍼와 같은 상한을 재사용한다 — 실패 경로에서 무한히 쌓이는 것을 막는 목적이 같다.
         if len(self.yolo_labels_history) > MAX_DEPTH_BUFFER:
             del self.yolo_labels_history[:-MAX_DEPTH_BUFFER]
+
+    def _on_classes(self, msg):
+        """라벨맵과 **다른 토픽**이라 최신값 하나만 들면 짝이 어긋난다 — stamp 로 보관한다."""
+        try:
+            d = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return                       # 프레임 하나 버린다. 라벨맵 경로는 영향받지 않는다
+        self.yolo_classes[int(d['stamp_ns'])] = {
+            int(o['label']): str(o['class']) for o in d.get('objects', [])}
+        if len(self.yolo_classes) > MAX_DEPTH_BUFFER:
+            for k in list(self.yolo_classes)[:-MAX_DEPTH_BUFFER]:
+                del self.yolo_classes[k]
 
     def _on_depth(self, msg):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -331,17 +360,40 @@ def segment_from_labels(labels, depth, K, T_base_cam, p):
     return seg, label_map, '\n'.join(diag)
 
 
-def best_labels(imgs):
-    """여러 프레임의 yolo 라벨맵 중 물체 픽셀(라벨값 > 100)이 가장 많은 것을 고른다.
+def best_labels(frames):
+    """`[(stamp_ns, 라벨맵), ...]` 중 물체 픽셀(라벨값 > 100)이 가장 많은 것 -> 같은 튜플.
 
     grasp 연산(수십 초)에 비하면 프레임 몇 장 더 보는 비용은 무시할 만하다 — 탐지가
     한 프레임에서만 흔들려도(조명 반사, 순간 블러) 최선의 컷을 쓰게 한다.
     ponytail: 프레임을 픽셀별로 합치지 않는다(depth median과 다르게 라벨은 정수 클래스ID라
     두 프레임을 섞으면 의미 없는 값이 나온다) — "라벨 픽셀 수 최대"인 프레임을 그대로 쓴다.
+    stamp 를 같이 돌려주는 이유: 클래스맵이 별도 토픽이라 **고른 프레임의** stamp 로
+    찾아야 짝이 맞는다. 배열만 돌려주면 어느 프레임이었는지 되찾을 수 없다.
     """
-    if not imgs:
-        return None
-    return max(imgs, key=lambda im: int((im > LABEL_OBJ_BASE).sum()))
+    if not frames:
+        return None, None
+    return max(frames, key=lambda f: int((f[1] > LABEL_OBJ_BASE).sum()))
+
+
+def filter_labels_by_class(labels, class_map, wanted):
+    """`wanted` 클래스에 속하지 않는 라벨을 0 으로 지운다 -> (라벨맵, 진단문자열).
+
+    **워커 호출 전에** 거른다. `select()` 의 `target` 은 이미 계산된 결과에서 고르는 것이라
+    GraspGenX 가 물체 전부를 연산한 뒤다(물체당 수 초~수십 초). 여기서 지우면 그 연산
+    자체가 사라진다 — "지정한 물체만 연산"의 의미가 이쪽이다.
+    """
+    keep, drop = [], []
+    out = labels.copy()
+    for v in (int(x) for x in np.unique(labels) if x > LABEL_OBJ_BASE):
+        name = class_map.get(v)
+        if name in wanted:
+            keep.append(f'obj_{v - LABEL_OBJ_BASE}={name}')
+        else:
+            out[out == v] = 0
+            drop.append(f'obj_{v - LABEL_OBJ_BASE}={name or "?"}')
+    diag = (f'클래스 필터 target_classes={sorted(wanted)}: '
+            f'남김 [{", ".join(keep) or "없음"}] / 버림 [{", ".join(drop) or "없음"}]')
+    return out, diag
 
 
 def segment(depth, K, T_base_cam, p, yolo_labels=None):
@@ -495,8 +547,8 @@ def run(node):
 
     # yolo 는 최신 한 장이 아니라 최근 n_frames 장 중 탐지 픽셀이 가장 많은 프레임을 쓴다
     # (best_labels 참고) — depth 를 n_frames 만큼 모으는 동안 어차피 라벨도 같이 쌓인다.
-    labels = (best_labels(node.yolo_labels_history[-n_frames:])
-             if p.get('seg_source') == 'yolo' else None)
+    _, labels = (best_labels(node.yolo_labels_history[-n_frames:])
+                 if p.get('seg_source') == 'yolo' else (None, None))
     seg, label_map, diag = segment(depth, K, T, p, labels)
     if seg is None:
         node.get_logger().error(diag)

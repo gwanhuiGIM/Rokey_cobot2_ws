@@ -36,12 +36,27 @@ task_manager:
 
     # ── 자세 ─────────────────────────────────────────────
     approach_offset_m: 0.10     # UNVERIFIED: 접근 여유. 물체 주변 혼잡도에 따라 조정
+    # 하강 종점(그리퍼를 오므리기 시작하는 지점)을 grasp 의 -Z(접근축)로 이만큼 덜 내린다.
+    # LIFT 도 이 종점 기준으로 올라간다 (grasp 원점 기준이면 물체를 문 채 도로 밀고 들어간다).
+    # ⚠️ 월드 +Z(수직 위)가 아니라 접근축이다 — 비스듬한 grasp 에서는 하강 직선 위로 뺀다.
+    # ⚠️ 끄려면 `0` 이 아니라 **`0.0`** 이라고 쓴다 (위 replan_delay 와 같은 INTEGER 함정).
+    #    부호는 무시되고(항상 후퇴), approach_offset_m 을 넘으면 거기서 클램프된다.
+    # UNVERIFIED: 2026-08-08 실기에서 "그립 시도지점이 물체에 너무 붙는다"는 관찰로 넣은 값.
+    # 근본 원인은 미확인 — GraspGenX 는 자기 모델 손끝(`config.json` fingertip[2] = 0.18 m)
+    # 기준으로 grasp 원점을 잡는데, 이 그리퍼의 실측 손끝은 `rg2_base_link` 기준 0.218 m
+    # (닫힘) ~ 0.177 m (개구 100 mm) 로 **폭에 따라 41 mm 움직인다**(rg2.py 가 정본).
+    # 그 차이가 원인이라면 이 값은 상수일 수 없다. 폭이 다른 물체에서 다시 재볼 것.
+    grasp_standoff_m: 0.03
     lift_offset_m: 0.15         # UNVERIFIED
     # tcp_offset_m 파라미터는 삭제됨(2026-08-07) — rg2.fingertip_length_m(width_m)이
     # 실측 보정표(닫힘 0.240 m, 폭에 따라 비선형 감소)로 대체했다. pick_fsm/rg2.py 가 정본.
-    max_reach_m: 0.900          # M0609 URDF 실측 (shoulder 기준 flange 까지)
-    home_joints_deg: [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]      # robot_control.py JReady
-    place_joints_deg: [4.0, 38.0, 64.0, -0.1, 78.0, 4.0]   # robot_control.py BUCKET_POS
+    max_reach_m: 1          # M0609 URDF 실측 (shoulder 기준 flange 까지)
+    # ⚠️ 아래 둘은 robot_control.py 의 JReady/BUCKET_POS 와 값이 다르다. 실기에서 다시 잡은
+    #    값으로 보이므로 "원본과 맞춰야 한다"며 되돌리지 말 것. (원본: JReady [0,0,90,0,90,0],
+    #    BUCKET_POS [4,38,64,-0.1,78,4])
+    # 2026-08-08: joint_5 가 400.0 → 40.0 (오타. 400° 는 M0609 가동범위 밖이라 movej/IK 실패)
+    home_joints_deg: [0.0, 0.0, 40.0, 0.0, 40.0, 0.0]
+    place_joints_deg: [77.0, 4.0, 80.0, 0.0, 62.0, 0.0]
 
     # ── 씬 ───────────────────────────────────────────────
     object_id: pick_target

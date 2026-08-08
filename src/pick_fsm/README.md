@@ -325,13 +325,13 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 |---|---|---|
 | 안전 | `dry_run`, `require_approval`, `approval_timeout_sec` | 기본값이 안전 쪽 |
 | MoveIt | `planning_group`, `ee_link`, `base_frame`, `joint_names`, `vel_scale`, `acc_scale`, `planning_time`, `planning_attempts`, `joint_tolerance`, `ik_timeout_sec`, `ik_avoid_collisions`, `planning_pipeline`, `planner_id`, `replan*`, `motion_retries` | `base_frame` 은 `world` 가 아니라 `base_link`. `planning_pipeline`: `ompl`(기본) \| `isaac_ros_cumotion` — IK 는 파이프라인을 안 타므로 영향 없음, `_move()`(관절목표 계획)에만 적용됨. 그 파이프라인이 `move_group`에 떠 있어야 한다 |
-| 자세 | `approach_offset_m`, `lift_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환. 손끝 오프셋은 파라미터가 아니라 `rg2.fingertip_length_m(width_m)` 계산값이다(2026-08-07) |
+| 자세 | `approach_offset_m`, `grasp_standoff_m`, `lift_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환. 손끝 오프셋은 파라미터가 아니라 `rg2.fingertip_length_m(width_m)` 계산값이다(2026-08-07). `grasp_standoff_m` 은 DESCEND 종점을 접근축 -Z 로 빼고 **LIFT 도 그 종점 기준**으로 올린다(`geometry.plan_poses`). `self.grasp`(=CollisionObject·로그 기준)는 안 건드린다. `approach_offset_m` 으로 클램프됨 |
 | 씬 | `object_id`, `object_radius_m`, `clear_octomap_before_descend`, `allow_gripper_octomap_collision`, `gripper_links` | 뒤 둘은 §4 읽고 켤 것 |
 | 그리퍼 | `gripper_backend`, `grip_clearance_m`, `max_grip_width_m`, `force_down_steps`, `gripper_settle_sec`, `verify_required`, `grip_retries` | |
 | 인식 | `grasp_source`, `grasp_service`, `min_confidence`, `default_width_m`, `max_alternatives` | |
 | 음성 | `voice_enabled`, `keyword_service`, `target` | |
 
-**UNVERIFIED 표시가 붙은 값들** (`approach_offset_m`, `lift_offset_m`, `object_radius_m`,
+**UNVERIFIED 표시가 붙은 값들** (`approach_offset_m`, `grasp_standoff_m`, `lift_offset_m`, `object_radius_m`,
 `grip_clearance_m`, `gripper_settle_sec`, `default_width_m`)은 도면값이 아니라 임의로 정한
 출발점이다. 실기에서 갈아야 한다.
 

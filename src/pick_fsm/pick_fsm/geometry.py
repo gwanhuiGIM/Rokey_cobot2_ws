@@ -92,6 +92,30 @@ def lifted(grasp: PoseStamped, up_m: float) -> PoseStamped:
     return out
 
 
+def clamped_standoff(standoff_m: float, approach_offset_m: float) -> float:
+    """실제로 적용되는 standoff [m]. 로그가 설정값이 아니라 이 값을 찍어야 클램프가 보인다."""
+    return min(abs(standoff_m), abs(approach_offset_m))
+
+
+def plan_poses(grasp: PoseStamped, approach_offset_m: float, standoff_m: float,
+               lift_offset_m: float) -> dict[str, PoseStamped]:
+    """PLAN 이 IK 를 푸는 3점. `standoff_m` = 하강 종점을 접근축 -Z 로 덜 내리는 양.
+
+    🔴 `lift` 는 grasp 원점이 아니라 **하강 종점**에서 올라간다. 그리퍼가 닫힌 자리가
+    거기이기 때문이다 — 원점 기준으로 올리면 물체를 문 채로 접근축 +Z 로 standoff 만큼
+    **도로 밀고 들어간 뒤** 상승한다(기울어진 grasp 에선 그 성분이 수평이라 물체를 문지른다).
+
+    `standoff_m` 은 `approach_offset_m` 으로 클램프한다. 더 크면 DESCEND 가 pre-grasp 보다
+    뒤가 되어 하강이 **후진**이 된다. 부호는 무시한다(`pre_grasp` 규약과 같이 항상 후퇴).
+    """
+    hold = pre_grasp(grasp, clamped_standoff(standoff_m, approach_offset_m))
+    return {
+        'pre_grasp': pre_grasp(grasp, approach_offset_m),
+        'grasp': hold,
+        'lift': lifted(hold, lift_offset_m),
+    }
+
+
 def tcp_of(grasp: PoseStamped, tcp_offset_m: float) -> tuple[float, float, float]:
     """손끝 위치. grasp 원점 + offset x (+Z축).
 

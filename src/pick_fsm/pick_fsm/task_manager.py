@@ -188,6 +188,7 @@ class TaskManager(Node):
 
             # 자세
             'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
+            'grasp_standoff_m': 0.0,         # DESCEND 종점을 grasp 의 -Z 로 덜 내리는 양
             'lift_offset_m': 0.15,           # LIFT: 월드 +Z
             # tcp_offset_m 은 더 이상 파라미터가 아니다 — rg2.fingertip_length_m(width_m)이
             # 2026-08-07 실측(폭에 따라 손끝이 짧아지는 비선형 보정표)으로 대체했다.
@@ -532,11 +533,19 @@ class TaskManager(Node):
     def _st_plan(self):
         """pre-grasp → grasp → lift 3점 IK. 하나라도 실패하면 다음 후보로 간다."""
         if not self.poses:
-            self.poses = {
-                'pre_grasp': geo.pre_grasp(self.grasp, float(self.p('approach_offset_m'))),
-                'grasp': self.grasp,
-                'lift': geo.lifted(self.grasp, float(self.p('lift_offset_m'))),
-            }
+            # `grasp_standoff_m` 은 **이동 목표만** 뒤로 뺀다. `self.grasp` 는 인식이 준 값
+            # 그대로 둔다 — SCENE_PREP 의 CollisionObject 와 로그는 "물체가 있다고 본 자리"를
+            # 가리켜야 하고, standoff 는 "손끝 모델이 그만큼 틀렸다"는 보정이라 의미가 다르다.
+            # 클램프가 걸릴 수 있으니 **적용된 값**을 찍는다(설정값이 아니라).
+            approach = float(self.p('approach_offset_m'))
+            self.poses = geo.plan_poses(self.grasp, approach,
+                                        float(self.p('grasp_standoff_m')),
+                                        float(self.p('lift_offset_m')))
+            applied = geo.clamped_standoff(float(self.p('grasp_standoff_m')), approach)
+            if applied > 0.0:
+                self.get_logger().info(
+                    f'그립 시작점을 접근축 -Z 로 {applied * 1000:.1f} mm 뺐다 '
+                    f'(하강 {(approach - applied) * 1000:.0f} mm, LIFT 도 이 지점 기준)')
         order = ['pre_grasp', 'grasp', 'lift']
         if self._plan_i >= len(order):
             self._to(State.WAIT_APPROVAL, 'IK 3점 성공')
