@@ -527,13 +527,15 @@ def filter_labels_by_class(labels, class_map, wanted):
     return out, diag
 
 
-def segment(depth, K, T_base_cam, p, yolo_labels=None):
+def segment(depth, K, T_base_cam, p, yolo_labels=None, class_map=None):
     """작업공간 박스 + 높이 임계 + connectedComponents -> (seg uint8, label_map, 진단문자열).
 
     p['seg_source'] == 'yolo' 면 기하 대신 yolo_labels 를 쓴다 (segment_from_labels).
+    `class_map`(라벨값 -> 클래스 이름)은 yolo 경로에서 클래스별 실측 치수를 찾는 데만 쓴다 —
+    기하 경로는 클래스를 모르므로 무시한다.
     """
     if p.get('seg_source') == 'yolo':
-        return segment_from_labels(yolo_labels, depth, K, T_base_cam, p)
+        return segment_from_labels(yolo_labels, depth, K, T_base_cam, p, class_map)
     H, W = depth.shape
     in_box, X, Y, Z = workspace_mask(depth, K, T_base_cam, p)
     if not in_box.any():
@@ -678,9 +680,13 @@ def run(node):
 
     # yolo 는 최신 한 장이 아니라 최근 n_frames 장 중 탐지 픽셀이 가장 많은 프레임을 쓴다
     # (best_labels 참고) — depth 를 n_frames 만큼 모으는 동안 어차피 라벨도 같이 쌓인다.
-    _, labels = (best_labels(node.yolo_labels_history[-n_frames:])
-                 if p.get('seg_source') == 'yolo' else (None, None))
-    seg, label_map, diag = segment(depth, K, T, p, labels)
+    frame_stamp, labels = (best_labels(node.yolo_labels_history[-n_frames:])
+                           if p.get('seg_source') == 'yolo' else (None, None))
+    # class_dims(클래스별 실측 치수)를 쓰려면 그 프레임의 클래스맵이 필요하다 — 라벨맵과
+    # 별도 토픽이라 stamp 로 짝을 맞춘다(grasp_bridge_node.compute() 와 같은 패턴).
+    class_map = (node.yolo_classes.get(frame_stamp, {})
+                 if p.get('seg_source') == 'yolo' else {})
+    seg, label_map, diag = segment(depth, K, T, p, labels, class_map)
     if seg is None:
         node.get_logger().error(diag)
         return 1

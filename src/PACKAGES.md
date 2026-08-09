@@ -912,9 +912,35 @@ obj_radius_m(기본 0.05m)  ─┐
 | `yolo_min_ring_px` | `20` | 링 안 배경이 이보다 적으면 전역 `table_z`로 폴백 |
 | `obj_max_h` | `0.12` | ⚠️ **기하 경로 전용 — yolo는 안 쓴다.** 서 있는 물체가 잘려나간다 |
 
-**미검증**: 위 수치는 합성 씬(카메라 없이, 손으로 만든 depth/K/T)으로만 확인했다.
+### 🟢 클래스별 실측 치수(`class_dims`) — 전역값을 물체마다 다른 실측치로
+
+위 필터는 전역 `obj_radius_m`(반경)과 "상한 없음"(안전 기본값)으로 돈다. **클래스를
+알고 있고 그 물체의 형태가 고정돼 있다면**(콜라병·머그컵처럼 개체마다 형태가 안 변하는
+공산품), 전역값 대신 **그 클래스의 실측 반경·높이**를 쓸 수 있다:
+
+```yaml
+# config/objects.yaml
+dimensions:
+  bottle: {radius: 0.033, height: 0.20}   # [m]. 자로 재거나 아이폰 라이다 스캔에서 뽑는다
+```
+
+- **반경**: 물체별 크롭 폭이 실측치로 정확해진다(전역 0.05m 하나 대신).
+- **상한**: 이제 안전하게 켤 수 있다 — 전역 12cm가 아니라 **그 클래스의 실측 높이 + margin
+  (기본 3cm)** 이라 서 있는 콜라병을 안 자르면서도, 이웃 물체·팔 그림자가 같은 라벨에
+  섞여 드는 것(오염)은 잡아낸다. 합성테스트로 확인: 실제 20cm 병 라벨에 40cm짜리 오염
+  한 줄이 붙어 있어도 오염 줄만 정확히 잘린다(`test_known_class_uses_measured_radius_and_trims_contamination`).
+- **진단**: `/grasp/compute` 로그에 `(실측 bottle=20.0 cm)`가 붙고, 관측 높이가 실측의
+  절반 미만이면 `⚠️ 실측 대비 얕음 — depth 결손(반사면 등) 의심`이 찍힌다.
+- **자연물은 넣지 않는다.** 사과·바나나는 개체마다 크기가 달라 클래스 하나의 대표값으로
+  못 잡는다 — `dimensions`에 없는 클래스는 기존 동작(전역 반경, 상한 없음) 그대로다.
+- ⚠️ **이걸로 depth 자체의 결손(반사면이라 점이 아예 안 찍히는 것)은 못 고친다.** 마스크를
+  다듬을 뿐 없는 점을 채워주지 않는다 — 이 문제의 근본 해법(알려진 형상을 ICP로 정합해
+  빈 곳을 메우는 것)은 아직 설계 단계다.
+
+**미검증**: 위 수치는 전부 합성 씬(카메라 없이, 손으로 만든 depth/K/T)으로만 확인했다.
 실제 콜라병 씬(이 절 상단 스크린샷)으로 `/grasp/compute` 로그의 `돌출높이`가 실측 물체
-높이와 맞는지는 아직 안 봤다.
+높이와 맞는지, `dimensions`에 실제로 자로 잰 값을 채워 넣었을 때 grasp 품질이 오르는지는
+아직 안 봤다.
 
 > 🔴 **이 개선은 원인 하나만 고친다.** 테이블 점군 자체가 계통적으로 기울어 보이는 근본
 > 원인은 `T_cam2base.npy`가 불합격 캘리브(41.1mm/2.80°)를 쓰고 있는 것으로 이미 진단돼
@@ -932,6 +958,8 @@ obj_radius_m(기본 0.05m)  ─┐
 | `objects_file` | **ws 루트 `config/objects.yaml`** | 탐지 대상·기본 타겟의 정본. 비우면 아래 `classes` 로 돌아간다 |
 | `classes` | `[]` | `objects_file` 을 안 쓸 때만. COCO **인덱스** 직접 지정 |
 | `target_classes` | `''` | 콤마 구분 클래스 이름. 공백 넣지 말 것(`'apple, banana'`는 셸이 쪼갠다 — 따옴표로 감쌀 것) |
+| `class_dims` | **`config/objects.yaml`의 `dimensions`** | (2026-08-09) `'class:radius_m:height_m,...'`. 형태 고정 물체(병·컵)의 반경·상한 크롭을 실측치로 대체 — 위 "yolo 경로에도 테이블 높이 필터링이 생겼다" 절 참고 |
+| `class_dims_margin_m` | `0.03` | `class_dims`의 height 위로 이만큼까지 허용 |
 | `device` / `conf` / `min_pixels` | `0` / `0.1` / `300` | |
 | `publish_overlay` / `out_dir` | `true` / `''` | `out_dir` 비우면 `<repo>/data/graspgenx_scene`에 영구 저장 |
 
@@ -1667,6 +1695,28 @@ VLA PC ──/vla/pick_command(JSON)──▶ vla_command_node ──/get_keywor
 
 **둘 다 `/get_keyword` 를 제공한다.** 같이 띄우면 어느 쪽이 응답할지 알 수 없다.
 섞어 쓰려면 한쪽의 `keyword_service` 를 다른 이름으로 바꾼다.
+
+### `get_keyword` 의 LLM 프롬프트 어휘 — `config/objects.yaml` 이 정본이다 (2026-08-09 수정)
+
+`get_keyword.py` 는 기동 시 `config/objects.yaml`(ws 루트)의 `detect:` 를 읽어 GPT-4o
+프롬프트의 `<물체 리스트>` 에 그대로 넣는다(`load_detect_names()`). **하드코딩하지 않는다** —
+전에는 `hammer, screwdriver, wrench` 로 박혀 있어서 이 ws 의 YOLO(`detect: bottle, cup,
+spoon, banana, apple, orange, mouse`)와 애초에 안 맞았다: 음성으로 뭐라 말해도 LLM 이
+뽑아내는 이름을 브리지가 절대 못 찾았다(`vla_command_node` 의 `allowed_classes` 검사와
+같은 문제를 마이크 경로만 놓치고 있었다).
+
+경로 규칙은 `vla_command.launch.py:default_allowed_classes()` 와 같다 — `COBOT2_OBJECTS`
+환경변수로 덮어쓸 수 있고, 없으면 `install/voice_processing/share/voice_processing` 에서
+위로 4단계(ws 루트) + `config/objects.yaml`. **`objects.yaml` 을 못 읽으면 조용히 예전
+어휘로 되돌아가지 않는다** — 프롬프트에 "비어 있음, 경로를 확인하라"는 문구가 그대로
+들어가 LLM 이 아무것도 못 뽑게 만든다(실패를 눈에 띄게 하는 쪽을 택함).
+
+⚠️ **`detect` 를 고친 뒤에는 `get_keyword` 노드를 다시 띄워야 한다** — `yolo_seg_node` 와
+같은 함정이다(어휘를 모듈 로드 시 한 번만 읽는다).
+
+⚠️ **미검증**: `langchain-openai`/`pyaudio` 등은 rosdep 키가 없어 이 계정에 설치돼 있지
+않을 수 있다 — 마이크 경로 자체(wakeword→STT→LLM)는 이번 수정에서 실기로 안 돌려봤다.
+`colcon build --symlink-install --packages-select voice_processing` 은 PASS(2026-08-09).
 
 ### 실행
 

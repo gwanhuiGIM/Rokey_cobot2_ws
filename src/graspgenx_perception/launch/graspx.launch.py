@@ -39,6 +39,7 @@ seg_source:
 import os
 from typing import List
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -63,6 +64,34 @@ def default_objects_file() -> str:
     path = os.path.abspath(os.path.join(share, '..', '..', '..', '..',
                                         'config', 'objects.yaml'))
     return path if os.path.isfile(path) else ''
+
+
+def default_class_dims() -> str:
+    """`objects.yaml`의 `dimensions:` -> `'class:radius_m:height_m,...'` 문자열.
+
+    형태가 고정된 공산품(병·컵 등)의 실측 반경·높이만 적는다 — 자연물(사과 등)은
+    개체마다 형태가 달라 클래스 전체를 대표하는 값을 못 잡으므로 안 적는 편이 낫다.
+    경로 규칙은 `default_objects_file()`과 같다. 항목 하나가 이상해도(radius/height
+    누락 등) 그 항목만 건너뛰고 나머지는 살린다 — 파싱 자체는
+    `capture_graspgenx_scene.parse_class_dims()`가 한 번 더 하므로 여기서 엄격하게
+    막을 필요는 없다(다만 여기서 걸러 두면 노드 로그가 아니라 런치 로그에서 먼저 보인다).
+    """
+    path = default_objects_file()
+    if not path or not os.path.isfile(path):
+        return ''
+    try:
+        doc = yaml.safe_load(open(path, encoding='utf-8')) or {}
+    except Exception as exc:                                        # noqa: BLE001
+        print(f'[graspx.launch] {path} 를 못 읽었다 ({exc}) — class_dims 비움')
+        return ''
+    parts = []
+    for name, v in (doc.get('dimensions') or {}).items():
+        r, h = (v or {}).get('radius'), (v or {}).get('height')
+        if r is None or h is None:
+            print(f'[graspx.launch] dimensions.{name} 에 radius/height 가 없다 — 건너뜀')
+            continue
+        parts.append(f'{name}:{r}:{h}')
+    return ','.join(parts)
 
 
 ARGS = {
@@ -91,6 +120,12 @@ ARGS = {
     'target_classes': ('', "grasp 를 계산할 클래스 이름. 콤마 구분, 비우면 전부. 예: 'apple,cup'"),
     # seg_source=geometric 전용. 이걸 안 걸면 그리퍼가 obj_1 로 잡힌다(2026-08-08 실측).
     'obj_max_h': ('0.12', '상판 위 이 높이를 넘는 픽셀은 버린다 — 로봇 팔/그리퍼 self-filter'),
+    # seg_source=yolo 전용(2026-08-09). objects.yaml 의 dimensions 가 정본 — 여기 직접
+    # 문자열로 줄 수도 있지만 그러면 두 곳에 값이 생겨 어긋난다(target_classes 와 같은 함정).
+    'class_dims': (default_class_dims(),
+                   "'class:radius_m:height_m,...'. 여기 있는 클래스는 obj_radius_m/obj_max_h "
+                   '전역값 대신 실측치를 쓴다. 형태 고정 물체만(자연물은 넣지 않는다)'),
+    'class_dims_margin_m': ('0.03', 'class_dims 의 height 위로 이만큼까지 허용(측정오차 흡수)'),
     'out_dir': ('', '씬 4파일 저장 위치. 비우면 <repo>/data/graspgenx_scene '
                     '(2026-08-07부터 항상 영구 저장 — 임시 디렉토리 아님)'),
     # 워커 기동 인자라 워커가 이미 떠 있으면 안 먹는다 — 브리지·워커를 새로 띄울 때만 유효.
@@ -138,6 +173,8 @@ def generate_launch_description():
             # 문자열로 선언한다 — 리스트였다면 rcl YAML 파서의 타입 함정을 또 밟는다
             # (CLAUDE.md §4). ParameterValue 로 감쌀 필요도 없다.
             'target_classes': cfg['target_classes'],
+            'class_dims': cfg['class_dims'],
+            'class_dims_margin_m': ParameterValue(cfg['class_dims_margin_m'], value_type=float),
             'live_viz': ParameterValue(cfg['live_viz'], value_type=bool),
             'live_viz_port': ParameterValue(cfg['live_viz_port'], value_type=int),
         }],

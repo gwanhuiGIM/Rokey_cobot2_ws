@@ -10,7 +10,7 @@ import re
 import numpy as np
 
 from graspgenx_perception.capture_graspgenx_scene import (
-    DEFAULTS, LABEL_OBJ_BASE, segment_from_labels,
+    DEFAULTS, LABEL_OBJ_BASE, parse_class_dims, segment_from_labels,
 )
 
 H = W = 40
@@ -126,3 +126,76 @@ def test_no_finite_table_ref_when_scene_has_no_background():
     _, _, diag = segment_from_labels(labels, depth, K, T_IDENTITY,
                                      _params(obj_radius_m=float('nan'), min_pixels=5))
     assert '없음(배경 0개)' in diag
+
+
+# ── class_dims: 클래스별 실측 치수 ───────────────────────────
+def test_parse_class_dims_happy_path():
+    dims, warns = parse_class_dims('bottle:0.033:0.20, apple:0.04:0.08')
+    assert dims == {'bottle': (0.033, 0.2), 'apple': (0.04, 0.08)}
+    assert warns == []
+
+
+def test_parse_class_dims_bad_entries_are_dropped_not_fatal():
+    dims, warns = parse_class_dims(
+        'bottle:0.033:0.20,garbage,apple:x:0.08,neg:-0.01:0.1')
+    assert dims == {'bottle': (0.033, 0.2)}     # 나머지 셋은 각자 다른 이유로 버려진다
+    assert len(warns) == 3
+
+
+def test_parse_class_dims_empty():
+    assert parse_class_dims('') == ({}, [])
+
+
+def test_known_class_uses_measured_radius_and_trims_contamination():
+    """실측 반경으로 크롭 폭을 넓히고, 실측 높이+margin 을 넘는 오염 픽셀을 잘라낸다."""
+    depth = np.full((H, W), 1.0, dtype=np.float32)
+    labels = np.zeros((H, W), dtype=np.uint8)
+    labels[10:16, 15:21] = LABEL_OBJ_BASE + 1
+    depth[10:16, 15:21] = 1.20                  # 실제 콜라병: 20cm 돌출
+    labels[16, 15:21] = LABEL_OBJ_BASE + 1       # 같은 라벨에 섞인 오염(이웃/팔): 40cm
+    depth[16, 15:21] = 1.40
+
+    p = _params(obj_radius_m=0.02, class_dims='bottle:0.10:0.20',   # 전역 기본값은 좁다
+                class_dims_margin_m=0.03)
+    seg, label_map, diag = segment_from_labels(
+        labels, depth, K, T_IDENTITY, p, class_map={LABEL_OBJ_BASE + 1: 'bottle'})
+
+    assert 'obj_1' in label_map
+    assert (seg[16, 15:21] == 0).all(), '실측 높이+margin 을 넘는 오염 픽셀은 잘려야 한다'
+    assert (seg[10:16, 15:21] == LABEL_OBJ_BASE + 1).all(), '진짜 물체는 남아야 한다'
+    assert '실측 bottle=20.0 cm' in diag
+
+
+def test_unknown_class_has_no_upper_bound():
+    """class_dims 에 없는 클래스는 상한 없이(기존 동작) 키 큰 물체도 통째로 남는다."""
+    depth = np.full((H, W), 1.0, dtype=np.float32)
+    labels = np.zeros((H, W), dtype=np.uint8)
+    labels[10:16, 15:21] = LABEL_OBJ_BASE + 1
+    depth[10:16, 15:21] = 1.30                  # 30cm — bottle 이었다면 상한(0.23m)에 걸렸을 것
+
+    p = _params(obj_radius_m=0.05, class_dims='bottle:0.10:0.20')
+    seg, label_map, _ = segment_from_labels(
+        labels, depth, K, T_IDENTITY, p, class_map={LABEL_OBJ_BASE + 1: 'mystery_object'})
+    assert 'obj_1' in label_map
+    assert (seg[10:16, 15:21] == LABEL_OBJ_BASE + 1).all()
+
+
+def test_shallow_detection_warns_about_missing_depth():
+    """돌출높이가 실측의 절반 미만이면 depth 결손(반사면 등)을 의심하는 경고를 남긴다."""
+    depth = np.full((H, W), 1.0, dtype=np.float32)
+    labels = np.zeros((H, W), dtype=np.uint8)
+    labels[10:16, 15:21] = LABEL_OBJ_BASE + 1
+    depth[10:16, 15:21] = 1.05                  # 5cm 밖에 안 잡힘 (실측 20cm 의 절반 미만)
+
+    p = _params(obj_radius_m=0.05, class_dims='bottle:0.10:0.20')
+    _, _, diag = segment_from_labels(
+        labels, depth, K, T_IDENTITY, p, class_map={LABEL_OBJ_BASE + 1: 'bottle'})
+    assert '실측 대비 얕음' in diag
+
+
+def test_class_dims_defaults_to_off():
+    """class_dims 를 안 주면(기본값 '') 전과 동일하게 동작한다 — 회귀 방지."""
+    labels, depth = _two_objects_on_tilted_table()
+    seg, label_map, diag = segment_from_labels(labels, depth, K, T_IDENTITY, _params())
+    assert set(label_map) == {'obj_1', 'obj_2'}
+    assert '실측' not in diag

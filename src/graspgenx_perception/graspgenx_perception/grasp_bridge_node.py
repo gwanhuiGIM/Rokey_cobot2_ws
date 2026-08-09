@@ -396,7 +396,7 @@ class GraspBridge(SceneCapture):
                     '  → 목록에 있는데도 실패했다면 그때가 오타/대소문자를 볼 차례다.\n'
                     f'{cdiag}')
 
-        seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels)
+        seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels, class_map)
         if seg is None:
             return False, diag
         self.get_logger().info(diag)
