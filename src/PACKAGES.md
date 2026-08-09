@@ -16,6 +16,7 @@
 - [cumotion](#cumotion) — 실행 중 재계획으로 동적 장애물 회피 (옵션 경로)
 - [graspgenx_perception](#graspgenx_perception) — YOLO 인식 + GraspGenX 파지 계산
 - [pick_fsm](#pick_fsm) — 음성/타겟 지시 pick 상태머신
+- [voice_processing](#voice_processing) — 지시 입력 층 (외부 VLA · 음성) → `/get_keyword`
 - [부록: corecode](#부록-corecode--튜토리얼-코드-패키지-아님)
 
 ---
@@ -783,13 +784,14 @@ task_manager (pick_fsm) ──▶ MoveIt ──▶ 로봇
 ```bash
 export ROS_DOMAIN_ID=93   # 컨테이너 이미지엔 이미 박혀 있음. 호스트에서만 export 필요
 
-# 컨테이너 — 탐지 (person(0)을 classes에 넣지 않는다. yolo 경로엔 self-filter가 없다)
-scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true \
-  classes:='[39,41,44,46,47,49,64]'
+# 컨테이너 — 탐지. 무엇을 탐지할지는 config/objects.yaml 의 detect 가 정본이다
+#   (person 을 detect 에 넣지 않는다. yolo 경로엔 self-filter가 없다)
+#   그 파일을 고쳤으면 이 줄을 다시 실행해야 반영된다 — __init__ 에서 1회만 읽는다
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true
 
 # 호스트 — 파지 계산 (run_bridge:=true 필수 — 기본값이 false라 안 주면 아무것도 안 뜬다)
-ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true \
-  target_classes:=apple
+#   🔴 target_classes:= 를 주지 않는다 — task_manager 가 PERCEIVE 마다 덮어쓴다
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true
 ```
 
 🔴 **`docker exec`를 직접 쓰지 말 것 — Ctrl-C가 컨테이너 안까지 가지 않는다**
@@ -807,7 +809,8 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 | pub | `/yolo_seg/overlay/compressed` | `sensor_msgs/CompressedImage` (jpeg) | `publish_overlay:=true`일 때. **기본** |
 | pub | `/yolo_seg/overlay` | `sensor_msgs/Image` (bgr8) | `overlay_compressed:=false`일 때만 |
 | pub | `/grasp/best`, `/grasp/candidates` | `PoseStamped`, `PoseArray` | `grasp_bridge_node` — base_link, GraspGenX 원시 grasp 프레임(tool0 아님) |
-| srv | `/grasp/compute` | `std_srvs/Trigger` | 캡처→세그→워커→선택을 한 번에 실행 |
+| srv | `/grasp/compute` | `std_srvs/Trigger` | 캡처→세그→워커→선택을 한 번에 실행. **응답에 폭이 없다** |
+| srv | `/grasp/compute_grasp` | `pick_fsm_msgs/ComputeGrasp` | 같은 계산 + 포즈·**폭**·대안을 응답에 담는다 (2026-08-09 추가). `pick_fsm_msgs` import 실패 시 안 열린다 |
 
 ### `yolo_seg_node` 파라미터
 
@@ -826,6 +829,44 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 파라미터다. `classes`=무엇을 **탐지**할지, `target_classes`=무엇을 **잡을지**. 브리지는 대상
 외 라벨을 워커에 넘기기 전에 지우므로 grasp 연산(물체당 수 초~수십 초)이 실제로 줄어든다.
 
+### 🔴 정본은 `config/objects.yaml` 하나다 (2026-08-09부터)
+
+둘은 같은 물체 목록을 **다른 표현으로** 적는다(`classes`=COCO 인덱스, `target_classes`=이름).
+두 곳에 손으로 적으면 반드시 어긋나고, 어긋나면 "YOLO가 애초에 안 찾는 물체를 타겟으로
+지정"한 상태가 되는데 에러는 오타를 의심하게 만든다. 그래서 **ws 루트 `config/objects.yaml`**
+하나로 합쳤다:
+
+```yaml
+detect:            # YOLO 탐지 대상. **이름**으로 적는다 — 인덱스 변환은 노드가 한다
+  - bottle
+  - cup
+  - spoon
+  - banana
+  - apple
+  - orange
+  - mouse
+pick_default: ''   # 기본 pick 타겟. 비우면 자동(detect 전부 중 점수 최고)
+```
+
+이 7종은 옛 `classes:='[39,41,44,46,47,49,64]'`와 같다 (2026-08-09 변환 결과로 대조 확인).
+
+| 읽는 쪽 | 무엇을 | 언제 |
+|---|---|---|
+| `yolo_seg_node` | `detect` → 가중치의 `model.names`로 COCO 인덱스 변환 | `__init__` 1회. 고쳤으면 **다시 띄운다** |
+| `pick_fsm.launch.py` | `pick_default` → `task_manager`의 `target` 기본값 | 런치 시 1회. 런타임엔 `/pick/target`이 이긴다 |
+
+- **왜 패키지 안이 아니라 ws 루트인가**: `--symlink-install`이어도 `ament_python` 패키지의
+  share는 `build/` 복사본이라(§CLAUDE.md) 패키지 안 config는 고쳐도 안 먹는다. ws 루트면
+  **재빌드 없이** 고치고 다시 띄우면 된다. 컨테이너가 ws를 같은 절대경로로 마운트하므로
+  호스트의 브리지와 컨테이너의 YOLO가 같은 파일을 본다(2026-08-09 `docker exec`로 확인).
+- **경로 해결**: 런치가 자기 share에서 4단계 위를 되짚는다. `COBOT2_OBJECTS`로 덮어쓸 수
+  있고, `graspx_container.sh`는 그 값을 컨테이너에 넘긴다.
+- **인덱스를 사람이 안 적는다**: 이름→인덱스는 **실제로 올라간 가중치**로만 변환한다.
+  `banana=46` 같은 표를 설정에 베껴 두면 가중치를 바꾼 날 조용히 어긋난다.
+  모르는 이름을 적으면 노드가 **기동 즉시 죽으며** 가중치가 아는 이름을 전부 찍어준다.
+- `objects_file`을 비우면 옛 경로(`classes:='[46,47]'`로 인덱스 직접 지정)로 돌아간다.
+  둘 다 주면 파일이 이기고 경고를 찍는다.
+
 자주 쓰는 COCO 인덱스: `banana=46 apple=47 orange=49 cup=41 bottle=39 bowl=45 person=0`.
 이 가중치(`yolo11n-seg.pt`)는 COCO 80종만 안다 — 이 프로젝트의 공구 5종은 **어떤 인덱스로도
 못 잡는다.** 전체 목록: `docker exec od_kimkh python3 -c "from ultralytics import YOLO; print(YOLO('...yolo11n-seg.pt').names)"`
@@ -834,6 +875,53 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 읽는다. 노드를 다시 띄워야 한다. `target_classes`는 예외로, `grasp_bridge_node`가
 `compute()`마다 다시 읽으므로 `ros2 param set /grasp_bridge_node target_classes apple,cup`가 먹는다.
 
+### 🟢 yolo 경로에도 테이블 높이 필터링이 생겼다 (2026-08-09, `capture_graspgenx_scene.py`)
+
+**이전에는 `seg_source=geometric`(작업공간 박스+`connectedComponents`)에만 테이블 기준
+높이 필터링(`table_z`/`obj_min_h`/`obj_max_h`)이 있었고, 지금 기본값인
+`seg_source=yolo`(`segment_from_labels()`)에는 전혀 없었다** — YOLO 마스크 + depth 마스킹만
+하고 "얼마나 튀어나왔는지"는 계산도 로그도 안 했다. 서서 있는 물체(콜라병 등)의 씬 점군에
+테이블면이 살짝 섞여 있어도 걸러지지 않던 이유가 이것이다.
+
+**바뀐 것: `segment_from_labels()`가 물체마다 자기 "주변"의 테이블 높이를 따로 재서
+(전역 스칼라 하나가 아니라) 그 위 `obj_min_h` 미만인 픽셀을 잘라낸다.**
+
+```
+obj_radius_m(기본 0.05m)  ─┐
+                          ├─ [물체]
+                          └─ +yolo_table_ring_m(기본 0.03m) 링 안의 배경(비물체) 픽셀
+                             → 그 중앙값이 "이 물체 주변의 테이블 높이"
+```
+
+- **왜 전역 하나가 아니라 국소인가**: 카메라 캘리브 잔차나 테이블 자체의 기울기가 있으면
+  전역 중앙값 하나로는 물체 위치에 따라 오차가 다르게 난다. 합성 데이터로 검증
+  (`test_segment_from_labels.py`): 5cm 기울어진 테이블 위 실제 5cm 돌출 물체 2개에서
+  **국소 기준은 5.0/6.0cm로 잡고, 전역 폴백은 2.6/8.6cm로 잡는다** — 오차가 2~4배 커진다.
+- **상한(`obj_max_h`)은 yolo 경로에 절대 안 건다.** 기하 경로 기본값(0.12m)을 그대로 쓰면
+  서 있는 콜라병(20cm 안팎)이 통째로 잘려나간다. yolo는 이미 클래스로 걸렀으므로 기하
+  경로가 그 값을 넣어둔 이유(로봇 팔 self-filter)가 애초에 해당하지 않는다.
+- 링 안 배경 픽셀이 `yolo_min_ring_px`(기본 20)보다 적으면(작업공간 가장자리·물체가
+  빽빽할 때) 국소값을 못 믿고 **전역 중앙값으로 폴백한다** — 조용히 0이나 nan을 쓰지 않는다.
+- `/grasp/compute` 로그에 물체별로 `테이블기준=... 돌출높이=...`가 찍힌다 — 전에는
+  yolo 경로에서 이 진단 자체가 없었다.
+
+| 파라미터 | 기본값 | 설명 |
+|---|---|---|
+| `obj_min_h` | `0.015` | 테이블 위 이 높이부터 물체로 본다. **이제 yolo 경로도 쓴다** |
+| `yolo_table_ring_m` | `0.03` | `obj_radius_m` 밖 ~ +이 값 안의 배경을 국소 테이블 기준 표본으로 쓴다 |
+| `yolo_min_ring_px` | `20` | 링 안 배경이 이보다 적으면 전역 `table_z`로 폴백 |
+| `obj_max_h` | `0.12` | ⚠️ **기하 경로 전용 — yolo는 안 쓴다.** 서 있는 물체가 잘려나간다 |
+
+**미검증**: 위 수치는 합성 씬(카메라 없이, 손으로 만든 depth/K/T)으로만 확인했다.
+실제 콜라병 씬(이 절 상단 스크린샷)으로 `/grasp/compute` 로그의 `돌출높이`가 실측 물체
+높이와 맞는지는 아직 안 봤다.
+
+> 🔴 **이 개선은 원인 하나만 고친다.** 테이블 점군 자체가 계통적으로 기울어 보이는 근본
+> 원인은 `T_cam2base.npy`가 불합격 캘리브(41.1mm/2.80°)를 쓰고 있는 것으로 이미 진단돼
+> 있다 → [`md/context/constraints.md`](../md/context/constraints.md) "재캘리브 (2026-08-09)".
+> 국소 테이블 기준은 이 오차의 **영향을 물체별로 줄여줄 뿐** — 재캘리브(1280x720 재수집)가
+> 먼저다.
+
 ### `graspx.launch.py` 인자
 
 | 인자 | 기본값 | 설명 |
@@ -841,17 +929,41 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 | `run_yolo` | `true` | `yolo_seg_node`를 띄울지 |
 | `run_bridge` | **`false`** | `grasp_bridge_node`를 띄울지 — 호스트에서 브리지만 쓰려면 명시적으로 `true` |
 | `seg_source` | **`yolo`**(2026-08-08부터) | `geometric`\|`yolo`. 브리지에만 간다 |
-| `classes` | `[]` | 위와 동일, 런치 인자로도 줄 수 있다 |
+| `objects_file` | **ws 루트 `config/objects.yaml`** | 탐지 대상·기본 타겟의 정본. 비우면 아래 `classes` 로 돌아간다 |
+| `classes` | `[]` | `objects_file` 을 안 쓸 때만. COCO **인덱스** 직접 지정 |
 | `target_classes` | `''` | 콤마 구분 클래스 이름. 공백 넣지 말 것(`'apple, banana'`는 셸이 쪼갠다 — 따옴표로 감쌀 것) |
 | `device` / `conf` / `min_pixels` | `0` / `0.1` / `300` | |
 | `publish_overlay` / `out_dir` | `true` / `''` | `out_dir` 비우면 `<repo>/data/graspgenx_scene`에 영구 저장 |
 
-### pick_fsm과 연결할 때 — 기본값 그대로 띄우면 안 붙는다
+### pick_fsm과 연결할 때
 
-`pick_fsm`의 `grasp_source` 기본값은 `compute_grasp`인데, 그 경로가 부르는
-`/grasp/compute_grasp`(`pick_fsm_msgs/ComputeGrasp`) 서버는 **이 워크스페이스 어디에도
-구현이 없다.** `grasp_bridge_node`가 만드는 건 `/grasp/compute`(`std_srvs/Trigger`)뿐이다.
-→ **`grasp_source:=legacy_trigger`를 명시해야 한다** (폭 정보가 없어 `default_width_m`로 잡는다).
+`pick_fsm`의 `grasp_source` 기본값은 **2026-08-09부터 `legacy_trigger`**다. 예전 기본값
+`compute_grasp`가 부르는 `/grasp/compute_grasp`(`pick_fsm_msgs/ComputeGrasp`) 서버가
+**이 워크스페이스 어디에도 없어서**, 기본값으로 두면 PERCEIVE가 뜨지도 않을 서비스를
+120s 기다리다 ABORT했기 때문이다.
+
+**그 서버는 2026-08-09에 `grasp_bridge_node`에 생겼다** — 다만 기본값은 아직
+`legacy_trigger`로 둔다(실기 미검증). 두 경로의 계산은 완전히 같고, 차이는 **폭뿐**이다:
+
+| | 폭 | 비고 |
+|---|---|---|
+| `/grasp/compute` (Trigger) | ❌ 없음 | 응답에 담을 필드가 없다 → FSM이 `default_width_m`(0.06, UNVERIFIED) 상수로 전부 때운다. **물체가 뭐든 같은 폭** |
+| `/grasp/compute_grasp` (ComputeGrasp) | ✅ 후보별 | 워커가 물체 점군을 각 grasp의 닫힘축(+X)에 투영해 잰다 (`graspgen_worker.grasp_widths`) |
+
+물체마다 폭을 맞추려면 `grasp_source:=compute_grasp`로 바꾼다. **실기에서 먼저 확인할 것**:
+폭 측정도, 조임 여유 부호 수정(아래)도 2026-08-09 신규라 실물로 검증되지 않았다.
+
+🔴 **브리지의 `target_classes`·`seg_source`를 직접 설정하지 않는다** (2026-08-09부터).
+`task_manager`가 PERCEIVE에 들어갈 때마다 자기 타겟을 `SetParameters`로
+`/grasp_bridge_node`에 밀어 넣는다 — 타겟의 정본은 FSM 하나다. 손으로 `ros2 param set`을
+해도 다음 PERCEIVE에서 덮인다. 이 연결이 없던 동안 두 값이 따로 살면서, 런치에
+`target_classes:=…`를 준(그런 인자가 없어 조용히 무시된) 채 브리지엔 이전 실행의
+`seg_source=geometric`이 남아 매번 실패하는 사고가 났다.
+
+| task_manager 파라미터 | 기본값 | 하는 일 |
+|---|---|---|
+| `bridge_node` | `/grasp_bridge_node` | 타겟을 밀어 넣을 노드. `''`이면 푸시 안 함(브리지를 손으로 설정할 때) |
+| `bridge_seg_source` | `yolo` | 같이 밀어 넣을 세그 방식. `''`이면 브리지 설정을 안 건드림 |
 
 ### 검증 상태 (요지 — 상세 실측표는 로그 문서)
 
@@ -861,7 +973,8 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 | `pytest src/graspgenx_perception/test/test_yolo_seg.py` (호스트) | ✅ PASS (`-p no:anyio` 필요할 수 있음 — `~/.local` anyio 오염 상태에 따라 다름) |
 | 실기 카메라 → GPU 추론 → 토픽 발행 | ✅ 검증됨 |
 | 컨테이너 ↔ 호스트 데이터 전송 (양방향) | ✅ 검증됨(2026-08-07 21:15 재측정) — 이전엔 컨테이너→호스트 방향이 막혔던 적이 있다(원인 미특정, 재발 가능성 있음. 로그 문서 참고) |
-| `/grasp/compute_grasp` 서버 부재 | ✅ 확인됨 — 위 "연결" 절 |
+| `/grasp/compute_grasp` 서버 | ✅ 구현됨(2026-08-09) — `ros2 interface show`·`select()` 단위 확인까지. **실기 미검증** |
+| 물체 폭 측정 (`grasp_widths`) | ⚠️ 합성 점군으로만 검증 — 4×8 cm 상자에서 38.4/76.8 mm(2/98 퍼센타일이라 4% 작다). **실물 미검증** |
 | 물체 개체 선정(같은 클래스 2개 중 하나) | ❌ 미구현 — 설계만 있음(로그 문서 "다음 방향" 절) |
 
 가중치 파일(`yolo11n-seg.pt`)은 `.gitignore`의 `*.pt`로 커밋되지 않는다 — 새 PC에서는
@@ -878,7 +991,8 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 
 ```mermaid
 flowchart LR
-    voice["voice_processing"]
+    vla["VLA (외부 PC)<br/>~/M0609_VLA_system"]
+    voice["voice_processing<br/>vla_command_node 또는 get_keyword"]
     rqt["rqt 패널<br/>pick_fsm.rqt_panel"]
     tm["<b>task_manager</b><br/>상태머신 · 로봇 명령 배타권"]
     bridge["grasp_bridge_node<br/>graspgenx_perception"]
@@ -888,9 +1002,13 @@ flowchart LR
     safety["robot_safety_node<br/>별도 프로세스"]
     robot["M0609 · dsr01"]
 
+    vla -->|"/vla/pick_command · String(JSON)"| voice
+    voice -->|"/vla/pick_result · String(JSON)"| vla
     voice -->|"/get_keyword · Trigger"| tm
+    voice -->|"/pick/start · abort · reset<br/>(cmd:start/abort/reset — approve 없음)"| tm
     rqt -->|"/pick/start · approve · abort · reset"| tm
     tm -->|"/pick/state · String"| rqt
+    tm -->|"/pick/state · String"| voice
 
     tm -->|"/grasp/compute_grasp 또는 /grasp/compute"| bridge
     bridge --> gpu
@@ -1016,25 +1134,34 @@ ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false
 ros2 launch m0609_rg2_bringup camera.launch.py
 
 # 3.5) YOLO 세그 — **컨테이너에서** 띄운다. 4번과 명령이 나뉜 이유는 아래 "왜 두 개인가" 참고
-scripts/graspx_container.sh run_bridge:=false device:=0 classes:='[46,47]'
+#      탐지 대상은 `config/objects.yaml` 의 detect 가 정본이라 인자로 안 준다(2026-08-09).
+#      그 파일을 고쳤으면 이 명령을 **다시** 실행한다 — __init__ 에서 한 번만 읽는다.
+scripts/graspx_container.sh run_bridge:=false device:=0
 
 # 4) grasp 공급원 (2026-08-07 부터 graspgenx_perception 패키지의 실행 파일이다)
-#    **호스트에서** 띄운다. 잡을 물체를 좁히려면 target_classes (클래스 인덱스가 아니라 이름):
-#      ros2 run graspgenx_perception grasp_bridge_node --ros-args -p target_classes:=apple
+#    **호스트에서** 띄운다. target_classes/seg_source 는 여기서 줄 필요가 없다 —
+#    5번의 task_manager 가 PERCEIVE 마다 자기 타겟을 이 노드에 밀어 넣는다(2026-08-09).
 ros2 run graspgenx_perception grasp_bridge_node
 
 # 5) 상태머신 + robot_safety_node (같은 launch 로 같이 뜬다, §8)
-ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
+#    grasp_source 기본값이 legacy_trigger 라 이제 그냥 띄우면 된다
+ros2 launch pick_fsm pick_fsm.launch.py
 # cuMotion 파이프라인으로 계획하려면 (2번을 cumotion:=true 로 띄웠어야 한다 — 기본값 false):
-ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger planning_pipeline:=isaac_ros_cumotion
+ros2 launch pick_fsm pick_fsm.launch.py planning_pipeline:=isaac_ros_cumotion
 
-# 6) (선택) 상태 감시 + 승인/안전 조작 UI — 언제 껐다 켜도 된다, §9
+# 6) (선택) 상태 감시 + **타겟 선택** + 승인/안전 조작 UI — 언제 껐다 켜도 된다, §9
 rqt --standalone pick_fsm
 ```
 
 조작 — 터미널로 직접 하거나, 6번의 rqt 패널 버튼으로:
 
 ```bash
+# 무엇을 잡을지. 빈 문자열 = 자동(브리지가 본 것 전부에서 grasp 점수 최고)
+# 진행 중인 작업엔 적용되지 않는다 — 다음 /pick/start 부터다
+ros2 topic pub -1 /pick/target std_msgs/String "data: apple" --qos-durability transient_local
+ros2 topic pub -1 /pick/target std_msgs/String "data: ''"    --qos-durability transient_local
+ros2 topic echo /pick/target_active --qos-durability transient_local   # 현재 타겟
+
 ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서만)
 ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인
 ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
@@ -1083,13 +1210,17 @@ ros2 launch pick_fsm pick_fsm.launch.py \
 #   = +Z 접근축 · 원점 그리퍼 base. tool0 목표가 아니다 — 아래 "grasp 포즈는 손끝 좌표가 아니다")
 ```
 
-#### ⚠️ 기본값이 안전 쪽이다
+#### 🔴 이 런치는 항상 실기를 움직인다 (2026-08-09 변경)
 
-`dry_run:=true` (계획만 하고 실행하지 않음) + `require_approval:=true` 가 **기본값**이다.
-실기에서 움직이려면 둘 다 명시적으로 꺼야 한다.
+`dry_run`(plan_only) 인자·파라미터를 **제거했다.** 실기 모션 데이터 수집 단계로 넘어갔고,
+`dry_run` 이 `_move()` 만 막고 `rg2.*`(그리퍼)는 안 막아서 "팔은 안 움직이는데 그리퍼는
+최대 힘으로 실제 개폐되는" 반쪽 안전이었기 때문이다. 남은 소프트 안전장치는
+`require_approval:=true`(기본값) 하나이고, **최종 안전장치는 물리 비상정지 버튼이다.**
 
 ```bash
-ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 승인은 여전히 필요
+ros2 launch pick_fsm pick_fsm.launch.py     # 움직인다. 승인(/pick/approve)은 여전히 필요
+# 🔴 옛 인자 dry_run:=true/false 는 경고 없이 조용히 무시된다(2026-08-09 실측).
+#    dry_run:=true 를 붙여도 로봇은 움직인다 — 옛 명령줄을 복붙하지 말 것
 ```
 
 #### 이 랩탑의 `colcon test` 실패는 **실행과 무관하다**
@@ -1116,14 +1247,17 @@ python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 31개 �
 | `/pick/abort` | `std_srvs/Trigger` | 진행 중 goal 을 취소하고 SAFE_STOP |
 | `/pick/reset` | `std_srvs/Trigger` | SAFE_STOP → HOME → IDLE (팔을 홈으로 복귀시킨 뒤 대기) |
 | `/pick/robot_state_code` | `std_msgs/Int8` | **`robot_safety_node`가 발행** — `task_manager`는 이 값이 안전정지류(§8)면 자동으로 abort 한다 |
+| `/pick/target_active` | `std_msgs/String` | 지금 유효한 타겟(빈 문자열 = 자동). QoS **TRANSIENT_LOCAL** — 나중에 뜬 rqt 패널도 마지막 값을 받는다 |
 
 #### 이 노드가 쓰는 것
 
 | 이름 | 타입 | 제공자 |
 |---|---|---|
-| `/get_keyword` | `std_srvs/Trigger` | `voice_processing` (기존) |
-| `/grasp/compute_grasp` | `pick_fsm_msgs/ComputeGrasp` | **아직 없음** — 정본 계약 |
-| `/grasp/compute` | `std_srvs/Trigger` | `graspgenx_perception` 의 `grasp_bridge_node` (현행) |
+| `/pick/target` | `std_msgs/String` | 사람(rqt 패널 / `ros2 topic pub`). 잡을 클래스, 콤마로 여러 개, 빈 문자열이면 자동. QoS **TRANSIENT_LOCAL** — CLI 로 쏠 때 `--qos-durability transient_local` 을 빠뜨리면 연결 자체가 안 된다 |
+| `/grasp_bridge_node/set_parameters` | `rcl_interfaces/SetParameters` | 브리지. PERCEIVE 진입 때 `target_classes`(+`seg_source`)를 밀어 넣는다 |
+| `/get_keyword` | `std_srvs/Trigger` | `voice_processing` — `vla_command_node`(외부 VLA) **또는** `get_keyword`(마이크). [§voice_processing](#voice_processing) |
+| `/grasp/compute_grasp` | `pick_fsm_msgs/ComputeGrasp` | 같은 브리지 (2026-08-09 추가). 정본 계약 — **폭은 이쪽으로만 온다** |
+| `/grasp/compute` | `std_srvs/Trigger` | `graspgenx_perception` 의 `grasp_bridge_node` (기본 경로) |
 | `/grasp/best`, `/grasp/candidates` | `PoseStamped`, `PoseArray` | 같은 브리지 |
 | `/compute_ik` | `moveit_msgs/GetPositionIK` | `move_group` |
 | `/move_action` | `moveit_msgs/MoveGroup` (액션) | `move_group` |
@@ -1136,12 +1270,25 @@ python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 31개 �
 
 | 값 | 동작 | 언제 |
 |---|---|---|
-| `compute_grasp` | `ComputeGrasp` 서비스 호출 → 포즈+폭+대안 | **정본.** 브리지를 패키지로 올린 뒤 |
-| `legacy_trigger` | `/grasp/compute`(Trigger) 호출 → `/grasp/best` 를 읽음. **폭 정보가 없어 `default_width_m` 로 잡는다** | 지금 실제로 도는 경로 |
-| `manual` | 서비스 호출 없이 `/grasp/best` 만 구독 | 로봇/GPU 없이 상태 흐름 확인 |
+| `legacy_trigger` | `/grasp/compute`(Trigger) 호출 → `/grasp/best` 를 읽음. **폭 정보가 없어 `default_width_m`(0.06 상수) 로 잡는다 — 물체가 뭐든 같은 폭** | **기본값**. 실기로 검증된 유일한 경로 |
+| `compute_grasp` | `ComputeGrasp` 서비스 호출 → 포즈 + **후보별 폭** + 대안(+대안별 폭) | 서버는 2026-08-09에 생겼다. 물체마다 폭을 맞추려면 이쪽 — **단 실기 미검증** |
+| `manual` | 서비스 호출 없이 `/grasp/best` 만 구독 | 로봇/GPU 없이 상태 흐름 확인. 브리지 파라미터 푸시도 안 한다 |
 
 `legacy_trigger` 는 서비스 호출 **이후에 들어온** `/grasp/best` 만 쓴다(시퀀스 비교).
 직전 요청의 포즈를 재활용하면 아무 로그도 없이 엉뚱한 물체를 집는다.
+
+#### 타겟은 어디서 오는가 (PERCEIVE 진입 시점에 확정된다)
+
+우선순위: **`/pick/target`(한 번이라도 왔으면) > `target` 파라미터**. `voice_enabled:=true`면
+둘 다 무시하고 `LISTENING`의 키워드 첫 단어를 쓴다. 확정된 값은 PERCEIVE 진입 때
+`bridge_node`의 `target_classes`로 밀려가고 `/pick/target_active`로 되돌아온다.
+
+🟢 **외부 VLA도 이 `LISTENING` 경로로 들어온다** (2026-08-09). VLA는 "사람 대신 말해주는
+클라이언트"이므로 `/get_keyword`를 제공하는 노드만 바꿔 끼우면 되고, **`pick_fsm` 코드는
+0줄 바뀌었다** — 새 상태도 새 msg도 없다. → [§voice_processing](#voice_processing)
+
+⚠️ **진행 중인 작업의 타겟은 바뀌지 않는다.** PERCEIVE가 이미 브리지에 값을 심고 시작하므로,
+도중에 바꾸면 로그가 가리키는 대상과 실제로 계산된 대상이 갈라진다 — 다음 `/pick/start`부터다.
 
 ### 4. 설계 판단 — 알고 켜야 하는 것들
 
@@ -1237,13 +1384,14 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 
 | 그룹 | 파라미터 | 비고 |
 |---|---|---|
-| 안전 | `dry_run`, `require_approval`, `approval_timeout_sec` | 기본값이 안전 쪽 |
+| 안전 | `require_approval`, `approval_timeout_sec` | `dry_run` 은 2026-08-09 제거 — 항상 실행한다 |
 | MoveIt | `planning_group`, `ee_link`, `base_frame`, `joint_names`, `vel_scale`, `acc_scale`, `planning_time`, `planning_attempts`, `joint_tolerance`, `ik_timeout_sec`, `ik_avoid_collisions`, `planning_pipeline`, `planner_id`, `replan*`, `motion_retries` | `base_frame` 은 `world` 가 아니라 `base_link`. `planning_pipeline`: `ompl`(기본) \| `isaac_ros_cumotion` — IK 는 파이프라인을 안 타므로 영향 없음, `_move()`(관절목표 계획)에만 적용됨. 그 파이프라인이 `move_group`에 떠 있어야 한다 |
 | 자세 | `approach_offset_m`, `grasp_standoff_m`, `lift_offset_m`, `max_reach_m`, `home_joints_deg`, `place_joints_deg` | 관절값은 **도(deg)**. 내부에서 rad 로 변환. 손끝 오프셋은 파라미터가 아니라 `rg2.fingertip_length_m(width_m)` 계산값이다(2026-08-07). `grasp_standoff_m` 은 DESCEND 종점을 접근축 -Z 로 빼고 **LIFT 도 그 종점 기준**으로 올린다(`geometry.plan_poses`). `self.grasp`(=CollisionObject·로그 기준)는 안 건드린다. `approach_offset_m` 으로 클램프됨 |
 | 씬 | `object_id`, `object_radius_m`, `clear_octomap_before_descend`, `allow_gripper_octomap_collision`, `gripper_links` | 뒤 둘은 §4 읽고 켤 것 |
-| 그리퍼 | `gripper_backend`, `grip_clearance_m`, `max_grip_width_m`, `force_down_steps`, `gripper_settle_sec`, `verify_required`, `grip_retries` | |
-| 인식 | `grasp_source`, `grasp_service`, `min_confidence`, `default_width_m`, `max_alternatives` | |
-| 음성 | `voice_enabled`, `keyword_service`, `target` | |
+| 그리퍼 | `gripper_backend`, `grip_clearance_m`, `max_grip_width_m`, `force_down_steps`, `gripper_settle_sec`, `verify_required`, `grip_retries` | 🔴 `grip_clearance_m` 은 물체 폭에서 **뺀다**: 목표 개구 = 물체 폭 − 여유 (`rg2.grip_target_width_m`, 2026-08-09 부호 수정). 더하면 손가락이 물체에 **닿기 전에** 멈춰 `grip_detected` 가 false 로 남는다 — 로그는 "그리퍼 닫기 68 mm" 라고 정상처럼 찍힌다. 예전 코드가 `+` 였는데 `default_width_m`(0.06)이 실제 물체보다 작은 상수여서 우연히 조여져 증상이 안 보였다 |
+| 인식 | `grasp_source`, `grasp_service`, `min_confidence`, `default_width_m`, `max_alternatives` | `grasp_source` 기본값은 `legacy_trigger`(2026-08-09 변경) |
+| 인식 브리지 푸시 | `bridge_node`, `bridge_seg_source` | PERCEIVE 마다 브리지에 타겟·세그 방식을 심는다. `bridge_node:=''` 로 끄면 브리지를 손으로 설정하는 옛 방식이 된다 |
+| 음성 | `voice_enabled`, `keyword_service`, `target` | `target` 은 **초기값**이다 — 런타임에는 `/pick/target` 이 이긴다. 콤마로 여러 개, 비우면 자동 |
 
 **UNVERIFIED 표시가 붙은 값들** (`approach_offset_m`, `grasp_standoff_m`, `lift_offset_m`, `object_radius_m`,
 `grip_clearance_m`, `gripper_settle_sec`, `default_width_m`)은 도면값이 아니라 임의로 정한
@@ -1254,6 +1402,8 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 **검증 환경 (2026-08-06)**: `ROS_DOMAIN_ID=77` 로 실기 세션(도메인 93)과 **완전히 분리**하고,
 `moveit.launch.py standalone:=true rviz:=false octomap:=false` + `gripper_virtual_node.py`(목업)만
 띄웠다. 로봇·카메라·실기 그리퍼는 이 도메인에 없었고 `dry_run:=true`(plan_only)였다.
+> ⚠️ `dry_run` 은 2026-08-09 제거됐다. 아래 표에서 "plan_only" 로 검증했다는 항목들은
+> **그 당시의 기록**이며, 지금 같은 절차를 재현하려면 실기가 실제로 움직인다.
 
 | 항목 | 상태 | 방법 |
 |---|---|---|
@@ -1265,15 +1415,17 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 | RG2 명령 형식 (`'o'/'c'/숫자`, 1/10 mm) | ✅ 확인 | `OnRobotRGControllerServer.py:258-303`, `OnRobotRGOutput.msg` |
 | `/onrobot/grip_detected` 존재 | ✅ 확인 | 같은 파일 `:171, :226-228` |
 | 노드 기동 (런치·파라미터·타입변환) | ✅ 확인 | `ros2 launch pick_fsm pick_fsm.launch.py` |
+| **타겟 지정 → 브리지 파라미터 푸시** (2026-08-09) | ✅ 확인 | 실기 rig 를 안 건드리려고 `target_classes`/`seg_source` 만 갖는 가짜 노드를 세우고 `bridge_node:=/fake_bridge grasp_trigger_service:=/nonexistent/compute` 로 기동(모션은 승인 후 STOW 부터라 발생 안 함). `target:=apple` 로 시작 → `/pick/target` 에 `orange,banana` → `/pick/start` → `[IDLE] -> [PERCEIVE] 타겟 'orange,banana'` → `브리지 설정: target_classes='orange,banana', seg_source=yolo` → 가짜 노드가 `seg_source` 를 `geometric`→`yolo` 로 실제 반영 |
+| **rqt 패널 타겟 상자** (2026-08-09) | ✅ 확인 | 오프스크린(`QT_QPA_PLATFORM=offscreen`)으로 패널을 실제 생성해 7가지 확인: 초기 대기 표시 / `/yolo_seg/classes` → 콤보 `['apple','banana']` + `탐지: apple×2, banana×1` / **입력 중(포커스) 목록 갱신 억제**(`'app'` 보존) / 포커스 해제 후 갱신 / 자동(빈 문자열) 표시 / 깨진 JSON 에 안 죽음 / 3s 무수신 시 "끊김" |
 | `/get_planning_scene` → `/apply_planning_scene` (SCENE_PREP) | ✅ 확인 | `대상 등록 + ACM 15개 보존` |
 | `/compute_ik` 3점 연속(시드 체이닝) | ✅ 확인 | `[PLAN] -> [WAIT_APPROVAL] IK 3점 성공` |
 | MoveGroup 액션 **계획**(plan_only) 4구간 | ✅ 확인 | pre_grasp/grasp/lift/place/home 전부 0.02s 내 성공 |
 | 전체 happy path (IDLE→…→HOME→IDLE) | ✅ 확인 | 목업 그리퍼 + plan_only 로 완주 |
 | 승인 게이트 · 제한시간 → ABORT → SAFE_STOP | ✅ 확인 | CLOSE 20s 초과 시 정상 ABORT |
-| **`planning_options.replan` 이 실제로 재계획하는지** | ⚠️ **추론** | MoveIt 소스 구조상 그렇지만 관측한 적 없음. 장애물을 손으로 넣어봐야 확정된다. **게다가 `dry_run:=true`(기본값)에서는 `_move()`가 `plan_only=True`로 호출돼(`task_manager.py:608-612`) 애초에 실행이 안 일어나므로 replan 루프 자체가 안 돈다** — 확인하려면 `dry_run:=false`가 먼저 필요하고, 그건 "실기 실행" 항목과 같은 블로커에 걸린다(2026-08-07 코드 대조로 확인) |
+| **`planning_options.replan` 이 실제로 재계획하는지** | ⚠️ **추론** | MoveIt 소스 구조상 그렇지만 관측한 적 없음. 장애물을 손으로 넣어봐야 확정된다. ~~`dry_run:=true` 라 replan 루프가 안 돈다~~ → **2026-08-09 `dry_run` 제거로 이 블로커는 해소됐다** (`_move()` 가 항상 `plan_only=False`). 이제 관측만 하면 확정된다 |
 | **octomap 이 있을 때 grasp pose 계획이 되는지** | ❌ **미검증** | 위 검증은 `octomap:=false` 였다. §4 SCENE_PREP 의 진짜 시험은 여기서 시작한다 |
 | **`gripper_links` 이름이 URDF 와 일치하는지** | ❌ **미검증** | 틀려도 ACM 병합은 성공한다 — 조용히 아무 데도 안 걸린다 |
-| **실기 실행(dry_run:=false)** | ❌ **미검증** | `tool0 → RG2 손끝` 실측(줄자)이 선행 블로커다 (`md/state.md` 0번) |
+| **실기 실행** | ❌ **미검증** | `dry_run` 제거(2026-08-09)로 이제 기동만 하면 움직인다. `tool0 → RG2 손끝` 실측(줄자)은 여전히 선행 확인 항목이다 (`md/state.md` 0번) |
 
 #### 🔴 검증 중에 잡은 실제 버그 (2026-08-06)
 
@@ -1417,6 +1569,11 @@ rqt --standalone pick_fsm
 
 패널 구성:
 - FSM 상태(`/pick/state`) · 로봇 상태(`/pick/robot_state_code`, 안전정지류면 빨간 글씨) 표시
+- **타겟**: 콤보상자(YOLO가 지금 보고 있는 클래스 — `/yolo_seg/classes`에서 채운다) +
+  [적용] + [자동]. 직접 입력도 되고 콤마로 여러 개도 된다(`apple,orange`).
+  [자동]은 빈 문자열을 보낸다 = 브리지가 본 물체 전부 중 grasp 점수 최고를 잡는다
+- **속도**(2026-08-09 추가): `vel_scale`/`acc_scale` 스핀박스(0.01~1.00) + [적용] + [현재값 읽기].
+  `task_manager` 의 파라미터를 `set_parameters` 로 직접 바꾼다. 아래 "속도는 왜 토픽이 아닌가" 참고
 - 작업: 시작 / 승인 / 리셋
 - 정지: 중단(ABORT, `/pick/abort`) / 즉시정지(`/safety/stop`) — 빨간 버튼
 - 안전모드: 진입(backdrive) / 해제 — 누르면 확인창이 뜬다(§8 "실기 미검증" 참고)
@@ -1425,13 +1582,304 @@ rqt --standalone pick_fsm
 ROS 콜백은 값만 변수에 써두면 200ms 타이머가 라벨에 반영한다 — ROS 콜백 스레드에서
 Qt 위젯을 직접 건드리면 크래시할 수 있어서다.
 
+타겟 상자는 브리지 파라미터를 직접 건드리지 않고 `/pick/target`만 발행한다. 정본을 FSM
+하나로 두기 위해서다 — 패널과 FSM이 각자 브리지를 설정하면 어느 쪽이 마지막이었는지에
+따라 결과가 달라지고, 그게 2026-08-09에 실제로 난 사고다. 클래스 목록이 3초 넘게 안
+들어오면 "끊김"으로 표시한다: 죽은 목록이 "지금 보이는 물체"처럼 읽히면 없는 사과를
+고르고 왜 실패하는지 찾게 된다.
+
+#### 속도는 왜 토픽이 아닌가 (타겟과 반대다)
+
+타겟은 `/pick/target` 토픽으로 보내고 FSM 이 브리지에 밀어 넣는데(정본 하나), 속도는
+패널이 `task_manager` 의 파라미터를 **직접** 바꾼다. 정본이 이미 `task_manager` 하나뿐이라
+중계할 이유가 없기 때문이다 — `task_manager` 는 이동을 시작할 때마다 `self.p('vel_scale')`
+로 다시 읽으므로(`task_manager.py:773`) 새 값이 바로 다음 이동에 반영된다. FSM 에 속도용
+토픽·서비스를 새로 만들면 같은 값이 두 군데 생긴다.
+
+⚠️ **지금 실행 중인 구간의 속도는 안 바뀐다.** 이미 `move_group` 에 goal 이 나가 있어서
+스케일링은 계획 시점에 끝나 있다. 적용 결과 라벨이 "다음 이동부터"라고 말하는 이유다.
+
+- 스케일은 `MoveIt` 의 `max_velocity/acceleration_scaling_factor` — **경로는 그대로고
+  시간축만 늘어난다.** 올려도 궤적 모양은 안 바뀐다
+- 하한 0.01 (0 이면 궤적 시간이 무한대다), 상한 1.00 (로봇 최대속도)
+- **0.30 을 넘겨 올릴 때만** 확인창이 뜬다. 내리는 건 안 묻는다
+- 파라미터가 없는 노드를 잘못 읽고 0.0 으로 표시하지 않는다 — `PARAMETER_NOT_SET(0)` 이
+  오면 "없다"고 쓰고 스핀박스를 안 건드린다
+- CLI 로 바꿨거나 FSM 을 다시 띄웠으면 [현재값 읽기]. 주기적으로 폴링하지 않는다
+  (yaml 기본값은 `vel_scale`/`acc_scale` = 0.05, `pick_fsm.yaml:23`)
+
 #### 검증
 
 `rclpy` + `python_qt_binding`으로 오프스크린(`QT_QPA_PLATFORM=offscreen`) 위젯 생성·구독
 콜백·버튼 클릭(서비스 없을 때 "서비스 없음" 메시지로 안전하게 처리)까지는 직접 실행해
-확인했다(2026-08-07). **rqt_gui 플러그인 탐색 메커니즘으로 실제 `rqt` 프로세스 안에서
+확인했다(2026-08-07).
+
+**속도 위젯**(2026-08-09)도 같은 방식으로 확인했다: 스핀박스 2개 생성 / `0.0` 입력이
+0.01 로 클램프 / `task_manager` 없을 때 [적용]·[현재값 읽기]가 안 죽고 "서비스 없음"·"읽기
+실패" 표시 / `GetParameters` 응답 → 스핀박스·라벨 반영(0.05, 0.07) / `PARAMETER_NOT_SET`
+응답을 0.0 으로 안 읽음 / `SetParameters` 성공·실패(`reason` 표시) / 응답 `None` 에 안 죽음 /
+**입력 중(포커스) 스핀박스를 갱신이 안 덮음**(0.42 보존, 포커스 없는 acc 만 0.07 로 갱신).
+⚠️ 실제 `task_manager` 를 띄워 `set_parameters` 가 통하는지, 그리고 바뀐 스케일로 팔이
+실제로 더 빠르게 도는지는 **실기 미검증**이다. **rqt_gui 플러그인 탐색 메커니즘으로 실제 `rqt` 프로세스 안에서
 로드되는 것 자체는 이 세션에서 디스플레이가 없어 확인 못 했다** — 처음 띄울 때
 `rqt --standalone pick_fsm`가 목록에 뜨는지부터 볼 것.
+
+---
+
+## voice_processing
+
+*`pick_fsm` 의 **지시 입력 층**. "무엇을 집을지"가 들어오는 자리다.*
+
+설계 출처: [`md/plans/2026-08-08-vla-integration.md`](../md/plans/2026-08-08-vla-integration.md)
+(§0 역할 경계 · §2 지시 채널 · §0-B 승인 · §5 물체 선정)
+
+- 최종 갱신: 2026-08-09 (`vla_command_node` 신설, `COLCON_IGNORE` 해제, rqt 패널 시작·중단·리셋
+  버튼을 같은 채널로 연 것)
+
+### 왜 FSM 을 안 고쳤나
+
+`task_manager` 는 이미 **음성 노드 자리**를 갖고 있다 — `LISTENING` 상태에서
+`/get_keyword`(`std_srvs/Trigger`)를 부르고 응답 `message` 의 **첫 단어**를 타겟으로 쓴다.
+VLA 는 "사람 대신 말해주는 클라이언트"이므로 그 자리에 그대로 꽂힌다.
+
+```
+VLA PC ──/vla/pick_command(JSON)──▶ vla_command_node ──/get_keyword──▶ task_manager
+   ▲                                       │                               │
+   └────────/vla/pick_result(JSON)─────────┴──────────/pick/state──────────┘
+```
+
+| 무엇 | 변경 |
+|---|---|
+| `pick_fsm` | **이 작업에서 한 줄도 안 건드렸다.** `/get_keyword` 계약(Trigger, `message` 첫 단어)이 그대로다 |
+| 새 msg/srv | **0 개** — `std_msgs/String`(JSON) + `std_srvs/Trigger` |
+| 새 패키지 | **0 개** — 기존 `voice_processing` 에 노드 하나 추가 |
+
+커스텀 msg 를 안 쓰는 이유: 두 PC 에 같은 인터페이스 패키지를 빌드·배포해야 하고, 한쪽만
+갱신되면 **타입 해시가 어긋나 조용히 매칭이 끊긴다**(에러가 아니라 "토픽은 보이는데 데이터가
+안 옴"). 이 ws 엔 같은 패턴의 선례가 있다 — `/yolo_seg/classes` 도 `String` JSON 이다.
+
+### 노드 2개 — ⚠️ 동시에 띄우지 않는다
+
+| 노드 | 지시 출처 | 추가 의존성 |
+|---|---|---|
+| **`vla_command_node`** | `/vla/pick_command` (외부 PC 의 VLA) | **없음.** 표준 ROS 2 만 쓴다 |
+| `get_keyword` | 마이크 → wakeword(`openwakeword`) → Whisper STT → LLM | `openai` `langchain-openai` `python-dotenv` `pyaudio` `openwakeword` `sounddevice` + `resource/.env` |
+
+**둘 다 `/get_keyword` 를 제공한다.** 같이 띄우면 어느 쪽이 응답할지 알 수 없다.
+섞어 쓰려면 한쪽의 `keyword_service` 를 다른 이름으로 바꾼다.
+
+### 실행
+
+```bash
+export ROS_DOMAIN_ID=93                       # VLA PC 에서도 export 해야 한다 (기본 0 이다)
+
+# 사람이 start/approve 를 누르고, VLA 는 "무엇을"만 말한다 — 가장 안전한 기본
+ros2 launch voice_processing vla_command.launch.py
+
+# VLA 가 /pick/start 까지 건다. /pick/approve 는 어떤 값에서도 사람 몫이다
+ros2 launch voice_processing vla_command.launch.py auto_start:=true
+
+# pick_fsm 은 voice:=true(기본)로 띄운다 — voice:=false 면 LISTENING 을 건너뛴다
+ros2 launch pick_fsm pick_fsm.launch.py
+```
+
+지시 한 건을 손으로 흉내내려면:
+
+```bash
+ros2 topic pub -1 /vla/pick_command std_msgs/String \
+  "data: '{\"cmd\":\"pick\",\"class\":\"apple\",\"request_id\":\"a17-3\"}'"
+ros2 topic echo /vla/pick_result
+```
+
+### `/vla/pick_command` 스키마 (`std_msgs/String`, JSON)
+
+```json
+{"cmd": "pick", "class": "apple", "request_id": "a17-3",
+ "pixel": [312, 188], "pixel_wh": [424, 240], "stamp_ns": 1754640000123456789}
+```
+
+| 필드 | 필수 | 규칙 |
+|---|---|---|
+| `cmd` | 아니오 (기본 `pick`) | `pick` \| `pick_and_place` — 이 FSM 의 pick 사이클은 어차피 `place_joints_deg` 에 놓는 것으로 끝나므로 같은 뜻이다. 그 밖은 **거부** |
+| `class` | **예** | 클래스 이름. VLA 쪽 필드명 `class_name` 도 받는다. 여러 개는 **콤마**(`apple,orange`) — 공백이 섞이면 **거부**(FSM 이 첫 단어만 쓰므로 뒷부분이 조용히 사라진다) |
+| `request_id` | 아니오 | VLA 가 붙이고 우리가 **그대로 echo** 한다. 상관관계 추적용 |
+| `pixel` / `pixel_wh` | 짝으로만 | `pixel` 이 있는데 `pixel_wh` 가 없으면 **거부** — 리사이즈된 프레임 좌표면 기준 해상도 없이는 조용히 어긋난다. 🔴 **아직 선정에 쓰이지 않는다**(아래) |
+| `base_xy` | 아니오 | 🔴 **아직 안 쓴다.** 게다가 현 캘리브가 `match_tolerance_m`(0.06) 예산 밖이다(계획 §3-2) |
+| `place` | — | 값이 있으면 **거부.** FSM 의 place 는 고정 관절값 하나다 |
+| `stamp_ns` | 아니오 | 로그·에코용. **TTL 판정에 쓰지 않는다** (아래) |
+
+### rqt 패널 버튼도 같은 채널로 — `승인`만 뺀다
+
+rqt 패널(`pick_fsm.rqt_panel`)의 **시작·중단(ABORT)·리셋** 버튼은 각각
+`/pick/start`·`/pick/abort`·`/pick/reset`(전부 `std_srvs/Trigger`)을 부른다. 이 노드도
+`cmd` 값으로 같은 서비스를 부르므로 음성/VLA 로 그 세 버튼을 대신할 수 있다:
+
+```bash
+ros2 topic pub -1 /vla/pick_command std_msgs/String "data: '{\"cmd\":\"start\"}'"
+ros2 topic pub -1 /vla/pick_command std_msgs/String \
+  "data: '{\"cmd\":\"abort\",\"reason\":\"취소\"}'"
+ros2 topic pub -1 /vla/pick_command std_msgs/String "data: '{\"cmd\":\"reset\"}'"
+```
+
+| `cmd` | 호출하는 서비스 | 비고 |
+|---|---|---|
+| `start` | `/pick/start` | `IDLE` 이 아니면 FSM 이 거절한다 — 정상 |
+| `abort` | `/pick/abort` | `reason` 필드는 로그용일 뿐 FSM 에 안 실린다(`Trigger` 는 요청 필드가 없다) |
+| `reset` | `/pick/reset` | `SAFE_STOP` 이 아니면 거절된다. **성공하면 실제로 `HOME` 까지 움직인다** — `states.py` 의 `SAFE_STOP → HOME` 은 `WAIT_APPROVAL` 을 거치지 않는 전이라, rqt 버튼과 마찬가지로 승인 없이도 이 모션은 나간다 |
+
+이 셋은 `LISTENING` 래치를 거치지 않고 **즉시** 서비스를 부른다 — pick 지시(TTL·"FSM 이 아직
+듣고 있나")와 성격이 다르다(사람이 아무 때나 rqt 버튼을 누르는 것과 같다). 그래서
+`pick_fsm` 을 `voice:=false` 로 띄웠어도 이 세 명령은 정상 동작한다.
+
+### 🚨🚨 `approve`(승인 버튼)는 명령어 자체가 없다
+
+```bash
+ros2 topic pub -1 /vla/pick_command std_msgs/String "data: '{\"cmd\":\"approve\"}'"
+# -> 항상 거부. /vla/pick_result 에 "require_approval 이 남은 유일한 소프트 안전장치" 라고 나온다
+```
+
+`cmd:"approve"` 는 **코드 경로 자체가 없다** — 파라미터를 바꿔도 안 열리는 스위치가 아니라,
+그런 스위치를 아예 안 만들었다(`BLOCKED_CMDS`, `vla_command_node.py`). `WAIT_APPROVAL` 에서
+실제로 팔이 움직이기 전에는 **사람이 rqt 패널이나 `ros2 service call /pick/approve
+std_srvs/srv/Trigger {}` 로 직접 눌러야** 한다.
+
+### 🔴 지금 구현된 것 / 안 된 것
+
+| 지시 방식 | 상태 |
+|---|---|
+| `class` | ✅ 끝까지 동작 — FSM 타겟 → 브리지 `target_classes` → GraspGenX |
+| `pixel` (개체 지정) | 🔴 **미구현.** `grasp_bridge_node` 에 `select_by_point()` 가 없다 (계획 §5) |
+| `base_xy` | 🔴 **미구현** |
+| `place` | 🔴 범위 밖 |
+
+**미구현 필드를 조용히 무시하지 않는다.** `pixel_policy` 가 그 처리를 정한다:
+
+| 값 | 동작 | 언제 |
+|---|---|---|
+| `warn` (기본) | 클래스만으로 진행하고 `/vla/pick_result` 의 `ignored` 에 적어 되돌려준다 | 작업대에 그 클래스 물체가 **하나뿐**일 때 |
+| `reject` | 지시를 거부한다 | **같은 클래스 물체가 2개 이상** 놓일 때. 그러면 `warn` 은 확률적으로 다른 개체를 집는다 — 계획 §5 `refuse_ambiguous_match` 와 같은 판단 |
+
+### TTL 은 **받은 시각** 기준이다 (`stamp_ns` 를 안 쓴다)
+
+지시는 다른 PC 에서, 휴대폰 핫스팟을 건너서 온다(계획 §3-1). 두 PC 의 시계는 맞춰져 있지
+않으므로 송신측 `stamp_ns` 로 나이를 재면 **시계 오차가 그대로 TTL 오차**가 된다.
+만료된 지시는 지운다 — 안 지우면 10분 전 지시로 다음 픽이 나간다.
+
+### `/vla/pick_result` (`std_msgs/String`, JSON)
+
+```json
+{"request_id": "a17-3", "accepted": true, "result": "succeeded",
+ "reason": "RELEASE 도달", "ignored": ["pixel"], "state": "RELEASE"}
+```
+
+| `result` | 언제 |
+|---|---|
+| `rejected` | 스키마 검증 실패 · 허용 클래스 밖 · TTL 만료 · 더 새 지시로 대체 · **FSM 이 지시를 안 가져가고 `PERCEIVE` 로 감**(아래) |
+| `accepted` | FSM 의 `LISTENING` 이 가져갔다. **아직 안 움직인다 — 사람 승인이 남았다** |
+| `succeeded` | `RELEASE` 를 **지나** `HOME` 에 도달 |
+| `failed` | `/pick/state` 가 `SPEAK_FAIL` · `ABORT` · `SAFE_STOP` |
+| `superseded` | 결과를 보기 전에 다음 지시가 FSM 으로 넘어갔다 |
+
+판정은 **`/pick/state` 하나로만** 한다. FSM 에 결과 토픽을 새로 만들면 그쪽 코드를 건드려야
+하고, 그건 이 통합의 전제("FSM 보존")를 깬다.
+
+> 🔴 **성공을 `RELEASE` 진입으로 보면 틀린다.** `task_manager._to()` 는 상태에 **진입할 때**
+> 이름을 발행하고, 그리퍼를 열고 detach 하는 것은 그 **뒤**다. `RELEASE → ABORT` 도 허용된
+> 전이라(`states.py`) 진입만 보고 성공이라 말하면 최대 20 s 이르고, 뒤따르는 ABORT 는 보고조차
+> 안 된다. 그래서 **`RELEASE` 를 지나 `HOME` 에 들어갔을 때** 성공으로 본다
+> (2026-08-09 회귀 시나리오 A·B 로 확인).
+
+### FSM 이 우리 지시를 지나쳤을 때 — 조용히 두지 않는다
+
+| 상황 | 이 노드의 처리 |
+|---|---|
+| FSM 이 `LISTENING` 을 떠났는데 `/get_keyword` 가 아직 대기 중 | **지시를 소비하지 않고 물러난다.** `task_manager._to()` 는 전이할 때 진행 중 future 를 버리므로(`_fut = None`), 버려진 호출이 다음 지시를 가로채면 그 지시는 영영 결과가 안 나온다 |
+| 지시가 래치에 있는데 FSM 이 `PERCEIVE` 로 감 | `rejected` 로 회신 + 경고. **`pick_fsm` 을 `voice:=false` 로 띄웠을 때 나온다** — 그러면 FSM 이 이 지시가 아니라 `target` 파라미터로 픽을 끝까지 돌아 **엉뚱한 물체를 집는다** |
+| 대기 중 Ctrl-C | `/get_keyword` 콜백을 깨워 즉시 물러난다. 안 깨우면 `Executor.shutdown()` 이 콜백을 기다려 **Ctrl-C 가 최대 `wait_timeout_sec` 만큼 먹힌다**(실측 수정 후 207 ms) |
+
+### 🚨 승인은 자동화하지 않는다
+
+`vla_command_node` 는 **`/pick/approve` 를 부르지 않는다.** 파라미터로도 노출하지 않았다 —
+있으면 언젠가 켜진다. `dry_run` 이 제거된(2026-08-09) 뒤 남은 소프트 안전장치는
+`require_approval` 하나이고, 그것마저 자동화하면 안전장치가 **0** 이 된다(계획 §0-B).
+`auto_start:=true` 는 `/pick/start`(작업 시작)까지만이고 승인(실제 모션 개시)은 사람 몫이다.
+
+### 파라미터
+
+| 이름 | 기본값 | 설명 |
+|---|---|---|
+| `command_topic` | `/vla/pick_command` | VLA → 우리 |
+| `result_topic` | `/vla/pick_result` | 우리 → VLA |
+| `keyword_service` | `/get_keyword` | `task_manager` 의 `LISTENING` 이 부르는 이름 |
+| `state_topic` | `/pick/state` | 결과 판정의 유일한 근거 |
+| `start_service` / `abort_service` / `reset_service` | `/pick/start` / `/pick/abort` / `/pick/reset` | `cmd:"start"`/`"abort"`/`"reset"` 이 부르는 서비스 이름 |
+| `auto_start` | `false` | `pick` 지시가 오면 이 노드가 **덧붙여서** `/pick/start` 도 부른다. `cmd:"start"` 를 명시적으로 보내는 것과는 별개(§ 위 표) — 승인은 어느 경로로도 자동화 안 됨 |
+| `ttl_sec` | `10.0` | 지시 유효시간. **받은 시각** 기준 |
+| `wait_timeout_sec` | `50.0` | `/get_keyword` 를 붙잡고 기다릴 시간 |
+| `fsm_listening_timeout_sec` | `60.0` | `task_manager.DEFAULT_TIMEOUTS[State.LISTENING]` 의 **사본**. 저쪽이 정본이니 바꿨으면 여기도 맞춘다 |
+| `listening_margin_sec` | `5.0` | 서비스 탐색·왕복 여유 |
+| `allowed_classes` | `config/objects.yaml` 의 `detect` | 콤마 목록. 밖의 클래스는 즉시 거부한다. 비우면 검사 안 함 |
+| `pixel_policy` | `warn` | `warn` \| `reject` (위) |
+
+> 💡 `wait_timeout_sec` 이 있는 이유: `/get_keyword` 가 즉시 실패로 답하면 FSM 이
+> `SPEAK_FAIL ↔ LISTENING` 을 tick 주기로 왕복하다 `MAX_FAIL_STREAK`(3)로 IDLE 에 떨어진다.
+> "사람이 start 를 눌러 두고 VLA 지시를 기다린다"가 정상 운용이므로 붙잡고 기다린다.
+
+> ⚠️ **"50 < 60 이니 안전"은 불변식이 아니다.** `task_manager._service()` 는 우리 서버가
+> 아직 없어도 **기다린다** — 그동안 `LISTENING` 시계는 이미 돌고 있다. 이 노드를 FSM 보다
+> 늦게 띄우면 남은 예산이 60 s 가 아니다. 그래서 두 가지를 한다:
+> 1. 기동 때 `wait_timeout_sec >= fsm_listening_timeout_sec - listening_margin_sec` 이면
+>    **노드가 뜨지 않는다.** 넘긴 채 돌면 매 사이클 ABORT → SAFE_STOP 이고 `/pick/reset`
+>    없이는 못 나온다 — 기동 때 한 번 막는 게 싸다.
+> 2. `/pick/state` 로 `LISTENING` 진입 시각을 알고 있으므로, 실제 마감은
+>    `min(지금 + wait_timeout, LISTENING 진입 + 예산 - margin)` 이다.
+
+> ⚠️ `allowed_classes` 는 **콤마 문자열**이다. rclpy 는 `[]` 기본값을 `BYTE_ARRAY` 로
+> 추론해서 나중에 문자열 배열을 못 넣는다(2026-08-09 실측). `target_classes`
+> (`grasp_bridge_node`)도 콤마 문자열이라 표기가 일치한다.
+
+### `COLCON_IGNORE` 해제 (2026-08-09)
+
+이 패키지는 `setup.py` 가 gitignore 대상인 `resource/.env` 를 **빌드 시점에** 못박고 있어서
+파일이 없는 머신에서 빌드가 통째로 실패했고, 그래서 `COLCON_IGNORE` 상태였다.
+`['resource/.env']` → `glob('resource/.env')` 로 바꿔 해결했다 — 있으면 설치하고 없으면 `[]`.
+`.env` 는 여전히 `get_keyword` 의 **런타임** 필수 파일이고, `vla_command_node` 는 안 쓴다.
+
+같이 지운 것: `test/test_{flake8,pep257,copyright}.py`. 빌드에서 빠져 있던 동안 아무도 안
+돌렸는데, 되살리자 **기존 `get_keyword.py`·`stt.py`·`MicController.py`·`wakeup_word.py` 에서만
+flake8 24건**이 떠서 패키지가 영구 빨강이 된다. 이 ws 가 유지보수하는 다른 `ament_python`
+패키지(`pick_fsm`·`graspgenx_perception`)도 이 보일러플레이트 3종을 이미 지웠으므로 관행을
+따랐다. 신규 파일 3개는 `ament_flake8` **0건**이다(별도 확인).
+
+### 검증 상태
+
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| `colcon build --symlink-install --packages-select voice_processing` | ✅ PASS | 2026-08-09 `rokey` |
+| `colcon test --packages-select voice_processing` | ✅ **27 tests, 0 failures** | 스키마 검증 + cmd 라우팅 단위테스트 |
+| 지시 → `/get_keyword` 왕복 (FSM 흉내) | ✅ 실측 | 지시가 나중에 와도 대기 후 응답 / 먼저 와 있으면 0.05 s 응답 |
+| 거부 경로 (detect 밖 클래스 · `pixel_wh` 누락 · TTL 만료) | ✅ 실측 | 셋 다 `/vla/pick_result` 에 사유가 나온다 |
+| 성공 판정이 `RELEASE` 진입이 아니라 `RELEASE→HOME` 인가 | ✅ 실측 (회귀 A) | `RELEASE` 만으로는 `succeeded` 가 안 나온다 |
+| `RELEASE` 직후 `ABORT` 가 `failed` 로 보고되는가 | ✅ 실측 (회귀 B) | |
+| FSM 이 `ABORT` 로 가면 대기 중 호출이 지시를 안 삼키는가 | ✅ 실측 (회귀 C) | 다음 지시가 가로채이지 않는다 |
+| 지시를 지나친 `PERCEIVE` 를 알리는가 | ✅ 실측 (회귀 D) | `rejected` + 사유 회신 |
+| 대기 마감이 `LISTENING` 남은 예산으로 잘리는가 | ✅ 실측 (회귀 E) | |
+| 블로킹 대기 중 SIGINT 응답성 | ✅ **207 ms** | 수정 전에는 최대 `wait_timeout_sec`(50 s) 걸렸다 |
+| `cmd:"start"/"abort"/"reset"` → 서비스 호출·성공/거절 회신 | ✅ 실측 | `/pick/{start,abort,reset}` 를 흉내낸 Trigger 서버로 성공·거절 둘 다 확인 |
+| `cmd:"approve"` 가 항상 거부되는가 | ✅ 실측 | 서비스 클라이언트를 아예 안 만들었으므로 파라미터로도 못 연다 |
+| 🔴 **`task_manager` 와 실제로 연결해 pick 한 사이클** | ❌ **미검증** | 로봇·카메라·GPU 를 다 띄운 상태로 안 돌려봤다 |
+| 🔴 **VLA PC 를 실제로 붙여본 적 없다** | ❌ **미검증** | 핫스팟·도메인·DDS 도달성 전부 미실측 (계획 §3-3(e), §8) |
+| `get_keyword`(마이크) 노드 | ❌ **미검증** | 파이썬 의존성이 이 머신에 설치돼 있는지 확인 안 했다 |
+
+> 위 회귀 A~E 는 `/pick/state` 를 손으로 발행해 FSM 을 **흉내낸** 것이다. 진짜 `task_manager`
+> 와의 타이밍(특히 `_service()` 의 tick 폴링)은 아직 안 봤다.
+
+### 다음
+
+1. **`select_by_point()`** — `pixel` 을 실제로 쓰려면 `grasp_bridge_node` 쪽이 필요하다(계획 §5).
+   그게 들어오면 `pixel_policy` 는 사라지고 VLA 는 "사람 대신 클릭하는 클라이언트"가 된다.
+2. 두 PC DDS 도달성 — 도메인 93 통일, `fastdds_udp_only.xml`, 필요하면 `initialPeersList` 유니캐스트.
+3. D435i 압축 컬러(`…/color/image_raw/compressed`, 실측 5.7 Mbps)를 VLA PC 로 보내는 경로.
 
 ---
 

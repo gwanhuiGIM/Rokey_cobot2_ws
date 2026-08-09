@@ -21,6 +21,7 @@ import json
 import os
 
 import cv2
+import yaml
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -164,10 +165,51 @@ def build_label_map(masks: np.ndarray, height: int, width: int,
     return labels, kept
 
 
+def load_objects(path: str) -> dict:
+    """`config/objects.yaml` -> {'detect': [이름...], 'pick_default': str}.
+
+    형식 오류는 전부 예외로 올린다. 조용히 기본값으로 되돌아가면 "좁게 탐지하려고 적었는데
+    전부 탐지되고 있다"를 아무도 눈치채지 못한다 — 이 파일을 만든 목적이 사라진다.
+    """
+    with open(path, encoding='utf-8') as f:
+        doc = yaml.safe_load(f) or {}
+    if not isinstance(doc, dict):
+        raise ValueError(f'{path}: 최상위가 매핑이 아니다 (detect:/pick_default: 를 쓴다)')
+    detect = doc.get('detect') or []
+    if not isinstance(detect, list) or not all(isinstance(x, str) for x in detect):
+        raise ValueError(f'{path}: `detect` 는 클래스 **이름** 문자열의 목록이어야 한다 '
+                         '(COCO 인덱스가 아니다)')
+    pick = doc.get('pick_default', '')
+    if pick is None:
+        pick = ''
+    if not isinstance(pick, str):
+        raise ValueError(f'{path}: `pick_default` 는 문자열이어야 한다 '
+                         "(비우려면 '' — 콤마로 여러 개도 된다)")
+    return {'detect': [s.strip() for s in detect if s.strip()], 'pick_default': pick.strip()}
+
+
+def names_to_coco_ids(names, model_names) -> list:
+    """클래스 이름 목록 -> 가중치의 인덱스 목록. 모르는 이름이 있으면 예외.
+
+    🔴 인덱스를 사람이 적지 않게 하려고 있는 함수다. `banana=46` 같은 표를 문서와 설정에
+    베껴 두면 가중치를 바꾼 날 조용히 어긋난다 — 변환은 **실제로 올라간 가중치**로만 한다.
+    """
+    inv = {str(v): int(k) for k, v in dict(model_names).items()}
+    unknown = [n for n in names if n not in inv]
+    if unknown:
+        raise ValueError(
+            f'이 가중치가 모르는 클래스 이름: {unknown}\n'
+            f'가중치가 아는 이름 {len(inv)}개: {sorted(inv)}\n'
+            '대소문자를 구분한다. 공구류는 COCO 80종에 없다 — 파인튜닝이 필요하다.')
+    return sorted({inv[n] for n in names})
+
+
 class YoloSegNode(Node):
     def __init__(self):
         super().__init__('yolo_seg_node')
         self.declare_parameter('model_path', '')
+        # 탐지 대상의 정본. 비우면 아래 `classes`(COCO 인덱스) 를 쓰는 옛 경로로 돌아간다.
+        self.declare_parameter('objects_file', '')
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('mask_topic', '/yolo_seg/mask')
         self.declare_parameter('label_topic', '/yolo_seg/labels')
@@ -213,6 +255,7 @@ class YoloSegNode(Node):
 
         self.bridge = CvBridge()
         self.model = self._load_model(self.get_parameter('model_path').value)
+        self._apply_objects_file()
 
         self.mask_pub = self.create_publisher(Image, self.get_parameter('mask_topic').value, 10)
         self.label_pub = self.create_publisher(Image, self.get_parameter('label_topic').value, 10)
@@ -255,6 +298,29 @@ class YoloSegNode(Node):
         self.get_logger().warn(
             f'5초간 {self.image_topic} 를 한 장도 못 받았다. 카메라가 떠 있는지, 토픽명이 맞는지, '
             '컨테이너면 FASTRTPS_DEFAULT_PROFILES_FILE 이 양쪽에 걸렸는지 확인할 것')
+
+    def _apply_objects_file(self):
+        """`objects_file` 의 `detect` 이름들로 `self.classes` 를 덮어쓴다.
+
+        **모델을 올린 뒤에** 불러야 한다 — 이름→인덱스 변환에 `model.names` 가 필요하다.
+        파일을 지정했는데 못 읽으면 **죽는다.** 조용히 전체 탐지로 돌아가면 작업대의 다른
+        물체까지 전부 후보가 되는데, 좁히려고 이 파일을 쓴 사람은 그걸 모른다.
+        """
+        path = str(self.get_parameter('objects_file').value or '')
+        if not path:
+            return
+        cfg = load_objects(path)                # 실패하면 그대로 올라가 노드가 죽는다
+        if not cfg['detect']:
+            raise ValueError(f'{path}: `detect` 가 비어 있다. 전부 탐지하려면 '
+                             'objects_file 을 빈 문자열로 두고 이 파일을 쓰지 않는다')
+        if self.classes:
+            # 두 곳에서 같은 걸 정하면 어느 쪽이 이겼는지 로그 없이는 알 수 없다.
+            self.get_logger().warn(
+                f'`classes`({self.classes}) 와 `objects_file` 이 둘 다 주어졌다 — '
+                '파일이 이긴다. classes 인자를 지울 것')
+        self.classes = names_to_coco_ids(cfg['detect'], self.model.names)
+        self.get_logger().info(
+            f"탐지 대상 {cfg['detect']} -> COCO {self.classes}  (출처: {path})")
 
     def _load_model(self, model_path: str):
         from ultralytics import YOLO  # 호스트엔 없다 — 모듈 로드 시점이 아니라 여기서 터뜨린다

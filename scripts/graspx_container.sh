@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 컨테이너(od_kimkh) 안에서 graspx 파이프라인을 띄운다. 인자는 launch 로 그대로 넘어간다.
 #
-#   scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true classes:='[46,47,49]'
+#   scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true
+#   탐지 대상은 ws 루트 `config/objects.yaml` 의 detect 가 정본이다 (아래 COBOT2_OBJECTS 로
+#   넘긴다). 그 파일을 고쳤으면 이 스크립트를 다시 실행해야 반영된다.
 #   scripts/graspx_container.sh --no-clean ...   # 기존 인스턴스를 죽이지 않는다
 #
 # 왜 스크립트인가 — `docker exec` 에는 `--sig-proxy` 가 없다 (docker 29.7.0 확인).
@@ -70,8 +72,12 @@ TTY_FLAGS=(-i)
 ARGS=''
 [ $# -gt 0 ] && ARGS=$(printf '%q ' "$@")
 
+# 탐지 대상의 정본. 컨테이너가 ws 를 같은 절대경로로 마운트하므로 호스트와 같은 파일이다
+# (2026-08-09 `docker exec ls` 로 확인). 넘겨주지 않으면 컨테이너 안 런치가 자기 share 에서
+# ws 루트를 되짚어야 하는데, 컨테이너 안의 install 배치가 다를 수 있어 여기서 못 박는다.
 docker exec "${TTY_FLAGS[@]}" \
   -e FASTRTPS_DEFAULT_PROFILES_FILE="$WS/fastdds_udp_only.xml" \
+  -e COBOT2_OBJECTS="${COBOT2_OBJECTS:-$WS/config/objects.yaml}" \
   "$CONTAINER" bash -lc "
     source /opt/ros/humble/setup.bash
     source '$WS/install/setup.bash'

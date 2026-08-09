@@ -60,18 +60,30 @@ DEFAULTS = {
     'x_min': 0.10, 'x_max': 0.90,
     'y_min': -0.50, 'y_max': 0.50,
     'z_min': -0.05, 'z_max': 0.60,
-    'table_z': float('nan'),  # nan이면 박스 안 z 중앙값으로 자동 추정
-    'obj_min_h': 0.015,       # 테이블면 위 이 높이부터 물체로 본다
+    'table_z': float('nan'),  # nan이면 박스 안 z 중앙값으로 자동 추정 (geometric 경로 전용)
+    # 테이블면 위 이 높이부터 물체로 본다. **2026-08-09부터 yolo 경로도 이 값을 쓴다** —
+    # segment_from_labels() 가 각 물체 주변 국소 테이블 기준(아래 yolo_table_ring_m)으로
+    # 마스크 하단의 가림꼬리·경계오염 픽셀을 잘라낸다. 물체 자체가 낮으면(<15mm) 안 잡힌다.
+    'obj_min_h': 0.015,
     # 로봇 팔·그리퍼는 작업공간 박스 **안**에 있어 xy 로 뺄 수 없다 — 높이로 자른다.
     # 0.12 는 2026-08-08 실측 튜닝값이다(씬 cmp_geo): 그리퍼가 상판 위 17.9~33.0 cm 에
     # 걸쳐 4182 px 짜리 obj_1 로 잡혔고, 같은 씬의 사과는 상판 위 최대 7.2 cm 였다.
-    # 그 사이를 자르면 그리퍼만 사라진다. 기하 경로 전용이다 — yolo 경로(segment_from_labels)
-    # 는 이 값을 안 쓴다.
-    # ⚠️ 그래서 **yolo 경로에는 self-filter 가 없다.** COCO 0 = person 이고 README 실측에
-    # person 검출이 기록돼 있다 — `classes` 기본값이 전체라 사람·팔이 obj_N 으로 들어온다.
-    # yolo 경로에서 이걸 막는 수단은 `classes`(탐지 제한)와 `target_classes`(연산 제한)뿐이다.
-    # ⚠️ 키가 12 cm 를 넘는 물체도 같이 잘린다. 그런 물체를 잡으려면 올릴 것. nan 이면 무제한.
+    # 그 사이를 자르면 그리퍼만 사라진다. **기하 경로 전용이다 — yolo 경로는 이 값을
+    # 절대 쓰지 않는다.** 서 있는 물체(콜라병 등, 20cm 넘음)가 이 기본값에 걸려 통째로
+    # 잘려나가기 때문이다 — yolo 는 이미 클래스로 걸렀으므로 로봇 팔이 obj_N 이 될 일이 없다.
+    # ⚠️ 그래도 남는 구멍: COCO 0 = person 이고 README 실측에 person 검출이 기록돼 있다 —
+    # `classes` 기본값이 전체라 사람·팔이 obj_N 으로 들어올 수 있다. yolo 경로에서 이걸
+    # 막는 수단은 `classes`(탐지 제한)와 `target_classes`(연산 제한)뿐이다.
     'obj_max_h': 0.12,
+    # ── yolo 경로 전용: 물체별 "국소 테이블 기준" ────────────
+    # 전역 table_z(박스 전체 중앙값) 하나로는 카메라 잔차·테이블 기울기가 있을 때
+    # 물체마다 오차가 달라진다. 대신 obj_radius_m 밖 ~ +이 값 안의 배경(비물체) 픽셀만
+    # 모아 그 물체 **주변**의 테이블 높이를 따로 잰다. obj_radius_m 이 nan 이면 이 링을
+    # 만들 수 없어 전역 table_z 로 폴백한다.
+    'yolo_table_ring_m': 0.03,
+    # 링 안 배경 픽셀이 이보다 적으면(작업공간 가장자리·물체가 빽빽할 때) 국소값을
+    # 못 믿고 전역 table_z 로 폴백한다.
+    'yolo_min_ring_px': 20,
     'min_pixels': 300,        # 이보다 작은 덩어리는 버린다(노이즈)
     # 단일 시점 depth 는 물체 뒤 가림영역을 전경 깊이로 메운다(occlusion shadow).
     # 그 꼬리가 덩어리에 붙어 OBB 를 부풀리고, 심하면 grasp 가 0개가 된다
@@ -80,6 +92,20 @@ DEFAULTS = {
     # 0.05 는 씬 10(사과) 실측 튜닝값이다: nan→8개, 0.07→4개, **0.05→32개**, 0.04→1개.
     # 너무 조이면 OBB 가 작아져 후보가 사라진다. 씬 하나로 잡은 값이니 다른 물체에선 다시 본다.
     'obj_radius_m': 0.05,
+    # ── yolo 경로 전용: 클래스별 실측 치수(선택) ─────────────
+    # 'class:radius_m:height_m,...' 콤마 목록. **여기 있는 클래스는 obj_radius_m/obj_max_h
+    # 전역값 대신 이 실측치를 쓴다.** 형태가 고정된 공산품(콜라병·컵 등)에서 정확도가 오른다 —
+    # 자연물(사과·바나나 등, 개체마다 형태가 다르다)은 넣지 않는 편이 낫다.
+    # 리스트가 아니라 문자열인 이유는 target_classes 와 같다(CLAUDE.md §4 rcl yaml 리스트 함정).
+    # 정본은 ws 루트 `config/objects.yaml` 의 `dimensions:` — `graspx.launch.py` 가 이 문자열로
+    # 변환해 넘긴다. 모르는 클래스거나 비어 있으면 **기존 동작 그대로**(전역 반경 + 상한 없음).
+    # ⚠️ 이걸로 depth 자체의 결손(반사면이라 점이 아예 안 찍히는 것)은 못 고친다 — 그건
+    # 물체별 마스크를 다듬는 것뿐이지 없는 점을 채워주지 않는다. 근본 해법은 알려진 형상을
+    # 정합(ICP)해 메우는 것이고, 이건 그 전 단계의 값싼 개선이다.
+    'class_dims': '',
+    # 실측 height 위로 이만큼까지는 허용한다 — 측정 오차·바닥 접지 오차·국소 테이블 기준의
+    # 잔차를 흡수한다. 너무 좁히면 진짜 물체 꼭대기까지 잘려나간다.
+    'class_dims_margin_m': 0.03,
     'frames': 10,             # depth 를 이만큼 모아 픽셀별 중앙값. 정지 장면이라 가능하다
     'min_valid_ratio': 0.5,   # 프레임 중 이 비율 이상에서 유효해야 그 픽셀을 쓴다
     'timeout_sec': 10.0,
@@ -315,15 +341,25 @@ def workspace_mask(depth, K, T_base_cam, p):
     return in_box, X, Y, Z
 
 
-def segment_from_labels(labels, depth, K, T_base_cam, p):
+def segment_from_labels(labels, depth, K, T_base_cam, p, class_map=None):
     """yolo_seg 라벨맵(101,102,...)을 그대로 씬 seg 로 쓴다.
 
-    라벨 규약이 이미 같으므로 하는 일은 두 가지뿐이다:
+    라벨 규약이 이미 같으므로 하는 일은 네 가지다:
       1. **유효 depth 로 마스킹.** GraspGenX 는 depth 역투영으로 점군을 만든다. depth 가 0 인
          픽셀에 라벨이 붙어 있으면 그 물체의 점 수만 부풀고 점군에는 안 들어간다.
-      2. 남은 라벨을 label_map 으로 정리.
-    기하 경로와 같은 작업공간 박스·반경 크롭을 적용한다. 역할 분담은
-    **YOLO 가 "어느 물체인지", 기하가 "닿을 수 있는 곳인지"** 다.
+      2. 반경 크롭. `class_map`으로 그 물체의 클래스를 알고 `p['class_dims']`에 실측치가
+         있으면 **그 물체의 실측 반경**을 쓴다 — 없으면 전역 `obj_radius_m`(기존 동작).
+      3. **물체마다 자기 주변의 국소 테이블 높이를 재서 그 위 obj_min_h 미만인 픽셀을
+         잘라낸다.** 마스크 경계가 테이블로 살짝 새거나, 단일 시점 depth 의 가림꼬리가
+         물체 밑에 붙는 걸 막는다. 클래스별 실측 height 를 알면 그 값 + 여유(margin) 위도
+         같이 잘라낸다(이웃 물체·팔의 오염 방지) — **모르면 상한을 안 건다.** 서 있는 물체
+         (콜라병 등)를 기하 경로 기준값(12cm) 하나로 자르면 통째로 잘려나가기 때문이다.
+      4. 남은 라벨을 label_map 으로 정리 + 물체별 돌출 높이(+실측 대비 편차)를 진단에 남긴다.
+    역할 분담은 **YOLO 가 "어느 물체인지", 기하가 "닿을 수 있는 곳·얼마나 튀어나왔는지"** 다.
+
+    ⚠️ `class_dims` 는 depth 자체의 결손(반사면이라 점이 아예 안 찍히는 것)을 못 고친다 —
+    마스크를 다듬을 뿐 없는 점을 채워주지 않는다. 돌출높이가 실측보다 한참 작게 나오면
+    그 신호(진단문자열의 "⚠️ 실측 대비 얕음")로 depth 결손을 의심한다.
     """
     if labels is None:
         return None, None, ('seg_source=yolo 인데 라벨맵을 못 받았다. '
@@ -336,35 +372,90 @@ def segment_from_labels(labels, depth, K, T_base_cam, p):
     # 박스를 안 걸면 배경(바닥·벽·먼 물체)까지 라벨에 들어가 물체 점군이 폭발한다 —
     # 2026-08-06 에 GraspGenX 가 41.7GB 를 할당하려다 죽었다.
     # 역할 분담: **YOLO 는 "어느 물체인지", 기하는 "닿을 수 있는 곳인지"** 를 정한다.
-    in_box, X, Y, _ = workspace_mask(depth, K, T_base_cam, p)
+    in_box, X, Y, Z = workspace_mask(depth, K, T_base_cam, p)
     if not in_box.any():
         return None, None, '작업공간 박스 안에 유효 depth 가 0개다 — bounds 나 TF 를 의심한다'
     seg = np.where(in_box, labels, 0).astype(np.uint8)
+
+    # 국소 테이블 기준 계산용 "배경(=물체 아닌 것)" 스냅샷. 아래 루프가 seg 를 지워
+    # 나가기 **전에** 떠 둬야 한다 — 안 그러면 먼저 다듬은 물체의 흔적이 나중 물체의
+    # 배경 판정에 섞이거나, 반대로 아직 안 다듬은 물체가 남의 링에 배경으로 잡힌다.
+    bg0 = in_box & (seg <= LABEL_OBJ_BASE)
+    global_table_z = float(np.median(Z[bg0])) if bg0.any() else float('nan')
+
+    class_map = class_map or {}
+    class_dims, dim_warns = parse_class_dims(p.get('class_dims', ''))
+    dims_margin = float(p.get('class_dims_margin_m', 0.03))
+
     label_map, kept = {}, []
-    radius = p['obj_radius_m']
+    default_radius = p['obj_radius_m']
+    ring = p['yolo_table_ring_m']
+    min_ring_px = int(p['yolo_min_ring_px'])
+    obj_min_h = p['obj_min_h']
     for v in sorted(int(x) for x in np.unique(seg) if x > LABEL_OBJ_BASE):
+        cls_name = class_map.get(v)
+        dims = class_dims.get(cls_name) if cls_name else None
+        radius = dims[0] if dims else default_radius
+
         m = seg == v
         px = int(m.sum())
+        cx = cy = float('nan')
         if np.isfinite(radius) and px >= p['min_pixels']:
-            # 기하 경로와 **같은 반경 크롭**. COCO 라벨은 dining table 처럼 화면의 상당 부분을
-            # 한 인스턴스로 덮는데, 그 점군을 그대로 넘기면 GraspGenX 가 죽는다
-            # (2026-08-06: 67,879 px 라벨에서 41.7GB 할당 시도).
-            # RG2 개구가 0.102 m 라 반경 0.05 m 를 넘는 물체는 어차피 못 잡는다.
-            mx, my = float(np.median(X[m])), float(np.median(Y[m]))
-            m = m & (np.hypot(X - mx, Y - my) <= radius)
+            # 기하 경로와 **같은 반경 크롭**(반경은 클래스별 실측치가 있으면 그걸 쓴다).
+            # COCO 라벨은 dining table 처럼 화면의 상당 부분을 한 인스턴스로 덮는데, 그
+            # 점군을 그대로 넘기면 GraspGenX 가 죽는다(2026-08-06: 67,879 px 라벨에서
+            # 41.7GB 할당 시도). RG2 개구가 0.102 m 라 그보다 큰 물체는 어차피 못 잡는다.
+            cx, cy = float(np.median(X[m])), float(np.median(Y[m]))
+            m = m & (np.hypot(X - cx, Y - cy) <= radius)
             seg[(seg == v) & ~m] = 0
             px = int(m.sum())
         if px < p['min_pixels']:
             seg[seg == v] = 0
             continue
+
+        # ── 국소 테이블 기준: (이 물체의) radius 밖 ~ +yolo_table_ring_m 안의 배경 픽셀
+        #    중앙값. 반경 크롭이 꺼져 있거나(radius=nan) 링 안 배경이 모자라면 전역으로 폴백.
+        table_z, table_src = global_table_z, '전역'
+        if np.isfinite(radius) and np.isfinite(cx):
+            dist = np.hypot(X - cx, Y - cy)
+            ring_mask = bg0 & (dist > radius) & (dist <= radius + ring)
+            if int(ring_mask.sum()) >= min_ring_px:
+                table_z, table_src = float(np.median(Z[ring_mask])), '국소'
+
+        # ── 돌출 다듬기: 국소(또는 전역) 테이블 바로 위 얇은 층을 뺀다(하한, 항상).
+        #    클래스별 실측 height 를 알면 그 위 margin 을 넘는 픽셀도 뺀다(상한, 선택) —
+        #    이웃 물체·팔 그림자가 이 라벨에 섞여 들었을 때만 걸리고, 정상 범위는 안 건드린다.
+        if np.isfinite(table_z):
+            drop = m & (Z <= table_z + obj_min_h)
+            if dims is not None:
+                drop |= m & (Z > table_z + dims[1] + dims_margin)
+            if drop.any():
+                seg[drop] = 0
+                m = seg == v
+                px = int(m.sum())
+            if px < p['min_pixels']:
+                seg[seg == v] = 0
+                continue
+
         idx = v - LABEL_OBJ_BASE
         label_map[f'obj_{idx}'] = v
-        kept.append((idx, px))
+        h = float(Z[m].max() - table_z) if np.isfinite(table_z) else float('nan')
+        kept.append((idx, px, h, table_src, table_z, cls_name, dims))
 
     diag = [f'yolo 라벨맵 사용: 박스 안 픽셀 {int(in_box.sum())}, '
             f'라벨 {len(kept)}개 채택 (min_pixels={p["min_pixels"]})']
-    for idx, px in kept:
-        diag.append(f'  obj_{idx}: {px:5d} px')
+    for w in dim_warns:
+        diag.append(f'  ⚠️ {w}')
+    for idx, px, h, table_src, tz, cls_name, dims in kept:
+        h_str = f'{h * 100:.1f} cm' if np.isfinite(h) else '?'
+        tz_str = f'{tz:.4f} m({table_src})' if np.isfinite(tz) else '없음(배경 0개)'
+        line = f'  obj_{idx}: {px:5d} px  테이블기준={tz_str}  돌출높이={h_str}'
+        if dims is not None and np.isfinite(h):
+            expect_cm = dims[1] * 100.0
+            line += f' (실측 {cls_name}={expect_cm:.1f} cm)'
+            if h < dims[1] * 0.5:
+                line += ' ⚠️ 실측 대비 얕음 — depth 결손(반사면 등) 의심'
+        diag.append(line)
     if not kept:
         diag.append('  ⛔ 채택 0개 — yolo 가 아무것도 못 잡았거나 depth 와 겹치는 픽셀이 없다')
     return seg, label_map, '\n'.join(diag)
@@ -383,6 +474,36 @@ def best_labels(frames):
     if not frames:
         return None, None
     return max(frames, key=lambda f: int((f[1] > LABEL_OBJ_BASE).sum()))
+
+
+def parse_class_dims(raw: str):
+    """`'class:radius_m:height_m,...'` -> `({클래스: (반경, 높이)}, 경고 목록)`.
+
+    형식이 틀린 항목은 버리고 경고에 남긴다 — 씬 캡처를 막을 정도로 치명적이지 않다
+    (`objects.yaml`의 `detect`/`pick_default` 오타와 다르게, 이 값은 정확도를 조금 낮출
+    뿐 아무것도 못 잡게 만들지는 않는다). 빈 문자열이면 `({}, [])` — 호출자는 전역
+    `obj_radius_m`으로 폴백하고 상한을 안 건다(기존 동작).
+    """
+    dims, warns = {}, []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        fields = part.split(':')
+        if len(fields) != 3:
+            warns.append(f"class_dims 항목 형식 오류(class:radius_m:height_m 아님): {part!r}")
+            continue
+        name, r_s, h_s = (f.strip() for f in fields)
+        try:
+            r, h = float(r_s), float(h_s)
+        except ValueError:
+            warns.append(f'class_dims 항목의 숫자를 못 읽었다: {part!r}')
+            continue
+        if not (r > 0 and h > 0):
+            warns.append(f'class_dims 항목이 양수가 아니다: {part!r}')
+            continue
+        dims[name] = (r, h)
+    return dims, warns
 
 
 def filter_labels_by_class(labels, class_map, wanted):
@@ -569,9 +690,14 @@ def run(node):
                 [p['x_min'], p['y_min'], p['z_min'],
                  p['x_max'], p['y_max'], p['z_max']])
 
+    # 유효 depth 가 0개면 `min()` 이 "zero-size array to reduction operation minimum"
+    # 으로 던진다 — **표시용 로그 한 줄 때문에 캡처 전체가 죽는다.** 그런 프레임이야말로
+    # (카메라 가림·전면 무효 depth) 로그가 필요한 순간이라 여기서 막는다.
+    valid = depth[depth > 0]
+    rng = f'{valid.min():.3f}~{valid.max():.3f} m' if valid.size else '유효 depth 0개 ⚠️'
     node.get_logger().info(
         f"{diag}\n저장: {out}\n"
-        f"  depth {depth.shape} {depth.dtype} 범위 {depth[depth > 0].min():.3f}~{depth.max():.3f} m\n"
+        f"  depth {depth.shape} {depth.dtype} 범위 {rng}\n"
         f"  camera_pose t={np.round(T[:3, 3], 4).tolist()}\n"
         f"다음: cd isaac_ros-dev/src/GraspGenX && uv run python scripts/demo_scene_pc.py "
         f"--sample_data_dir {os.path.dirname(out)} --gripper_name onrobot_RG2 "

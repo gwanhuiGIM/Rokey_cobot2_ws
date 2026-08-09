@@ -672,7 +672,7 @@ ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger
 | `color` 848×480 / `aligned_depth_to_color` 848×480 | **일치** — `segment_from_labels` 의 shape 검사 통과 조건 |
 | TF `base_link → camera_color_optical_frame` | **있음** (`camera_calib_tf`, xyz `[1.237, -0.237, 0.784]`) |
 | 호스트에 `uv` | **있음** (`~/.local/bin/uv`) — 브리지가 GraspGenX 워커를 이걸로 띄운다 |
-| `pick_fsm` 안전 기본값 `dry_run:=true` + `require_approval:=true` | **그대로** — 실기 모션이 안 나간다 |
+| `pick_fsm` 안전 기본값 | ⚠️ **바뀜(2026-08-09)** — `dry_run` 제거. 남은 건 `require_approval:=true` 뿐이고 **실기 모션이 실제로 나간다** |
 
 ## 기하 세그 vs YOLO-seg
 

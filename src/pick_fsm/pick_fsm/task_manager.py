@@ -12,24 +12,31 @@
 안 된다. 그 배타권을 한 노드가 소유해야 하고, 이 노드가 그 자리다.
 → 그래서 이 노드는 **MoveIt 경로만** 쓴다. DSR_ROBOT2 의 movej/movel 을 부르지 않는다.
 
-⚠️ 기본값은 `dry_run:=true` (계획만, 실행 안 함) + `require_approval:=true` 다.
-   실기에서 움직이려면 두 개를 명시적으로 꺼야 한다. 사고는 기본값에서 나온다.
+⚠️ **이 노드는 항상 실행한다.** `dry_run`(plan_only) 파라미터는 2026-08-09 제거했다 —
+   실기 모션 데이터 수집 단계로 넘어갔고, 팔이 안 움직이는데 그리퍼만 실제로 개폐되는
+   반쪽 안전(`_move()`만 게이트되고 `rg2.*`는 안 됨)이 오히려 오해를 낳았다.
+   남은 안전장치는 `require_approval:=true`(기본값)와 **물리 비상정지 버튼**이다.
 """
 
 import threading
 
 import rclpy
 from geometry_msgs.msg import PoseArray, PoseStamped
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Int8, String
 from std_srvs.srv import Trigger
 
 from pick_fsm import geometry as geo
 from pick_fsm.moveit_bridge import SUCCESS, MoveItBridge, err_name, merge_acm
-from pick_fsm.rg2 import RG2_MODEL_WIDTH_M, Rg2Client, fingertip_from_rg2_base_m
+from pick_fsm.rg2 import (
+    RG2_MODEL_WIDTH_M, Rg2Client, fingertip_from_rg2_base_m, grip_target_width_m,
+)
 from pick_fsm.robot_safety_node import UNSAFE_STATES
 from pick_fsm.states import HOLDING_STATES, State, is_allowed
 
@@ -62,12 +69,26 @@ DEFAULT_TIMEOUTS = {
 #: 멈추는 조건을 따로 두지 않으면 tick 주기로 무한히 돈다(2026-08-07 실기 로그 폭주).
 MAX_FAIL_STREAK = 3
 
+#: `/pick/target`(지시) · `/pick/target_active`(현재값) 용.
+#: TRANSIENT_LOCAL 이라야 **늦게 뜨는 쪽**이 마지막 값을 받는다 — rqt 패널은 FSM 과 따로
+#: 껐다 켜므로, VOLATILE 이면 패널을 다시 띄울 때마다 타겟 표시가 비어 보이고 사람이
+#: "타겟이 풀렸나?" 하고 다시 누르게 된다. 양쪽 다 이 프로파일을 써야 한다(durability 가
+#: 어긋나면 아예 연결이 안 된다) — 그래서 여기 한 곳에 두고 rqt_panel 이 import 한다.
+TARGET_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+
+def str_param(name: str, value: str) -> Parameter:
+    """rcl_interfaces 문자열 파라미터 하나. `SetParameters` 요청에 넣는다."""
+    return Parameter(name=name,
+                     value=ParameterValue(type=ParameterType.PARAMETER_STRING,
+                                          string_value=str(value)))
+
 
 #: 파라미터 기본값 = 타입의 정본. `config/pick_fsm.yaml` 의 값은 여기 적힌 타입과
 #: 같아야 한다 (float 는 `0` 이 아니라 `0.0`). test_pick_fsm.py 가 이 대조를 자동화한다.
 PARAM_DEFAULTS = {
     # 안전
-    'dry_run': True,                 # true = plan_only. 궤적만 만들고 실행하지 않는다
+    # `dry_run`(plan_only) 은 없다 — 2026-08-09 제거. 모듈 docstring 참고.
     'require_approval': True,        # false 로 두면 사람 승인 없이 실행한다
     'approval_timeout_sec': 300.0,
 
@@ -96,6 +117,10 @@ PARAM_DEFAULTS = {
     'replan_attempts': 3,
     'replan_delay': 0.5,
     'motion_retries': 2,             # move_group 실패 시 FSM 바깥 재시도 횟수
+    # PERCEIVE(재)촬영 실패 시 재시도 횟수. 2026-08-09 실기 로그: 정지된 같은 물체·같은
+    # 자리에서 collision-free 비율이 0%~53%로 요동쳤다(depth 노이즈로 OBB 후보 자체가
+    # 흔들린다) — 재촬영 한 번으로 5번 중 4번은 살아났다. `motion_retries` 와 같은 뼈대.
+    'perceive_retries': 2,
 
     # 자세
     'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
@@ -121,6 +146,7 @@ PARAM_DEFAULTS = {
     'gripper_backend': 'real',       # real | virtual (숫자 명령의 의미가 다르다)
     'gripper_service': '/onrobot/sendCommand',
     'grip_detected_topic': '/onrobot/grip_detected',
+    # 물체 폭에서 **빼는** 조임 여유 [m]. 목표 개구 = 물체 폭 - 이 값 (`_grip_width`).
     'grip_clearance_m': 0.008,       # UNVERIFIED: 실측 튜닝값. 도면값 아님
     'max_grip_width_m': RG2_MODEL_WIDTH_M,
     'force_down_steps': 0,           # 'd' 반복 횟수. 0 = 드라이버 기본(=40 N, RG2 최대)
@@ -129,7 +155,13 @@ PARAM_DEFAULTS = {
     'grip_retries': 1,
 
     # 인식
-    'grasp_source': 'compute_grasp',  # compute_grasp | legacy_trigger | manual
+    # `/grasp/compute_grasp`(pick_fsm_msgs/ComputeGrasp) 서버는 2026-08-09 에
+    # grasp_bridge_node 에 생겼다 — 그전까지 이 ws 어디에도 없어서 기본값이 legacy_trigger 다.
+    # 🔴 **폭(width_m)은 compute_grasp 경로로만 온다.** legacy_trigger 는 std_srvs/Trigger 라
+    #    응답에 폭을 담을 필드가 없어 `default_width_m`(UNVERIFIED 상수)로 전부 때운다.
+    #    물체마다 폭을 맞추려면 `grasp_source:=compute_grasp` 로 바꿔야 한다 — 단
+    #    **실기 미검증이다**(폭 측정·조임 여유 부호 둘 다 2026-08-09 신규).
+    'grasp_source': 'legacy_trigger',  # legacy_trigger | compute_grasp | manual
     'grasp_service': '/grasp/compute_grasp',
     'grasp_trigger_service': '/grasp/compute',
     'grasp_best_topic': '/grasp/best',
@@ -138,10 +170,21 @@ PARAM_DEFAULTS = {
     'default_width_m': 0.06,         # legacy/manual 경로에는 폭 정보가 없다
     'max_alternatives': 5,
 
+    # 인식 브리지 파라미터 푸시 (PERCEIVE 진입 때 1회)
+    # 타겟의 정본은 **이 FSM** 이고, 브리지는 그 값을 받아 쓰는 쪽이다. 이 푸시가 없으면
+    # FSM 의 target 과 브리지의 target_classes 가 각자 살아 어긋나도 아무도 모른다.
+    'bridge_node': '/grasp_bridge_node',   # 비우면 푸시하지 않는다(브리지를 직접 설정할 때)
+    # 이 ws 의 기본 파이프라인은 YOLO 세그다 — 클래스 이름으로 타겟을 고르려면 필수다.
+    # `geometric` 은 클래스를 모르므로 타겟 지정이 불가능하다. 비우면 브리지 설정을 안 건드린다.
+    'bridge_seg_source': 'yolo',           # yolo | geometric | '' (안 건드림)
+
     # 음성
     'voice_enabled': True,
     'keyword_service': '/get_keyword',
-    'target': '',                    # voice_enabled=false 일 때 쓸 고정 타겟
+    # voice_enabled=false 일 때의 **초기** 타겟. 콤마로 여러 클래스도 된다('apple,orange').
+    # 빈 문자열 = 자동(브리지가 본 것 전부에서 점수 최고). 런타임에는 `/pick/target`(String)
+    # 이 이 값을 덮어쓴다 — rqt 패널의 타겟 상자가 그 토픽을 쏜다.
+    'target': '',
 
     'tick_hz': 10.0,
 }
@@ -176,6 +219,24 @@ class TaskManager(Node):
         elif p['grasp_source'] != 'manual':
             raise ValueError(f"grasp_source 값이 이상하다: {p['grasp_source']!r}")
 
+        # ── 브리지 파라미터 푸시 ──────────────────────────
+        # 🔴 2026-08-09 실기: `pick_fsm.launch.py ... target_classes:=apple,orange,banana` 로
+        #    띄웠는데 이 런치엔 그런 인자가 없어 **경고도 없이 무시**됐고, 정작 브리지에는
+        #    이전 실행의 target_classes + seg_source=geometric 이 남아 있어서 매번
+        #    "target_classes 는 seg_source='yolo' 에서만 쓴다" 로 실패했다.
+        #    두 값이 각자 사는 한 같은 사고가 반복된다 → PERCEIVE 마다 여기서 밀어 넣는다.
+        # manual 경로는 사람이 /grasp/best 를 직접 쏘므로 브리지를 안 건드린다.
+        # 노드 이름은 **여기서 한 번만** 읽고 붙잡는다. 클라이언트는 기동 때의 값으로
+        # 만들어지므로, 로그에서만 파라미터를 다시 읽으면 런타임에 그 값이
+        # 바뀌었을 때 "실제로 설정한 노드"와 "메시지가 말하는 노드"가 갈라진다 —
+        # 이번에 고친 사고(정본이 두 군데)와 같은 부류라 여기서 막는다.
+        self._bridge_name = p['bridge_node']
+        self.bridge_param_cli = None
+        if self._bridge_name and p['grasp_source'] != 'manual':
+            self.bridge_param_cli = self.create_client(
+                SetParameters, self._bridge_name.rstrip('/') + '/set_parameters',
+                callback_group=cb)
+
         self._best = None
         self._best_seq = 0
         self._seq_at_call = 0
@@ -192,6 +253,12 @@ class TaskManager(Node):
 
         # ── 관측·조작 인터페이스 ───────────────────────────
         self.state_pub = self.create_publisher(String, '/pick/state', 10)
+        # 타겟은 세 군데서 들어온다: 파라미터(초기값) · 음성(LISTENING) · `/pick/target`(사람).
+        # `_active` 는 그 결과를 되돌려주는 표시용이다 — 지시와 현재값을 같은 토픽에 섞으면
+        # 패널이 자기가 쏜 값을 다시 받아 되먹임이 된다.
+        self.target_pub = self.create_publisher(String, '/pick/target_active', TARGET_QOS)
+        self.create_subscription(String, '/pick/target', self._on_target, TARGET_QOS,
+                                 callback_group=cb)
         self.create_service(Trigger, '/pick/start', self._srv_start, callback_group=cb)
         self.create_service(Trigger, '/pick/approve', self._srv_approve, callback_group=cb)
         self.create_service(Trigger, '/pick/abort', self._srv_abort, callback_group=cb)
@@ -214,25 +281,37 @@ class TaskManager(Node):
         self._octomap_cleared = False
         self._acm = None
         self.target = ''
+        self._target_override = None   # `/pick/target` 로 들어온 값. None = 파라미터를 쓴다
+        self._push_fut = None          # 브리지 SetParameters future (_fut 과 겹치면 안 된다)
+        self._pushed = False           # 이번 PERCEIVE 에서 푸시를 끝냈는지
         self.grasp = None           # PoseStamped, ee_link 목표 자세
         self.width_m = 0.0
         self.alternatives = []
+        self.alternative_widths = []   # alternatives 와 1:1. _st_next_candidate 가 같이 pop 한다
         self.poses = {}             # 'pre_grasp'|'grasp'|'lift' -> PoseStamped
         self.solutions = {}         # 같은 키 -> JointState
         self._plan_i = 0
         self._retry_motion = 0
         self._retry_grip = 0
+        self._retry_perceive = 0
         self._fail_streak = 0       # SPEAK_FAIL 연속 횟수. _st_idle 이 start 마다 0 으로 되돌린다
         self._object_added = False
         self._nag = 0
         self._home_next = State.IDLE   # HOME 도착 후 갈 곳. _srv_reset/_st_release_retry 가 덮어쓴다
 
         self.timer = self.create_timer(1.0 / p['tick_hz'], self._tick, callback_group=cb)
+        self._publish_target(p['target'])
         self.get_logger().info(
-            f"준비됨 — dry_run={p['dry_run']}, require_approval={p['require_approval']}, "
+            f"준비됨 — require_approval={p['require_approval']}, "
             f"grasp_source={p['grasp_source']}, gripper_backend={p['gripper_backend']}")
-        if not p['dry_run']:
-            self.get_logger().warn('⚠️ dry_run=false — 승인하면 로봇이 실제로 움직인다')
+        self.get_logger().info(
+            f"타겟='{p['target'] or '(자동)'}' — 바꾸려면 /pick/target (rqt 패널의 '타겟' 상자). "
+            + (f"PERCEIVE 마다 {p['bridge_node']} 에 target_classes"
+               + (f"+seg_source={p['bridge_seg_source']}" if p['bridge_seg_source'] else '')
+               + ' 를 밀어 넣는다'
+               if self.bridge_param_cli is not None else '브리지 푸시 없음(bridge_node 비어 있음)'))
+        self.get_logger().warn(
+            '⚠️ 계획만 하는 모드는 없다 — 로봇이 실제로 움직인다. 비상정지 버튼을 손에 둘 것')
 
     # ────────────────────────────────────────────────────────
     # 파라미터
@@ -267,6 +346,27 @@ class TaskManager(Node):
             return
         with self._abort_lock:
             self._abort_req = f'로봇 안전정지 감지 (robot_state={int(msg.data)})'
+
+    def _on_target(self, msg):
+        """사람이 잡을 대상을 지정한다. 빈 문자열 = 자동(브리지가 본 것 중 점수 최고).
+
+        콤마로 여러 개도 된다('apple,orange') — 그러면 그 셋 중 점수 최고를 잡는다.
+        ⚠️ **진행 중인 작업에는 적용하지 않는다.** PERCEIVE 는 진입할 때 이 값을 브리지에
+        밀어넣고 시작하므로, 도중에 바꾸면 로그가 가리키는 대상과 실제로 계산된 대상이
+        갈라진다. 다음 `/pick/start` 부터 쓴다.
+        """
+        self._target_override = msg.data.strip()
+        shown = self._target_override or '(자동)'
+        if self.state is State.IDLE:
+            self.get_logger().info(f'타겟 지정: {shown}')
+        else:
+            self.get_logger().warn(
+                f'타겟 지정 {shown} — 진행 중인 {self.state.name} 에는 적용하지 않는다. '
+                '다음 /pick/start 부터다')
+        self._publish_target(self._target_override)
+
+    def _publish_target(self, value: str):
+        self.target_pub.publish(String(data=str(value)))
 
     def _srv_start(self, _req, res):
         if self.state is not State.IDLE:
@@ -319,10 +419,21 @@ class TaskManager(Node):
         self.state = nxt
         self._entered = self.get_clock().now()
         self._fut = None
+        self._push_fut = None
+        self._pushed = False
         self._extra = []
         self._plan_i = 0
         self._nag = 0
         self._octomap_cleared = False
+        if nxt is State.PERCEIVE:
+            # `_perceive_failed()` 내부 재시도는 `_to()` 를 안 거치므로(같은 상태에 머문다)
+            # 여기서 지워도 그 카운트는 안 지워진다 — 여기는 오직 **새 PERCEIVE 진입**(LISTENING
+            # 이후, voice_enabled=false 직행, RELEASE_RETRY 뒤 HOME 경유 재인식)만 잡는다.
+            # 안 지우면 frame 불일치 같은 `_perceive_failed()` 밖의 SPEAK_FAIL 경로(_accept_grasp)
+            # 나, voice_enabled=true 라 `_st_idle` 리셋을 안 거치는 SPEAK_FAIL->LISTENING 루프에서
+            # 이전 시도의 잔여 카운트를 물려받아 재시도 예산이 조용히 줄어든다(cross-review
+            # 2026-08-09 지적).
+            self._retry_perceive = 0
         self.state_pub.publish(String(data=nxt.name))
 
     def _elapsed(self) -> float:
@@ -397,8 +508,11 @@ class TaskManager(Node):
         if self.p('voice_enabled'):
             self._to(State.LISTENING)
         else:
-            self.target = self.p('target')
-            self._to(State.PERCEIVE, f"고정 타겟 '{self.target}'")
+            # `/pick/target` 로 들어온 값이 파라미터를 이긴다 (한 번이라도 들어왔다면).
+            self.target = (self._target_override if self._target_override is not None
+                           else self.p('target'))
+            self._publish_target(self.target)
+            self._to(State.PERCEIVE, f"타겟 '{self.target or '(자동 — 점수 최고)'}'")
 
     def _st_listening(self):
         status, res = self._service(self.kw_cli, Trigger.Request(), self.p('keyword_service'))
@@ -414,6 +528,7 @@ class TaskManager(Node):
             self._to(State.SPEAK_FAIL, '키워드가 비어 있다')
             return
         self.target = words[0]
+        self._publish_target(self.target)
         self._to(State.PERCEIVE, f"타겟 '{self.target}'")
 
     def _st_perceive(self):
@@ -424,6 +539,11 @@ class TaskManager(Node):
             self._accept_grasp(self._best, float(self.p('default_width_m')), 1.0, [])
             return
 
+        # 브리지에 "이번엔 뭘 잡을지"를 먼저 심는다. 끝나기 전에는 계산을 시키지 않는다 —
+        # 순서가 뒤집히면 브리지가 **직전 실행의 타겟**으로 수십 초를 계산한다.
+        if not self._pushed and not self._push_bridge():
+            return
+
         if src == 'compute_grasp':
             req = ComputeGrasp.Request()
             req.target = self.target
@@ -432,11 +552,12 @@ class TaskManager(Node):
             if status != 'done':
                 return
             if res is None or not res.success:
-                self._to(State.SPEAK_FAIL, f'grasp 없음: {getattr(res, "message", "응답 없음")}')
+                self._perceive_failed(f'grasp 없음: {getattr(res, "message", "응답 없음")}')
                 return
             self.get_logger().info(f'ComputeGrasp: {res.message}')
             self._accept_grasp(res.grasp_pose, res.width_m, res.confidence,
-                               list(res.alternatives))
+                               list(res.alternatives),
+                               list(getattr(res, 'alternative_widths', [])))
             return
 
         # legacy_trigger: 지금 graspgenx_perception 의 grasp_bridge_node 가 제공하는 계약.
@@ -449,7 +570,7 @@ class TaskManager(Node):
         if status != 'done':
             return
         if res is None or not res.success:
-            self._to(State.SPEAK_FAIL, f'grasp 없음: {getattr(res, "message", "응답 없음")}')
+            self._perceive_failed(f'grasp 없음: {getattr(res, "message", "응답 없음")}')
             return
         if self._best is None or self._best_seq == self._seq_at_call:
             return                          # 서비스는 끝났지만 포즈가 아직 안 왔다 — 기다린다
@@ -461,7 +582,70 @@ class TaskManager(Node):
             alts.append(ps)
         self._accept_grasp(self._best, float(self.p('default_width_m')), 1.0, alts)
 
-    def _accept_grasp(self, pose: PoseStamped, width_m, confidence, alternatives):
+    def _push_bridge(self) -> bool:
+        """FSM 타겟 -> 브리지 `target_classes`(+`seg_source`). 끝났으면 True.
+
+        `_service()` 와 달리 브리지가 안 떠 있으면 **기다린다** — PERCEIVE 제한시간(120s)이
+        결국 끊는다. 설정 실패는 조용히 넘기지 않는다: 실패하면 브리지가 이전 타겟으로
+        계산해 "엉뚱한 물체를 잡았는데 로그는 맞다고 말하는" 상태가 된다.
+        """
+        if self.bridge_param_cli is None:
+            self._pushed = True
+            return True
+        if self._push_fut is None:
+            if not self.bridge_param_cli.service_is_ready():
+                self.get_logger().warn(
+                    f"{self._bridge_name} 의 set_parameters 를 기다리는 중 "
+                    '(grasp_bridge_node 가 떠 있는지 확인할 것)', throttle_duration_sec=5.0)
+                return False
+            req = SetParameters.Request()
+            req.parameters = [str_param('target_classes', self.target)]
+            seg = self.p('bridge_seg_source')
+            if seg:
+                req.parameters.append(str_param('seg_source', seg))
+            self._push_fut = self.bridge_param_cli.call_async(req)
+            return False
+        if not self._push_fut.done():
+            return False
+        res = self._push_fut.result()
+        self._push_fut = None
+        names = ['target_classes'] + (['seg_source'] if self.p('bridge_seg_source') else [])
+        if res is None or len(res.results) != len(names):
+            self._to(State.SPEAK_FAIL, f"{self._bridge_name} 파라미터 설정 응답이 이상하다")
+            return False
+        bad = [f'{n}: {r.reason}' for n, r in zip(names, res.results) if not r.successful]
+        if bad:
+            self._to(State.SPEAK_FAIL,
+                     f"{self._bridge_name} 파라미터 설정 실패 — " + ' / '.join(bad))
+            return False
+        self._pushed = True
+        seg = self.p('bridge_seg_source')
+        self.get_logger().info(
+            f"브리지 설정: target_classes='{self.target or '(전부)'}'"
+            + (f", seg_source={seg}" if seg else ''))
+        return True
+
+    def _perceive_failed(self, why: str):
+        """PERCEIVE 요청 실패(grasp 없음 포함) 시 재촬영 재시도. `_motion_failed` 와 같은 뼈대다.
+
+        2026-08-09 실기 로그: 정지된 같은 물체·같은 자리에서 collision-free 비율이
+        0%~53%로 요동쳤다(depth 노이즈로 GraspGenX OBB 후보 자체가 흔들린다) — 재촬영
+        한 번으로 5번 중 4번은 살아났다. 실패 사유를 가리지 않고 재시도한다: 브리지가
+        안 뜬 것 같은 하드 오류라도 몇 초 안에 재시도가 소진되어 결국 SPEAK_FAIL 로
+        가는 결과는 같다 — 가려서 얻는 이득이 없다.
+        """
+        self._retry_perceive += 1
+        limit = int(self.p('perceive_retries'))
+        if self._retry_perceive <= limit:
+            self.get_logger().warn(f'{why} — 재촬영 재시도 {self._retry_perceive}/{limit}')
+            self._entered = self.get_clock().now()      # PERCEIVE 제한시간(120s) 갱신
+            self._fut = None                             # 다음 tick 에 새 요청을 쏜다
+            return
+        self._retry_perceive = 0
+        self._to(State.SPEAK_FAIL, why)
+
+    def _accept_grasp(self, pose: PoseStamped, width_m, confidence, alternatives,
+                      alternative_widths=None):
         base = self.p('base_frame')
         if pose.header.frame_id and pose.header.frame_id != base:
             # tf2 로 옮겨줄 수도 있지만, 규약이 어긋난 채 조용히 도는 것보다 멈추는 게 낫다.
@@ -473,8 +657,14 @@ class TaskManager(Node):
         #    조용히 90° 틀어진다. 이 아래로는 전부 ee_link 목표 자세다.
         self.grasp = geo.to_gripper_base(pose)
         self.width_m = self._grip_width(width_m)
-        self.alternatives = [geo.to_gripper_base(a)
-                             for a in list(alternatives)[: int(self.p('max_alternatives'))]]
+        n = int(self.p('max_alternatives'))
+        self.alternatives = [geo.to_gripper_base(a) for a in list(alternatives)[:n]]
+        # 폭은 **후보마다 다르다**(닫힘축이 다르면 같은 물체라도 다르게 잰다). 길이가 안 맞거나
+        # 아예 없으면(legacy/manual 경로) 1등 폭을 복제한다 — 짝을 못 맞춘 채 인덱스로 꺼내면
+        # 조용히 남의 폭으로 닫는다. 대신 그때는 "모른다"가 아니라 "1등과 같다"로 명시한다.
+        w = [float(v) for v in list(alternative_widths or [])[:n]]
+        self.alternative_widths = (w if len(w) == len(self.alternatives)
+                                   else [float(width_m)] * len(self.alternatives))
         # 변환 **후** 포즈로 잰다. 지금은 요 회전이라 +Z 가 같아서 결과가 같지만, 이 변환에
         # 언젠가 평행이동이 붙으면 여기만 조용히 :502/:568 과 갈라진다.
         tcp = geo.tcp_of(self.grasp, fingertip_from_rg2_base_m(self.width_m))
@@ -485,9 +675,19 @@ class TaskManager(Node):
         self._to(State.SCENE_PREP)
 
     def _grip_width(self, width_m) -> float:
-        """물체 폭 + 클리어런스, 모델/하드웨어 한계로 클램프."""
-        w = float(width_m) + float(self.p('grip_clearance_m'))
-        return max(0.0, min(float(self.p('max_grip_width_m')), w))
+        """물체 폭 -> 그리퍼 목표 개구 폭 [m]. 부호 규약은 `rg2.grip_target_width_m` 참고.
+
+        여기서 하는 건 파라미터를 읽어 넘기는 것과, 0(=폭 모름)을 기본값으로 대체하는 것뿐이다.
+        0 을 그대로 흘리면 완전히 닫혀 물체를 으깬다.
+        """
+        w = float(width_m)
+        if w <= 0.0:
+            w = float(self.p('default_width_m'))
+            self.get_logger().warn(
+                f'폭을 못 받았다(0) — default_width_m={w * 1000:.0f} mm 로 대체한다. '
+                'UNVERIFIED 상수라 물체에 맞는다는 보장이 없다')
+        return grip_target_width_m(w, float(self.p('grip_clearance_m')),
+                                   float(self.p('max_grip_width_m')))
 
     def _st_scene_prep(self):
         """2단계다: 현재 ACM 을 **읽어서** 거기에 얹은 뒤 적용한다.
@@ -592,10 +792,14 @@ class TaskManager(Node):
             self._to(State.SPEAK_FAIL, '후보 소진')
             return
         self.grasp = self.alternatives.pop(0)
+        # 포즈만 갈아타고 폭을 그대로 두면 새 후보의 닫힘축에 맞지 않는 폭으로 닫는다.
+        if self.alternative_widths:
+            self.width_m = self._grip_width(self.alternative_widths.pop(0))
         tcp = geo.tcp_of(self.grasp, fingertip_from_rg2_base_m(self.width_m))
         self.get_logger().info(
             f'다음 후보 (남은 {len(self.alternatives)}개) '
-            f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f})')
+            f'손끝=({tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}) '
+            f'폭={self.width_m * 1000:.1f} mm')
         self._to(State.PLAN)
 
     def _st_wait_approval(self):
@@ -623,11 +827,10 @@ class TaskManager(Node):
         if self._call is None:
             if not self.moveit.move.server_is_ready():
                 return
-            dry = bool(self.p('dry_run'))
-            self.get_logger().info(f'{key}: {"계획만(dry_run)" if dry else "계획+실행"}')
+            self.get_logger().info(f'{key}: 계획+실행 (pipeline={self.p("planning_pipeline")})')
             self._call = self.moveit.move_to_joints_async(
                 js, self.p('planning_group'), list(self.p('joint_names')),
-                plan_only=dry,
+                plan_only=False,
                 vel_scale=self.p('vel_scale'), acc_scale=self.p('acc_scale'),
                 planning_time=self.p('planning_time'), attempts=self.p('planning_attempts'),
                 tolerance=self.p('joint_tolerance'),

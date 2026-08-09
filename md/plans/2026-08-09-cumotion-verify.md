@@ -189,15 +189,17 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # T7 (컨테이너). 이후 B-2 까지 이것만 띄워두고 FSM 만 재기동한다
 ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false octomap:=true cumotion:=true
 
-# README §2 의 5번 — 호스트. dry_run/voice 를 명시적으로 끈다 (README §201 "기본값이 안전 쪽이다")
+# README §2 의 5번 — 호스트. voice 를 끈다 (dry_run 은 2026-08-09 제거돼 인자가 없다)
 ros2 launch pick_fsm pick_fsm.launch.py \
   planning_pipeline:=ompl \
-  grasp_source:=legacy_trigger voice:=false target:=apple dry_run:=false
+  grasp_source:=legacy_trigger voice:=false target:=apple
 ```
 > 1·3·3.5·4번(bringup / 카메라 / YOLO 컨테이너 / grasp_bridge 호스트)은 README 그대로.
 > `require_approval` 은 기본 `true` 라 매 사이클 `/pick/approve` 가 필요하다 — 그대로 둔다.
-> 🔴 **`dry_run:=false` 를 빠뜨리면 실험이 성립하지 않는다.** 기본값이 `true`(=`plan_only`)라
-> 로봇이 아예 안 움직인다 (`pick_fsm.launch.py:35`, `pick_fsm.yaml:8`).
+> 🔴 ~~`dry_run:=false` 를 빠뜨리면 실험이 성립하지 않는다~~ → **2026-08-09 `dry_run` 제거.**
+> 이제 FSM 은 항상 실제로 움직이므로 이 실험의 전제가 기본으로 충족된다.
+> 🔴 옛 인자를 붙여도 **경고 없이 무시된다**(2026-08-09 실측) — `dry_run:=true` 를 붙여
+> "안전 모드로 돌렸다"고 착각하는 게 이 변경의 유일한 새 위험이다.
 > `voice:=false` 도 필수 — 기본값 `true` 인데 `voice_processing` 이 `COLCON_IGNORE` 라
 > `/get_keyword` 가 없어서 FSM 이 그 앞에서 멈춘다. `config/testcommand.md:92-94` 와 같은 인자 조합이다.
 >
@@ -218,7 +220,7 @@ T7 은 그대로 두고 FSM 만 재기동:
 ```bash
 ros2 launch pick_fsm pick_fsm.launch.py \
   planning_pipeline:=isaac_ros_cumotion \
-  grasp_source:=legacy_trigger voice:=false target:=apple dry_run:=false
+  grasp_source:=legacy_trigger voice:=false target:=apple
 ```
 - [ ] 멈추는가? **예상: 멈춘다** (트리거는 octomap 이 낸다)
 - [ ] B-0 의 로그 줄이 나오는가?

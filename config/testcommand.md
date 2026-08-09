@@ -30,10 +30,13 @@ owns:    실행 명령어(호스트/컨테이너 구분) · 노드 지도 · 단
 #   🔴 alias(`reals`)를 쓰지 말고 아래처럼 인자를 직접 친다. **alias 정의가 머신마다 다르다**
 #      (개인PC `.bashrc:174` 는 인자 없음 → 424x240x15. GPU PC 는 다를 수 있다)
 #      내 머신 것 확인: alias reals
-ros2 launch m0609_rg2_bringup camera.launch.py depth_profile:=480x320x15 color_profile:=480x320x15
-#   ⚠️ UNVERIFIED: `480x320` 이 D435i 가 지원하는 프로파일인지 실기에서 확인 안 했다.
-#      카메라 연결 후 1회: rs-enumerate-devices | grep -i "480x320\|Depth\|Color"
-#      스트림이 안 열리면 이 값이 원인이다 — 지원 목록에서 가장 가까운 값으로 바꾼다
+ros2 launch m0609_rg2_bringup camera.launch.py depth_profile:=424x240x15 color_profile:=424x240x15
+#   ✅ 2026-08-09 실기 확정: 이 값은 런치 기본값과 같다 — 사실 인자를 안 줘도 된다.
+#      ~~480x320x15~~ 는 **D435i 가 지원하지 않는 프로파일**이라 폐기했다(rs-enumerate-devices 실측).
+#      Color: 320x180 320x240 424x240 640x360 640x480 848x480 960x540 1280x720 1920x1080
+#      Depth: 256x144 424x240 480x270 640x360 640x480 848x100 848x480 1280x720
+#      ⚠️ depth 의 `480x270` 과 헷갈리지 말 것 — `480x320` 은 어느 쪽에도 없다.
+#   ⚠️ 캘리브 데이터 수집 때만 예외로 1280x720 (424x240 으로 찍으면 코너가 안 잡혀 불합격난다)
 
 # T2 로봇 (실기) — rviz:=false 필수, moveit이 자기 RViz를 띄운다
 ros2 launch m0609_rg2_bringup bringup.launch.py mode:=real host:=192.168.1.100 rviz:=false
@@ -120,7 +123,7 @@ rdm && ros2 node list                      # 남의 계정 move_group이 있는�
 | 명령 | 경로 A (이 문서 원본) | 경로 B (`test_grap_plan`) | 실제 차이 |
 |---|---|---|---|
 | `bringup.launch.py` | `rviz:=false` | `model:=m0609` (rviz 미지정) | 🔴 **B가 위험하다.** `rviz` 기본값이 `true`라 B는 bringup RViz를 띄우고 moveit RViz와 2개가 된다 — launch 파일 26~28행 주석이 "moveit과 함께 쓸 땐 false"라고 직접 적어놨다. `model`은 **선언된 인자가 아니라 조용히 무시된다**(실측 확인: 미선언 인자는 에러 없이 무시). bringup이 `model='m0609'`를 하드코딩(46행)하므로 결과는 같지만 **아무 일도 안 하는 인자**다 |
-| `camera.launch.py` | `848x480x15` (alias `reals` 경유로 표기) | 인자 없음 | ✅ **2026-08-08 결정: 둘 다 버리고 `480x320x15` 로 통일**(위 T1). 🔴 **alias 를 경유하지 말고 인자를 직접 쓴다** — `reals` 의 정의가 **머신마다 다르다**(개인PC `.bashrc:174` 에서는 인자가 없어 기본 `424x240x15` 로 뜬다. GPU PC 의 `.bashrc` 는 이 문서 표기대로 848 일 수 있으나 **확인 못 했다**). 그래서 "같은 명령을 쳤는데 해상도가 다르다"가 성립한다. 참고로 GraspGenX 실측 기록(README:34 → :258)은 848×480 → **1280×720** 로 바뀌는데, 그건 `alias realsense`(다른 런치, color `1280x720x30`)로 띄웠고 `aligned_depth_to_color` 가 **color 를 따라가기** 때문이다(`constraints.md:25`) |
+| `camera.launch.py` | `848x480x15` (alias `reals` 경유로 표기) | 인자 없음 | ✅ **해결(2026-08-09 실기).** ~~2026-08-08 결정: `480x320x15` 로 통일~~ 은 **그 값이 D435i 미지원이라 폐기됐다** → **`424x240x15`(= 런치 기본값)로 통일**(위 T1). 🔴 **alias 를 경유하지 말고 인자를 직접 쓴다** — `reals` 의 정의가 **머신마다 다르다**(개인PC `.bashrc:174` 에서는 인자가 없어 기본 `424x240x15` 로 뜬다. GPU PC 의 `.bashrc` 는 이 문서 표기대로 848 일 수 있으나 **확인 못 했다**). 그래서 "같은 명령을 쳤는데 해상도가 다르다"가 성립한다. 참고로 GraspGenX 실측 기록(README:34 → :258)은 848×480 → **1280×720** 로 바뀌는데, 그건 `alias realsense`(다른 런치, color `1280x720x30`)로 띄웠고 `aligned_depth_to_color` 가 **color 를 따라가기** 때문이다(`constraints.md:25`) |
 | `moveit.launch.py` | `octomap:=true cumotion:=true` | `standalone:=false` 만 | `octomap` 기본값은 `true`라 같다. **`cumotion`은 기본값 `false`** (51행) → 경로 B에는 cuMotion 파이프라인이 **안 올라온다.** `pick_fsm ... planning_pipeline:=isaac_ros_cumotion`을 쓰려면 T3를 `cumotion:=true`로 띄워야 한다. 단 그 인자는 **Isaac ROS 컨테이너에서만** 켤 수 있다(48행 주석) |
 
 **정하고 나면 이 표를 지우고 위 "명령어만" 블록에 반영한다.**

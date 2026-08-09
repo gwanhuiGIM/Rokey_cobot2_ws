@@ -60,7 +60,8 @@ ros2 topic echo /grasp/best_tcp --once     # 손끝 좌표를 자로 잰 물체 
 # ── T6. FSM — 실제로 움직임 ─────────────────────────────────
 export ROS_DOMAIN_ID=93 && source install/setup.bash
 ros2 launch pick_fsm pick_fsm.launch.py \
-  grasp_source:=legacy_trigger voice:=false target:=apple dry_run:=false
+  grasp_source:=legacy_trigger voice:=false target:=apple
+#   🔴 dry_run 인자는 2026-08-09 제거됐다. 붙여도 경고 없이 무시되고 로봇은 움직인다
 
 # 조작 (다른 터미널)
 ros2 topic echo /pick/state &                              # 상태 감시

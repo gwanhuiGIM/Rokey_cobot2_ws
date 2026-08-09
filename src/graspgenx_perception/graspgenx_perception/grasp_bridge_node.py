@@ -22,6 +22,7 @@
    실행은 MoveIt 쪽에서 사람이 승인한 뒤에 한다.
 """
 
+import datetime
 import json
 import os
 import shutil
@@ -42,6 +43,12 @@ from graspgenx_perception.capture_graspgenx_scene import (
     segment, write_scene,
 )
 
+try:
+    from pick_fsm_msgs.srv import ComputeGrasp
+except ImportError:                                          # pragma: no cover
+    # 선택적 의존이다 — 없으면 legacy Trigger 경로만 연다(__init__ 참고).
+    ComputeGrasp = None
+
 EXTRA_DEFAULTS = {
     # 워커
     'graspgenx_root': os.path.expanduser('~/cobot2_ws/isaac_ros-dev/src/GraspGenX'),
@@ -49,6 +56,26 @@ EXTRA_DEFAULTS = {
                                   'graspgen_worker.py'),
     'gripper': 'onrobot_RG2',
     'worker_timeout_sec': 60.0,
+    # ── 워커 기동 인자 (아래 4개는 `graspgen_worker.py` 의 argparse 기본값과 같은 값) ──
+    # ⚠️ **워커 기동 시점에 argv 로 고정된다.** 상주 프로세스라 `ros2 param set` 만으로는
+    #    안 바뀐다 — 바꾼 뒤 워커를 죽여야(브리지가 다음 요청에서 다시 띄운다) 적용된다.
+    # 이걸 노출하는 이유: 2026-08-09 실기에서 `[collision] 0/43 grasps collision-free` 로
+    # 후보가 전멸했는데, 임계값을 낮춰볼 수단이 노드 쪽에 하나도 없었다.
+    # 🔴 `collision_threshold` 는 **그리퍼 표면점과 씬점의 최소거리**다. 씬 점군에는
+    #    seg 라벨과 무관하게 유효 depth 가 전부 들어가므로 **테이블도 장애물이다**
+    #    (`constraints.md:1203`). 납작한 물체를 위에서 잡으면 손끝이 테이블에서 2cm 안에
+    #    들어와 **정상 grasp 까지 전멸**한다 — 0개가 나오면 여기부터 의심한다.
+    'collision_threshold': 0.02,
+    'num_grasps': 64,               # 8GB VRAM 기준. 올리면 OOM 위험(아래 주석)
+    'grasp_threshold': 0.5,
+    'moe_obb_density': 'dense',     # sparse | dense | dense-topandside
+    # true 면 워커가 `scripts/demo_scene_pc.py` 와 같은 viser 웹뷰어를 띄우고, 매 compute()
+    # 마다 방금 캡처한 씬(실제 포인트클라우드) + grasp 후보 + 1등 콜리전 메시로 자동 갱신한다.
+    # 브라우저에서 http://<이 머신>:live_viz_port 로 본다. **기본 켜짐**(2026-08-09) —
+    # 발표·디버깅에 상시 쓰기로 함. 끄려면 `live_viz:=false`(런치) 또는
+    # `ros2 param set /grasp_bridge_node live_viz false`(워커 재기동 전에만 먹는다).
+    'live_viz': True,
+    'live_viz_port': 8080,
     # 선택 정책 (계획서 §1-3 5번). 전부 실측 튜닝값이다
     # GraspGenX grasp 의 원점은 **그리퍼 base** 이고 손끝(TCP)은 +Z 로 이만큼 떨어져 있다
     # (RG2 config.json "fingertip"[2] = 0.18). 접근이 30° 기울면 base 는 물체에서 9cm 옆에
@@ -101,14 +128,28 @@ def tcp_of(g, offset):
 
 
 def select(objects, p):
-    """워커 결과 -> (label, T, score, 진단문자열). 없으면 (None, None, None, 이유).
+    """워커 결과 -> (label, T, score, width, g_ok, s_ok, w_ok, 진단문자열). 없으면 앞 7개가 None.
 
     grasp 는 이미 base_link 프레임이다(씬의 camera_pose 를 로더가 적용한다).
+    `width` 는 **고른 grasp 의** 닫힘축 폭 [m] 이다(`graspgen_worker.grasp_widths`).
+    후보마다 다르므로 물체 대표값이 아니다 — 대안으로 갈아탈 때 폭도 같이 갈아타야 한다.
     """
     lines, best = [], None
     for label, d in sorted(objects.items()):
         g = np.asarray(d['grasps'], dtype=float).reshape(-1, 4, 4)
         s = np.asarray(d['scores'], dtype=float)
+        # 구버전 워커는 widths 를 안 낸다. 0.0 은 "모름" 이고, 소비자(FSM)가 자기
+        # default_width_m 으로 대체한다 — 여기서 그럴듯한 값을 지어내면 그리퍼가 조용히 헛닫힌다.
+        w = np.asarray(d.get('widths') or [0.0] * len(g), dtype=float)
+        if len(w) != len(g):
+            # 워커 쪽은 grasps/scores/widths 를 같은 keep 마스크로 슬라이스해 항상 길이가
+            # 맞지만, 여기선 그 불변식을 신뢰만 하고 확인하지 않았었다(cross-review 2026-08-09).
+            # 안 맞으면 아래 w[i]/w[ok] 가 IndexError 나 "boolean index did not match" 로
+            # 죽는데, 스택트레이스만 남고 원인이 안 드러난다 — "모름"으로 낮춰서 계속 돈다.
+            self.get_logger().warn(
+                f'{label}: widths 길이 {len(w)} != grasps {len(g)} — 워커 응답이 깨졌다. '
+                '폭을 전부 "모름"(0.0) 으로 낮춘다')
+            w = np.zeros(len(g), dtype=float)
         if len(g) == 0:
             lines.append(f'  {label}: 후보 0')
             continue
@@ -130,9 +171,9 @@ def select(objects, p):
         if p['target'] and label != p['target']:
             continue
         if best is None or s[i] > best[2]:
-            best = (label, g[i], float(s[i]), g[ok], s[ok])
+            best = (label, g[i], float(s[i]), float(w[i]), g[ok], s[ok], w[ok])
     if best is None:
-        return None, None, None, None, None, '\n'.join(lines) or '물체 없음'
+        return (None,) * 7 + ('\n'.join(lines) or '물체 없음',)
     return (*best, '\n'.join(lines))
 
 
@@ -143,6 +184,7 @@ class GraspBridge(SceneCapture):
             self.declare_parameter(k, v, ParameterDescriptor(dynamic_typing=True))
         self.lock = threading.Lock()
         self.worker = None
+        self.result = None          # 마지막 compute() 결과 (포즈·폭·대안). lock 안에서만 만진다
         cb = ReentrantCallbackGroup()
         self.pub_best = self.create_publisher(PoseStamped, '/grasp/best', 10)
         # RViz 육안 확인용. /grasp/best 는 그리퍼 base 라 물체 옆에 뜬다 — 이쪽이 물체 위다
@@ -150,7 +192,20 @@ class GraspBridge(SceneCapture):
         self.pub_all = self.create_publisher(PoseArray, '/grasp/candidates', 10)
         self.srv = self.create_service(Trigger, '/grasp/compute', self.on_compute,
                                        callback_group=cb)
-        self.get_logger().info('준비됨 — ros2 service call /grasp/compute std_srvs/srv/Trigger')
+        # ComputeGrasp 는 pick_fsm_msgs 가 빌드돼 있을 때만 연다. 이 패키지가 없다고 브리지가
+        # 통째로 안 뜨면 legacy Trigger 경로까지 같이 죽는다 — 그쪽은 이 메시지가 필요 없다.
+        self.srv_grasp = None
+        if ComputeGrasp is None:
+            self.get_logger().warn(
+                'pick_fsm_msgs 를 import 하지 못해 /grasp/compute_grasp 를 열지 않는다. '
+                '폭(width_m)은 이 서비스로만 나간다 — Trigger 응답에는 담을 필드가 없다')
+        else:
+            self.srv_grasp = self.create_service(
+                ComputeGrasp, '/grasp/compute_grasp', self.on_compute_grasp, callback_group=cb)
+        self.get_logger().info(
+            '준비됨 — ros2 service call /grasp/compute std_srvs/srv/Trigger'
+            + ('  |  /grasp/compute_grasp pick_fsm_msgs/srv/ComputeGrasp (폭 포함)'
+               if self.srv_grasp else ''))
 
     def extra(self):
         out = dict(self.params())
@@ -164,7 +219,13 @@ class GraspBridge(SceneCapture):
         if self.worker and self.worker.poll() is None:
             return True
         cmd = ['uv', 'run', '--no-sync', 'python', p['worker_script'],
-               '--gripper', p['gripper']]
+               '--gripper', p['gripper'],
+               '--collision_threshold', str(p['collision_threshold']),
+               '--num_grasps', str(int(p['num_grasps'])),
+               '--grasp_threshold', str(p['grasp_threshold']),
+               '--moe_obb_density', str(p['moe_obb_density'])]
+        if p['live_viz']:
+            cmd += ['--live_viz', '--live_viz_port', str(int(p['live_viz_port']))]
         self.get_logger().info(f"워커 기동(모델 로딩 수십 초): {' '.join(cmd)}")
         self.worker = subprocess.Popen(
             cmd, cwd=p['graspgenx_root'], stdin=subprocess.PIPE,
@@ -193,6 +254,7 @@ class GraspBridge(SceneCapture):
         return json.loads(box['l'])
 
     def on_compute(self, request, response):
+        """legacy: std_srvs/Trigger. 포즈는 응답이 아니라 `/grasp/best` 로 나간다."""
         if not self.lock.acquire(blocking=False):
             response.success, response.message = False, '이미 계산 중이다'
             return response
@@ -205,8 +267,49 @@ class GraspBridge(SceneCapture):
             self.lock.release()
         return response
 
-    def compute(self):
+    def on_compute_grasp(self, request, response):
+        """pick_fsm_msgs/ComputeGrasp — 포즈·**폭**·대안을 응답에 담는 정본 계약.
+
+        Trigger 경로와 계산은 완전히 같다(`compute()` 하나만 있다). 다른 건 폭이 실려
+        나간다는 것뿐이다 — Trigger 응답에는 폭을 담을 필드가 없어서 소비자가
+        `default_width_m` 상수로 때웠다.
+        """
+        if not self.lock.acquire(blocking=False):
+            response.success, response.message = False, '이미 계산 중이다'
+            return response
+        try:
+            # 요청이 대상을 지정하면 그 호출에 한해 파라미터를 덮는다(파라미터 자체는 안 건드린다
+            # — 덮어쓰면 다음 Trigger 호출이 조용히 남의 타겟으로 돈다).
+            over = {}
+            if request.target:
+                over['target_classes'] = request.target
+            if request.min_confidence > 0.0:
+                over['min_score'] = float(request.min_confidence)
+            response.success, response.message = self.compute(over)
+            if response.success and self.result:
+                r = self.result
+                response.grasp_pose = r['pose']
+                response.width_m = r['width_m']
+                response.confidence = r['confidence']
+                response.alternatives = r['alternatives']
+                response.alternative_widths = r['alternative_widths']
+        except Exception as e:                                   # noqa: BLE001
+            self.get_logger().error(f'{type(e).__name__}: {e}')
+            response.success, response.message = False, f'{type(e).__name__}: {e}'
+        finally:
+            self.lock.release()
+        return response
+
+    def compute(self, overrides=None):
+        """계산 -> (성공, 메시지). 성공하면 `self.result` 에 포즈·폭·대안을 남긴다.
+
+        반환값을 (성공, 메시지) 로 유지하는 이유: 실패 return 이 10군데 가까이 흩어져 있어
+        arity 를 늘리면 전부 손대야 하고, 한 군데만 놓치면 조용히 튜플 언팩에서 죽는다.
+        `self.result` 는 호출자가 잡은 `self.lock` 안에서만 읽고 쓴다.
+        """
+        self.result = None
         p = self.extra()
+        p.update(overrides or {})
         if not self.start_worker(p):
             return False, '워커 기동 실패'
 
@@ -278,9 +381,20 @@ class GraspBridge(SceneCapture):
             if not (labels > LABEL_OBJ_BASE).any():
                 # segment_from_labels 는 빈 seg 를 None 이 아니라 전부 0 으로 돌려준다. 그대로
                 # 두면 씬을 쓰고 워커를 왕복한 뒤 '물체 없음'만 가서 원인이 안 보인다.
-                return False, (f"target_classes='{p['target_classes']}' 에 해당하는 물체가 "
-                               f'없다. 이름이 맞는지(COCO 인덱스가 아니라 **이름**, 대소문자 '
-                               f'구분) 확인할 것.\n{cdiag}')
+                #
+                # 🔴 **YOLO 가 실제로 낸 클래스를 같이 찍는다.** 예전엔 "이름이 맞는지 확인"
+                #    까지만 말해서 오타를 의심하게 만들었는데, 진짜 원인은 보통
+                #    "detect 목록에 없어서 YOLO 가 애초에 그걸 안 찾고 있었다" 쪽이다.
+                #    이 둘은 눈으로 구분이 안 된다 — 실제로 본 목록이 있어야 갈린다.
+                seen = sorted({n for m in self.yolo_classes.values() for n in m.values()})
+                return False, (
+                    f"target_classes='{p['target_classes']}' 에 해당하는 물체가 없다.\n"
+                    f"  YOLO 가 이번에 실제로 낸 클래스: {seen or '없음'}\n"
+                    '  → 이 목록에 타겟이 없으면 오타가 아니라 **탐지 대상 문제**다: '
+                    'config/objects.yaml 의 `detect` 에 그 이름을 넣고 yolo_seg_node 를 '
+                    '다시 띄울 것 (그 파일은 __init__ 에서 한 번만 읽는다).\n'
+                    '  → 목록에 있는데도 실패했다면 그때가 오타/대소문자를 볼 차례다.\n'
+                    f'{cdiag}')
 
         seg, label_map, diag = segment(depth, self.K, T_base_cam, p, labels)
         if seg is None:
@@ -292,6 +406,10 @@ class GraspBridge(SceneCapture):
         #    디렉토리+즉시 삭제였을 때는 이게 불가능했다). scene id 를 호출마다 마이크로초
         #    타임스탬프로 잡아 이전 호출 기록을 덮어쓰지 않는다(초 단위면 빠른 재시도가
         #    충돌할 수 있어 %f 를 붙인다, cross-review 2026-08-07) — `scene` 파라미터를
+        #    🔴 `time.strftime` 은 `%f` 를 모른다 — 디렉토리 이름에 **리터럴 `%f` 가 그대로**
+        #    남아 마이크로초 구분이 전혀 안 되고 있었다(2026-08-09, 저장된 씬이 전부
+        #    `20260809_161221_%f`). 같은 초의 재시도가 앞 씬을 덮어써 진단 근거가 사라진다.
+        #    `%f` 는 `datetime.strftime` 에만 있다 — 그래서 `datetime` 을 쓴다.
         #    명시하면 그 이름을 그대로 쓴다(재현용 고정 씬을 만들 때). 단 `scene='00'`(기본값과
         #    같은 문자열)을 "명시"해도 구분할 수 없어 타임스탬프로 대체된다 — 고정 씬이
         #    필요하면 `00` 이외의 이름을 쓸 것.
@@ -299,7 +417,8 @@ class GraspBridge(SceneCapture):
         #    실행한 곳이고 워커의 cwd 는 graspgenx_root 다(start_worker). 상대경로를 넘기면
         #    워커가 <graspgenx_root>/output/00 을 찾다가
         #    "FileNotFoundError: No meta_data.json in output/00" 으로 죽는다 (2026-08-07).
-        scene = p['scene'] if p['scene'] != '00' else time.strftime('%Y%m%d_%H%M%S_%f')
+        scene = (p['scene'] if p['scene'] != '00'
+                 else datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
         scene_dir = os.path.abspath(os.path.expanduser(
             os.path.join(p['out_dir'] or default_out_dir(), scene)))
         self.get_logger().info(f'씬 저장(영구): {scene_dir}')
@@ -317,7 +436,7 @@ class GraspBridge(SceneCapture):
             return False, f"워커 오류: {res.get('error')}"
 
         # 4) 선택
-        label, T, score, g_ok, _s_ok, sel_diag = select(res.get('objects', {}), p)
+        label, T, score, width_m, g_ok, _s_ok, w_ok, sel_diag = select(res.get('objects', {}), p)
         self.get_logger().info(f'선택 단계:\n{sel_diag}')
         if label is None:
             return False, f'조건을 통과한 grasp 0개\n{sel_diag}'
@@ -338,6 +457,22 @@ class GraspBridge(SceneCapture):
         arr.poses = [pose_msg(g) for g in g_ok]
         self.pub_all.publish(arr)
 
+        # 대안 폭을 같이 담는다. 폭은 **후보마다 다르다**(닫힘축이 후보마다 달라서다) —
+        # 1등 폭만 주면 소비자가 대안으로 갈아탄 뒤에도 1등 폭으로 닫아 헛집는다.
+        alts = []
+        for g in g_ok:
+            a = PoseStamped()
+            a.header = msg.header
+            a.pose = pose_msg(g)
+            alts.append(a)
+        self.result = {
+            'pose': msg,
+            'width_m': float(width_m),
+            'confidence': float(score),
+            'alternatives': alts,
+            'alternative_widths': [float(v) for v in w_ok],
+        }
+
         t = T[:3, 3]
         tcp = tcp_of(T, p['tcp_offset_m'])[0]
         # 'obj_2' 만 찍으면 어느 물체였는지 로그로 되짚을 수 없다 — 클래스를 붙여 남긴다.
@@ -346,7 +481,8 @@ class GraspBridge(SceneCapture):
         return True, (f'{label} 선택: score={score:.3f}, '
                       f'**손끝**=({tcp[0]:+.3f}, {tcp[1]:+.3f}, {tcp[2]:+.3f}) {p["base_frame"]}, '
                       f'그리퍼base=({t[0]:+.3f}, {t[1]:+.3f}, {t[2]:+.3f}), '
-                      f'접근축 z={T[2, 2]:+.2f}, 후보 {len(g_ok)}개\n{sel_diag}')
+                      f'접근축 z={T[2, 2]:+.2f}, 폭={width_m * 1000:.1f} mm, '
+                      f'후보 {len(g_ok)}개\n{sel_diag}')
 
     def destroy_node(self):
         if self.worker and self.worker.poll() is None:

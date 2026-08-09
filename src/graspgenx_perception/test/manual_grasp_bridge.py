@@ -53,21 +53,30 @@ far = grasp([1.2, 0.0, 0.1])                      # 도달 초과
 up = grasp([0.5, 0.0, 0.1], approach_down=False)  # 접근축이 위
 objects = {
     'obj_1': {'grasps': [good.tolist(), far.tolist(), up.tolist()],
-              'scores': [0.6, 0.99, 0.99], 'n_pts': 500},
+              'scores': [0.6, 0.99, 0.99], 'widths': [0.041, 0.088, 0.077], 'n_pts': 500},
 }
-label, T, score, g_ok, s_ok, diag = select(objects, p)
+label, T, score, width, g_ok, s_ok, w_ok, diag = select(objects, p)
 print(diag)
 assert label == 'obj_1' and score == 0.6, (label, score)
 assert len(g_ok) == 1, f'도달 초과/접근축 위 가 살아남았다: {len(g_ok)}'
 assert np.allclose(T[:3, 3], [0.5, 0.0, 0.1])
+# 폭은 **고른 grasp 의** 것이어야 한다. 필터에 걸린 후보(0.088/0.077)의 폭이 새어나오면
+# 그리퍼가 엉뚱한 폭으로 닫는다 — 포즈는 맞는데 안 잡히는, 가장 헷갈리는 실패다.
+assert width == 0.041, width
+assert list(w_ok) == [0.041], list(w_ok)
 
 # 점수 미달만 있는 경우 -> 선택 없음
 low = {'obj_1': {'grasps': [good.tolist()], 'scores': [0.2], 'n_pts': 500}}
 assert select(low, p)[0] is None
 
 # 후보 0개 -> 선택 없음(예외 아님)
-empty = {'obj_1': {'grasps': [], 'scores': [], 'n_pts': 500}}
+empty = {'obj_1': {'grasps': [], 'scores': [], 'widths': [], 'n_pts': 500}}
 assert select(empty, p)[0] is None
+
+# 구버전 워커(widths 키 없음) -> 폭 0.0 = "모름". 소비자가 기본값으로 대체한다.
+# 여기서 그럴듯한 값을 지어내면 그리퍼가 조용히 헛닫힌다.
+now = {'obj_1': {'grasps': [good.tolist()], 'scores': [0.6], 'n_pts': 500}}
+assert select(now, p)[3] == 0.0, select(now, p)[3]
 
 # 여러 물체 중 점수 최고를 고른다
 two = {

@@ -276,6 +276,11 @@ ros2 bag info <bag>
 
 **의도적으로 뺀 것**
 - `depth/color/points` — depth image + camera_info로 재생성되는 파생물인데 ~390 MB/s. §3에서 만든다.
+  > ⚠️ **이 390 MB/s 는 고해상도 프로파일 기준이다.** 2026-08-09 실측(`424x240x15`)에서는
+  > **20.0 MB/s** 였다 — 40배 넘게 벌어지므로 **프로파일을 안 밝히고 이 숫자를 인용하지 말 것.**
+  > 클라우드는 비조밀(유효 depth 만 실림)이라 씬에 따라서도 흔들린다.
+  > 실측표는 [[ws/cobot2/context/constraints]] "카메라 토픽 실측 대역폭"이 단일 출처다.
+  > (녹화에서 빼는 결정 자체는 어느 프로파일에서도 그대로 유효하다.)
 - `color/image_raw`(raw) — compressed와 중복.
 - `*/theora`, `*/compressedDepth` — 재생 시 디코드 실패가 잦다.
 - `*/metadata` — 재생 파이프라인이 안 쓴다.

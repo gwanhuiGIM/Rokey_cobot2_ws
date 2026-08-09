@@ -54,6 +54,7 @@ from pathlib import Path
 # (VS Code는 워크스페이스 루트에서 실행하고 터미널은 이 디렉토리에서 실행해 서로 어긋났다.)
 DATA_DIR = Path(__file__).resolve().parent / "data"
 import json
+from datetime import datetime
 from scipy.spatial.transform import Rotation
 import numpy as np
 import cv2
@@ -336,10 +337,15 @@ def report_residuals(A, B, theta, b_x):
          실제로 잔차 큰 쌍들을 한꺼번에 빼면 결과가 80 mm 옮겨간 반면 LOO는 3.6 mm였다.
       → LOO가 작다는 건 "자세 하나에 끌려가지는 않는다"까지만 말한다. 정확도의 근거가 아니다.
 
-    ⚠️ 아래 임계값 중 **근거가 있는 건 20 mm뿐**이다
-    (`m0609_rg2_moveit/launch/moveit.launch.py`의 `octomap_resolution: 0.02`와 일치).
-    # UNVERIFIED: 회전 15°, 병진 30 mm, RMS 1.0/0.5 px는 구현자가 임의로 정한 값이고
-    # 출처가 없다. 현장 요구정밀도로 교체할 것.
+    ⚠️ **임계값의 근거 (2026-08-09 재감사 — 이전 주석은 낡아 있었다)**
+      - 20 mm의 근거로 적혀 있던 `octomap_resolution: 0.02`는 **더 이상 유효하지 않다.**
+        그 값은 `moveit.launch.py:162`의 `setdefault` 폴백일 뿐이고, 실제로는
+        `sensors_3d.yaml:30`의 **0.05**가 이긴다(2026-08-09 실행중 move_group에
+        `ros2 param get /move_group octomap_resolution` → 0.05 로 확인).
+      - 그렇다고 임계를 50 mm로 **늘리면 안 된다.** octomap voxel은 장애물 회피 쪽 요구고,
+        이 캘리브의 진짜 소비자는 **grasp 좌표**다(pick_fsm). 둘 중 **엄한 쪽**이 임계를 정한다.
+    # UNVERIFIED: 20/30 mm, 회전 15°, RMS 1.0/0.5 px 모두 이제 실측 근거가 없다.
+    # RG2 grasp 성공률로 "몇 mm까지 허용되는가"를 재서 교체할 것. 그전까지는 보수적으로 20 mm 유지.
     """
     print("\n[AX=XB 잔차] (X = 방금 푼 base<-cam)")
     print("  쌍   A회전량   회전잔차   병진잔차")
@@ -375,17 +381,59 @@ def report_residuals(A, B, theta, b_x):
               f"최대 {spread.max():.1f} mm 움직인다 (쌍 {int(np.argmax(spread))})")
         print("  ※ 이 값이 작아도 정확하다는 뜻이 아니다 — docstring의 ①② 참고.")
 
-    # 최종 판정은 **병진잔차**로 낸다. 예전엔 LOO만 보고 판정해서, 병진잔차 40 mm에
-    # 21/31쌍이 이상인 데이터에도 마지막 줄이 "양호"로 나갔다(2026-08-03 리뷰).
-    # 마지막 줄만 읽는 사람에게 통과로 보이는 게 가장 위험하다.
-    print(f"\n[판정] 병진잔차 중앙값 {med_t:.1f} mm — ", end='')
-    if med_t < 20:
-        print("양호 (octomap voxel 20 mm 이하)")
-    elif n_bad > len(trans_res) / 3:
-        print(f"⚠️ 불합격. {n_bad}쌍이 30 mm를 넘는다. 그 쌍들을 빼고 재계산하거나 재수집할 것.\n"
-              "         (그 쌍들을 빼면 결과가 수십 mm 옮겨간 전례가 있다 — 무시하고 쓰지 말 것)")
+    # ---- 최종 판정 ----------------------------------------------------------
+    # 예전엔 LOO만 보고 판정해서, 병진잔차 40 mm에 21/31쌍이 이상인 데이터에도 마지막 줄이
+    # "양호"로 나갔다(2026-08-03 리뷰). 마지막 줄만 읽는 사람에게 통과로 보이는 게 가장 위험하다.
+    #
+    # 2026-08-09 재감사에서 그 위험이 **세 군데 더** 남아 있던 것을 고쳤다:
+    #   ① 표본 수 하한이 없었다 — 32장을 찍고 코너가 5장에서만 잡혀 **4쌍**으로 푼 데이터가
+    #      그대로 판정을 받았다. 4개짜리 중앙값은 이미지 한 장이 지배한다.
+    #   ② `med_t < 20`이면 **이상치 개수를 보지 않고** 곧장 "양호"였다. 잔차 큰 쌍이 절반이어도
+    #      중앙값만 작으면 통과한다 — 위 2026-08-03 버그와 같은 형태가 첫 분기에 남아 있었다.
+    #   ③ **회전잔차가 판정에 전혀 안 들어갔다.** 고정 카메라에서 회전오차는 거리로 증폭된다:
+    #      1.65 m에서 2.8°면 횡방향 81 mm다. 병진잔차보다 크게 나올 수 있는데 무시되고 있었다.
+    #      → 각도가 아니라 **그 각도가 실제로 만드는 mm**로 환산해 같은 잣대에 올린다.
+    n = len(trans_res)
+    med_r = float(np.median(rot_res))
+    cam_dist_mm = float(np.linalg.norm(np.asarray(b_x).flatten()))
+    lat_r = cam_dist_mm * np.tan(np.radians(med_r))   # 회전잔차의 횡방향 환산 (mm)
+
+    fails = []
+    # UNVERIFIED: 8쌍. AX=XB 자체는 회전축이 다른 2쌍이면 풀리지만, "풀린다"와 "중앙값이
+    # 통계로 의미가 있다"는 다르다. 실측 근거는 없고 4쌍이 명백히 부족하다는 사실만 있다.
+    if n < 8:
+        fails.append(f"표본부족 {n}쌍 (<8) — 중앙값을 신뢰할 수 없다")
+    if med_t >= 20:
+        fails.append(f"병진잔차 중앙값 {med_t:.1f} mm (≥20)")
+    if n_bad > n / 3:
+        fails.append(f"이상치 {n_bad}/{n}쌍이 30 mm 초과 (>1/3)")
+    if lat_r >= 20:
+        fails.append(f"회전잔차 {med_r:.2f}° = {cam_dist_mm/1000:.2f} m에서 횡방향 {lat_r:.0f} mm (≥20)")
+
+    print(f"\n[판정] 병진 중앙값 {med_t:.1f} mm / 회전 {med_r:.2f}°(≈{lat_r:.0f} mm 횡) / {n}쌍 — ", end='')
+    if not fails:
+        verdict = "양호"
+        print("양호")
     else:
-        print("⚠️ octomap voxel(20 mm)보다 크다. octomap 정밀도를 캘리브가 지배한다.")
+        verdict = "불합격"
+        print("⚠️ 불합격")
+        for f in fails:
+            print(f"         - {f}")
+        print("         이상치 쌍을 빼고 재계산하거나 재수집할 것.\n"
+              "         (그 쌍들을 빼면 결과가 수십 mm 옮겨간 전례가 있다 — 무시하고 쓰지 말 것)")
+
+    # 이 숫자를 stdout에만 두면 터미널을 닫는 순간 없어진다. 실제로 커밋된 npy가
+    # 어느 잔차로 나왔는지 추적 불가능했다(2026-08-06 감사). main()이 npy 옆에 같이 저장한다.
+    return {
+        "n_pairs": n,
+        "median_trans_mm": round(float(med_t), 2),
+        "median_rot_deg": round(med_r, 2),
+        "rot_lateral_mm": round(float(lat_r), 1),   # 회전잔차를 카메라 거리에서 mm로 환산한 값
+        "max_trans_mm": round(float(np.max(trans_res)), 2),
+        "n_trans_over_30mm": int(n_bad),
+        "verdict": verdict,
+        "fail_reasons": fails,
+    }
 
 
 def report_pose_quality(samples, A_list):
@@ -534,6 +582,13 @@ def report_pose_quality(samples, A_list):
                         f"{A_MIN:.0f}° 이상, 회전축을 X/Y/Z로 바꿔가며.")
     if max(dists) / min(dists) < 1.3:
         findings.append("보드 거리가 한 값에 몰려 있다 → 내부파라미터를 재추정할 거면 거리도 흩을 것.")
+    # 🔴 `samples`에는 **코너 검출에 성공한 장만** 들어온다. 검출 실패로 대부분이 빠져도
+    # 남은 소수의 분포는 얼마든지 좋을 수 있어 "결함 0건"이 나온다 — 2026-08-09에 실제로
+    # 32장 수집 / 5장 생존인 데이터가 이 함수에서 "뚜렷한 결함 없음"을 받았다.
+    # report_residuals의 표본수 하한과 같은 이유로, 여기서도 생존 장수를 먼저 본다.
+    if len(samples) < 8:
+        findings.insert(0, f"🔴 코너 검출에 성공한 장이 {len(samples)}장뿐이다(<8) — 분포 이전에 "
+                           "표본이 없다. 해상도(1280x720)·조명·보드 평면도부터 확인하고 재수집할 것.")
 
     # 마지막 줄만 읽는 사람에게 잘못된 통과 신호를 주지 않는다 — report_residuals와 같은 이유로
     # [판정]을 명시한다. 임계값 대부분이 UNVERIFIED라는 사실도 여기서 한 번 더 말한다.
@@ -695,7 +750,7 @@ def main(save=True, pose_quality=False):
     X[:3, 3] = b_x.flatten()                                    # 병진 (mm, base 기준 카메라 위치)
     T_cam2base = X                                              # 이름은 cam2base지만 내용은 T_base<-cam
 
-    report_residuals(A_list, B_list, theta, b_x)                 # 이 결과를 믿어도 되는지의 근거
+    stats = report_residuals(A_list, B_list, theta, b_x)         # 이 결과를 믿어도 되는지의 근거
 
     print("\n[결과] T_base<-cam")
     print(T_cam2base)
@@ -711,6 +766,25 @@ def main(save=True, pose_quality=False):
         return
     np.save(out, T_cam2base)
     print(f"저장: {out}")
+
+    # npy 옆에 근거를 같이 남긴다. npy는 값만 있어서 "이게 몇 mm 잔차로 나온 건지"가
+    # 커밋 이력에서 사라진다 — 재캘리브마다 같은 공백이 반복됐다(2026-08-06 감사).
+    # 해상도를 같이 적는 이유: 424x240으로 수집하면 코너 검출이 무너진다(2026-08-09 실측).
+    h, w = cv2.imread(samples[0][0]).shape[:2] if samples else (0, 0)
+    report = {
+        "generated": datetime.now().isoformat(timespec="seconds"),
+        "dataset": DATA_DIR.name,
+        "output": out.name,
+        "image_size": f"{w}x{h}",
+        "n_poses": len(robot_poses),
+        "n_usable_images": len(samples),      # 코너 검출 성공 = AX=XB에 실제로 기여한 장수
+        "checkerboard": f"{checkerboard_size[0]}x{checkerboard_size[1]}@{square_size}mm",
+        "camera_xyz_mm": [round(float(v), 2) for v in T_cam2base[:3, 3]],
+        **stats,
+    }
+    (out.parent / f"calib_report{suffix}.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    print(f"저장: {out.parent / f'calib_report{suffix}.json'}  (판정 {stats['verdict']})")
 
 
 # Main Function

@@ -823,16 +823,212 @@ base 원점 기준이 아니다 — 원점에서 재면 테이블 높이만큼 �
   → `T[:3,3] /= 1000.0` 없이 쓰면 1000배 어긋난다.
   (norm 값은 여기 적지 않는다 — 위 "현행 카메라 위치를 문서에 적지 않는다" 정책과 같은 이유다.
   이 줄에 박혀 있던 "1683.6"이 실제로 낡아 있었다: 2026-08-06 코드 감사로 다시 읽으니 1481.3이었다.)
-- ⚠️ **`report_residuals()`(같은 파일 `:318`)는 잔차를 stdout에만 찍고 파일로 남기지 않는다**
-  (2026-08-06 코드 감사로 확인). 그래서 지금 커밋된 `T_cam2base.npy`가 어느 세션·몇 mm 병진잔차로
-  나온 결과인지 코드베이스 어디에도 안 남는다 — npy는 바이너리라 `git log`로도 못 찾는다.
-  **재캘리브할 때마다 이 정보 공백이 반복된다.** 고치려면 `report_residuals()` 끝에
-  `{timestamp, data_dir, n_images, translation_residual_median_mm, verdict}`를
-  `calib_report.json`으로 옆에 남기면 된다(5줄) — `T_cam2base.npy`와 함께 커밋되므로 이후엔
-  `git log`로 "이 커밋이 어떤 잔차 근거로 나왔는지"가 추적된다. **다음 재캘리브 전에 넣을 것을 권장.**
+- ✅ **해소(2026-08-09): `T_cam2base.npy` 옆에 `calib_report.json`이 같이 저장된다.**
+  `report_residuals()`가 판정 dict를 반환하고 `main()`이 npy 저장 직후 json으로 쓴다.
+  필드: `generated / dataset / image_size / n_poses / n_usable_images / n_pairs /
+  median_trans_mm / max_trans_mm / n_trans_over_30mm / verdict / camera_xyz_mm`.
+  버전 디렉토리를 인자로 주면 `calib_report_<dir>.json`으로 분리 저장된다(npy와 같은 규칙).
+  ⚠️ **이 파일은 npy와 함께 커밋한다.** 안 그러면 아래 공백이 그대로 돌아온다 —
+  (~~2026-08-06 감사: 잔차가 stdout에만 찍혀서, 커밋된 npy가 몇 mm로 나온 건지 추적 불가.
+  npy는 바이너리라 `git log`로도 못 찾는다~~)
+- **`n_usable_images`가 진짜 표본 수다.** `n_poses`(=수집한 자세 수)와 다르다:
+  코너 검출에 실패한 장은 조용히 빠지므로 32장을 찍고도 5장으로 푼 사례가 있다(아래 08-09 절).
+  `[입력] 자세 N개 중 N개 유효` 줄은 posx 행렬식만 본 것이라 **이걸 표본 수로 읽으면 안 된다.**
 - `data_recording.py:77`의 "결과 부모 프레임도 flange"는 **틀린 주석**이다.
   eye-to-hand AX=XB에서 TCP 오프셋은 `A_i` 계산에서 소거되므로 부모는 항상 base
   (같은 파일 `:44-46`이 맞다).
+
+### 🔴 재캘리브 (2026-08-09) — 424x240으로 수집해 불합격. 현행 npy는 이 값이다
+
+현재 워킹트리의 `T_cam2base.npy`는 **자체 진단 불합격**이다. 근거는 `calib_report.json`(같이 커밋됨).
+
+| | 이전 (`data2`, 08-05) | **현행 (`data`, 08-09)** |
+|---|---|---|
+| 이미지 해상도 | 1280x720 | **424x240** |
+| 수집 자세 / 실제 표본 | 26 / **18장** | 32 / **5장** |
+| AX=XB 쌍 | 17 | **4** |
+| 병진잔차 중앙값 | **6.0 mm** | **41.1 mm** |
+| 회전잔차 중앙값 | 0.50° | 2.80° |
+| 판정 | 양호 | **불합격** |
+| 카메라 위치(mm) | `[1237.2, -222.8, 783.6]` | `[1435.0, -52.6, 822.0]` |
+| base 기준 거리 | 1.481 m | 1.655 m |
+
+- **원인은 수집 해상도다.** 424x240에서는 10x7 코너가 32장 중 **5장**에서만 검출됐다.
+  내부파라미터 추정 초점거리가 공장값과 **43%** 어긋났다(fx 176.5 vs 공장 303.2 — 공장값으로 대체되므로
+  결과에는 안 들어가지만 코너 데이터가 나쁘다는 지문이다). RMS 재투영오차 3.93 px.
+- 이 함정은 `data_recording.py:14-18`·아래 "캘리브 수집은 1280x720" 줄에 **이미 적혀 있었는데도** 반복됐다.
+  이유가 있다: `camera.launch.py`의 기본값이 `424x240x15`라서, 평소처럼 띄운 카메라로 그냥 수집하면
+  자동으로 이 사고가 난다. **재캘리브 전에 반드시** —
+  `ros2 launch m0609_rg2_bringup camera.launch.py color_profile:=1280x720x15`
+- **두 값의 차이(198/170/38 mm, pitch 48°→30°)는 잔차만으로 설명되지 않는다.**
+  카메라를 물리적으로 옮겼다면 이전 값(`T_cam2base_data2.npy`)으로 되돌리는 건 **답이 아니다** —
+  1280x720으로 재수집하는 것이 유일한 해법이다. 안 옮겼다면 되돌리는 쪽이 낫다.
+  → **되돌리기 전에 카메라가 08-05 이후 움직였는지부터 확인할 것.**
+- 되돌릴 때 쓸 파일은 만들어 뒀다: `T_cam2base_data2.npy`(+ `calib_report_data2.json`).
+  이전 커밋값과 md5 동일함을 확인했다(`b3bb637d...`).
+  ```bash
+  cp corecode/Calibration_Tutorial/T_cam2base_data2.npy \
+     corecode/Calibration_Tutorial/T_cam2base.npy    # symlink 체인으로 install까지 자동 반영
+  ```
+- 현행 값의 static TF 인자(참고용 — 하드코딩하지 말 것. `camera.launch.py`가 매번 계산한다):
+  ```
+  # 08-09 현행:  1.435028 -0.052594 0.821979  -0.25944197 -0.04752131 0.96405516 -0.03208186  base_link camera_link
+  # 08-05 이전:  1.237171 -0.222764 0.783650  -0.40685791  0.00166769 0.91348127  0.00397964  base_link camera_link
+  ```
+- **`data/`는 덮어쓰인다.** `data_recording.py`는 항상 `data/`에 쓰므로 08-03 수집분(34장, 1280x720)은
+  오늘 수집으로 사라졌다. 남겨야 할 수집분은 미리 `data<N>/`으로 이름을 바꿔 둘 것.
+- ✅ **카메라는 실제로 옮겨졌다 (2026-08-09 사용자 확인).** 그래서 이전 값(`T_cam2base_data2.npy`)은
+  이제 **틀린 값**이고 되돌리기는 선택지가 아니다. 남은 해법은 **1280x720 재수집 하나뿐**이다.
+  `T_cam2base_data2.npy`는 되돌리기용이 아니라 "좋은 캘리브는 이런 숫자가 나온다"의 기준값으로만 둔다.
+
+### 판정 로직 재감사 (2026-08-09) — 구멍 4개 수정
+
+`report_residuals()`가 08-03 리뷰에서 한 번 고쳐졌는데, **같은 형태의 구멍이 네 군데 남아 있었다.**
+
+1. **표본 수 하한이 없었다.** 32자세를 찍고 코너가 5장에서만 잡혀 **4쌍**으로 푼 데이터가
+   그대로 판정을 받았다. 4개짜리 중앙값은 이미지 한 장이 지배한다. → `n_pairs < 8`이면 불합격.
+2. **`med_t < 20`이면 이상치 개수를 안 보고 곧장 "양호"였다.** 잔차 큰 쌍이 절반이어도
+   중앙값만 작으면 통과한다 — 08-03에 고쳤다던 그 버그가 **첫 분기에 그대로 남아 있었다.**
+3. **회전잔차가 판정에 전혀 안 들어갔다.** 고정 카메라에서 회전오차는 거리로 증폭된다:
+   1.65 m에서 2.80°면 **횡방향 81 mm**로, 병진잔차(41 mm)보다 크다. 그런데 무시되고 있었다.
+   → 각도가 아니라 **`카메라거리 × tan(각도)` = mm**로 환산해 같은 잣대(20 mm)에 올린다.
+   `calib_report.json`에 `rot_lateral_mm`으로 남는다.
+4. **🔴 "20 mm는 근거 있는 임계"라는 주석이 낡아 있었다.** 근거로 적힌
+   `moveit.launch.py:162`의 `octomap_resolution: 0.02`는 **`setdefault` 폴백**일 뿐이고,
+   실제로는 `sensors_3d.yaml:30`의 **0.05**가 이긴다
+   (실행중 `ros2 param get /move_group octomap_resolution` → **0.05** 실측 확인).
+   → **임계를 50 mm로 늘리지 않았다.** octomap voxel은 장애물 회피 쪽 요구고, 이 캘리브의
+   진짜 소비자는 **grasp 좌표**(pick_fsm)다. 둘 중 엄한 쪽이 임계를 정한다.
+   지금 20 mm는 **근거 없는 보수값**이다 — RG2 grasp 성공률로 실측해 교체할 것.
+
+판정은 이제 실패 사유를 개별로 나열하고 `fail_reasons`로 json에 남는다.
+회귀검사: `data2` → 양호(6.0 mm / 0.50°≈13 mm / 17쌍) 유지, `data` → 불합격 4사유.
+
+**`--pose-quality`에도 같은 구멍이 있었다.** 이 함수는 **코너 검출에 성공한 장만** 받으므로,
+32장 중 5장만 생존한 데이터에 "분포 결함 0건 — 뚜렷한 결함 없음"을 찍고 있었다.
+생존 장수 하한(<8)을 최우선 항목으로 넣었다.
+
+#### 왜 운용 해상도(424x240)가 아니라 1280x720으로 캘리브하는가 (2026-08-09 사용자 질문)
+
+> "최종 카메라 활용이 424x240인데 그 해상도로 캘리브하는 게 맞지 않나?"
+> — **"쓰는 해상도로 캘리브한다"는 원칙이 틀린 게 아니라, 이 스크립트에는 적용되지 않는다.**
+> 여기서 푸는 건 내부파라미터가 아니라 **외부파라미터(강체 변환)**다. 세 가지가 근거다.
+
+**① 내부파라미터는 이미 해상도별로 분리돼 자동 선택된다.**
+`eye2hand_calibration.py:74-77`의 `FACTORY_INTRINSICS`가 `(width, height)`를 키로 갖고,
+이미지 크기를 보고 고른다. 이미지셋 추정값은 **버려진다**(`USE_FACTORY_INTRINSICS = True`).
+→ 1280x720으로 찍으면 1280x720 공장값이 쓰이므로 **불일치가 생기지 않는다.**
+
+**② 외부파라미터는 두 모드 사이에서 그대로 옮겨간다 — 크롭이 아니라 다운스케일이기 때문.**
+공장값으로 검산(2026-08-09):
+
+| | fx/W | **cx/W** | **cy/H** |
+|---|---|---|---|
+| 1280x720 | 0.71057 | 0.51527 | 0.51416 |
+| 424x240 | 0.71504 | 0.51536 | 0.51416 |
+| 차이 | 0.629% | **0.019%** | **0.000%** |
+
+주점의 상대 위치가 사실상 동일 → **광축·광학중심이 같은 물리적 지점**이다. 외부파라미터가
+기술하는 게 정확히 그것이므로 1280x720에서 푼 값을 424x240에서 그대로 쓸 수 있다.
+(fx/W의 0.629%는 미세 FOV 차이이고, 해상도별 공장값을 쓰므로 이미 흡수된다.)
+⚠️ **카메라를 교체하면 이 검산을 다시 한다** — 저해상도에서 크롭하는 센서면 위 논리가 깨진다.
+
+**③ 코너 검출 오차는 픽셀 단위로 일정하다. 그래서 각분해능이 그대로 정밀도가 된다.**
+
+| | 1픽셀 | 1.65 m에서 1픽셀 |
+|---|---|---|
+| 424x240 | 3.30 mrad | **5.44 mm** |
+| 1280x720 | 1.10 mrad | **1.81 mm** |
+
+정확히 **3.00배**. 실측은 그보다 벌어졌다(6.0 vs 41.1 mm ≈ 7배) — 검출 자체가 무너져
+(18/26장 → 5/32장) 방정식이 부족해진 것이 겹쳤다.
+
+**핵심: 운용 해상도는 캘리브 정밀도를 물려받지 않는다.**
+런타임에는 외부파라미터를 **다시 풀지 않고 적용만** 한다.
+`실제 오차 = 캘리브 상수 오차 + 424x240 런타임 검출/depth 오차`
+두 번째 항은 424x240을 쓰는 한 어차피 생긴다. 고해상도 캘리브는 **첫 항만 줄이며**,
+424x240 운용을 나쁘게 만들 수 없다. 캘리브는 오프라인 1회라 수집 해상도에 런타임 비용도 없다
+— **트레이드오프 자체가 없다.**
+- 지금은 런타임 픽셀당 5.4 mm인데 캘리브 상수 오차가 41 mm다. **캘리브가 전체 오차를 지배한다.**
+- 반대로 사용자 직관이 맞는 경우: 424x240용 *내부파라미터*를 직접 추정하려는 거라면
+  424x240으로 찍는 게 맞다. 그건 공장값으로 이미 해결돼 있다.
+
+**그럼 1280x720보다 더 올리면? → 지금은 이득이 없다 (2026-08-09 후속 질문).**
+③의 픽셀 항은 해상도에 선형으로 줄지만, **1280x720에서 이미 지배적 오차원이 아니다.**
+
+| 오차원 | 1.65 m에서의 크기 | 비고 |
+|---|---|---|
+| 픽셀 양자화 @1280x720 | **1.8 mm** | 1920x1080으로 올려도 1.2 mm — 0.6 mm 이득 |
+| `square_size` 1% 오차 | **10 mm급** | 보드 거리 추정이 통째로 1% 틀어진다(`:614`) |
+| 보드 평면도·강성 | 미측정 | 폼보드+종이 |
+| 카메라 마운트 강성 | 미측정 | **이 절 맨 앞의 "마운트 강성 미확보"가 아직 유효** |
+| 로봇 posx 절대정확도 | 미측정 | AX=XB는 **절대** 자세를 쓴다(반복정밀도가 아니다) |
+
+→ 0.6 mm를 벌러 해상도를 올리는 것보다 **캘리퍼스 재측정·보드 강성·마운트 고정**이 훨씬 크다.
+1280x720이 "충분히 좋은" 지점이고, 병목은 이미 카메라 밖으로 넘어갔다.
+
+🔴 **그래도 올릴 거면 `FACTORY_INTRINSICS`에 그 해상도를 먼저 추가해야 한다.**
+표에 없는 해상도로 찍으면 `:233-235`가 **추정 내부파라미터로 조용히 폴백**한다 —
+그 추정값이 오늘 공장값과 43% 어긋났던 바로 그 값이라, **1280x720보다 오히려 나빠진다.**
+```bash
+ros2 launch m0609_rg2_bringup camera.launch.py color_profile:=1920x1080x15
+ros2 topic echo /camera/camera/color/camera_info --once     # k[0],k[4],k[2],k[5] → fx,fy,cx,cy
+```
+# UNVERIFIED: D435i color가 1920x1080을 지원한다는 건 제조사 스펙이고 이 랩탑에서 실측하지 않았다.
+
+#### 다음 재수집 체크리스트 (순서대로)
+
+1. `ros2 launch m0609_rg2_bringup camera.launch.py color_profile:=1280x720x15` ← **이걸 빼면 전부 무의미**
+2. `python3 data_recording.py` — 자세마다 회전 30° 이상, 회전축을 X/Y/Z로 바꿔가며
+   - ⚠️ **보드 기울기는 45°를 넘기지 말 것.** `data2`(6.0 mm로 가장 좋았던 수집분)조차
+     18장 중 **13장이 50° 초과**로 지적받았다 — 여기서 더 좋아질 여지가 남아 있다.
+3. `python3 eye2hand_calibration.py --pose-quality` ← **푸는 것도 저장도 안 한다.** 분포부터 본다
+4. `python3 eye2hand_calibration.py` — `[판정]`이 **양호**여야 진행. 불합격이면 2번으로 돌아간다
+5. `ros2 launch m0609_rg2_bringup camera.launch.py driver:=false` — **TF 재기동(필수)**
+6. `tf2_echo base_link camera_link` 로 새 값 확인 (아래 "전파 경로" 절)
+7. `T_cam2base.npy` + `calib_report.json`을 **같이** 커밋
+
+- **수집 디렉토리의 git 취급이 제각각이다** (2026-08-09 확인). `.gitignore:46`이 `data/`만 무시한다:
+  `data1/` 커밋됨 / `data/` 무시 / **`data2/`는 untracked인데 무시도 아니다**(5.8 MB).
+  → 현행 캘리브(`data/`)는 **원본 이미지가 커밋 불가**라 `calib_report.json`이 유일한 흔적이다.
+  → `data2/`는 6.0 mm 결과를 재현할 수 있는 유일한 원본이다. 커밋할지 지울지 정할 것 —
+  지금은 어느 쪽도 아닌 상태다.
+
+### 새 캘리브가 각 노드에 적용되는 경로 — 전수 확인 (2026-08-09)
+
+**주입점은 `camera_calib_tf` 한 곳뿐이다. npy를 직접 읽는 소비자는 없다** (`src/` 전수 grep).
+모든 소비자가 tf2 lookup으로 받으므로, TF 하나만 맞으면 전부 맞는다.
+
+```
+corecode/.../T_cam2base.npy  (정본)
+  └─symlink→ src/.../m0609_rg2_bringup/config/T_cam2base.npy
+      └─symlink→ install/.../share/config/T_cam2base.npy        ← md5 3곳 일치 확인
+          └─ camera.launch.py 가 launch 시점에 calib_npy_to_tf 로 변환 → /tf_static
+              ├─ move_group        : sensors_3d.yaml `octomap_frame: base_link` ← 포인트클라우드 변환
+              ├─ nvblox_node       : dynamic_avoid.yaml `base_frame: base_link`
+              ├─ capture_graspgenx_scene : tf2 lookup `base_link ← camera_color_optical_frame`
+              │                       (`camera_frame` 파라미터, `:55`) → grasp_bridge_node
+              └─ rviz2
+```
+
+실기 실측(2026-08-09 14:25 기동, 캘리브 갱신 14:23 이후):
+`ros2 run tf2_ros tf2_echo base_link camera_link` →
+`[1.435, -0.053, 0.822]`, RPY `[-4.98, 30.22, -177.53]°` — **새 npy 계산값과 소수점까지 일치**.
+프로세스 인자로도 확인(`ps`): `1.435028 -0.052594 0.821979 -0.25944197 …`.
+
+🔴 **하지만 이 일치는 자동이 아니다. `static_transform_publisher`는 launch 시점에 한 번만 읽는다.**
+- **npy를 갈아끼워도 이미 떠 있는 `camera_calib_tf`는 옛 값을 계속 발행한다.** rebuild도 소용없다.
+- 재캘리브 후에는 **드라이버는 두고 TF만** 다시 띄우면 된다:
+  `ros2 launch m0609_rg2_bringup camera.launch.py driver:=false`
+- 확인은 파일이 아니라 **실기 TF로** 한다 (아래가 유일하게 믿을 수 있는 검사):
+  ```bash
+  python3 src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py \
+      corecode/Calibration_Tutorial/T_cam2base.npy base_link camera_link   # 기대값
+  ros2 run tf2_ros tf2_echo base_link camera_link                          # 실제값
+  ```
+- ⚠️ **`camera_calib_tf`가 죽어도 TF 트리는 안 깨진다** — `base_link→camera_link`만 사라지고
+  카메라 쪽 프레임은 드라이버가 계속 낸다. 에러 없이 인식 좌표만 틀린다.
+  `ros2 node list | grep camera_calib_tf`로 존재 자체를 확인할 것.
 
 ## GraspGenX 관련
 
@@ -1014,6 +1210,30 @@ GraspGenX **자체 loader**를 통과시켜 확인했다
 - 기본값: `grasp_threshold 0.7` / `num_grasps 200` / `collision_threshold 0.02 m` /
   `max_scene_points 8192` / `min_obj_points 100` / `filter_collisions True`.
   **8 GB VRAM이므로 `--num_grasps 64`로 시작한다**(플랜의 12 GB 가정은 이 랩탑에 안 맞다).
+- **`grasp_bridge_node`가 씬을 저장할 때 파일명에 쓰던 `time.strftime('%Y%m%d_%H%M%S_%f')`가
+  실제로는 리터럴 문자열 `%f`를 그대로 남겼다** — `strftime`(C 라이브러리 기반, `time` 모듈)은
+  마이크로초 지시자 `%f`를 모른다(`datetime.strftime`에만 있음). 2026-08-09까지 저장된 씬은
+  전부 `<날짜>_<시각>_%f`라 같은 초 안의 재시도가 서로 덮어썼다 — 진단용으로 열어본 씬이
+  실제 실패 당시 것이 아닐 수 있다. `datetime.datetime.now().strftime(...)`으로 수정함
+  (`grasp_bridge_node.py`).
+- **`[collision] 0/N grasps collision-free`로 grasp 후보가 전멸하면 `collision_threshold`부터
+  의심한다.** 씬 점군에는 seg 라벨과 무관하게 유효 depth가 전부 들어가므로 **테이블도
+  장애물**이고, 납작한 물체를 위에서 잡으면 그리퍼 표면점이 임계값(기본 0.02 m) 안에서
+  테이블과 겹쳐 정상 grasp까지 걸러진다. `graspgen_worker.py`의 `--collision_threshold`는
+  기동 인자라 상주 워커에는 `ros2 param set`이 안 먹는다 — `grasp_bridge_node`의
+  `collision_threshold`/`num_grasps`/`grasp_threshold`/`moe_obb_density` 파라미터를 바꾼 뒤
+  워커를 죽여 재기동시켜야 한다(2026-08-09, 브리지에 노출 파라미터가 없어서 손을 못 대던
+  문제를 고침).
+- **worker의 예외 로그가 `except Exception as e: log(f'... {e}')`로 traceback을 버렸다** —
+  `ValueError: zero-size array to reduction operation minimum which has no identity`처럼
+  타입·메시지만으로는 어느 줄인지 특정이 안 된다. `traceback.format_exc()`를 stderr에
+  같이 찍도록 고침(2026-08-09). 실측: 저장된 씬(`385px`, `0/43 collision-free`)을 워커에
+  재현시켜 봤더니 이번엔 **다른 원인(GPU 중복 로드로 인한 CUDA OOM, 이미 떠 있는 워커
+  프로세스와 충돌)**이 나왔다 — "zero-size array" 자체는 이번 세션에서 재현하지 못했다.
+  worker.py의 `grasp_widths()`(widths.min())는 이미 빈 배열 가드가 있고(`len(widths)`
+  체크), `capture_graspgenx_scene.py`의 진단 로그가 `depth[depth > 0].min()`을 무가드로
+  불러 **유효 depth 0개인 프레임(카메라 가림 등)에서 캡처 자체가 죽는** 별도 결함을 찾아
+  같이 고쳤다. 다음에 같은 메시지가 뜨면 이제는 traceback이 남으니 그걸로 특정한다.
 
 ---
 
@@ -1149,3 +1369,194 @@ Error: Sequence should be of same type. Value type 'integer' do not belong at li
 - **미검증(남음)**: **`-t` 가 붙은 상태에서 Ctrl-C 가 실제로 컨테이너 안까지 전달되는지**는
   아직 안 눌러 봤다. pty 가 붙은 것까지만 확인됐다. 그래서 래퍼는 `-t` 에만 기대지 않고
   INT/TERM/HUP 트랩 정리를 함께 건다. 다음에 Ctrl-C 로 끝낼 때 잔존 프로세스가 0인지 볼 것.
+
+## 🔴 런치 인자는 선언 안 된 이름을 **경고 없이 무시한다** — 타겟이 두 곳에 살면 반드시 어긋난다 (2026-08-09, 실기)
+
+증상: `ros2 launch pick_fsm pick_fsm.launch.py grasp_source:=legacy_trigger voice:=false
+target_classes:=apple,orange,banana` 로 띄웠는데 매번
+
+```
+[PERCEIVE] -> [SPEAK_FAIL] grasp 없음: target_classes='apple,banana,orange' 는
+seg_source='yolo' 에서만 쓴다. 지금은 'geometric' 라 클래스를 알 수 없다
+```
+
+**두 가지가 겹친 사고다:**
+
+1. `pick_fsm.launch.py` 에 `target_classes` 라는 인자는 **없다.** ROS 2 launch 는 선언되지
+   않은 `key:=value` 를 에러도 경고도 없이 버린다. 그래서 명령줄에 적은 값은 아무 데도 안 갔다.
+   (같은 함정을 `dry_run:=true`, `bringup.launch.py model:=m0609` 에서도 밟았다 — 이게 세 번째다.)
+2. 에러 메시지에 찍힌 `'apple,banana,orange'`(알파벳순 — 내가 친 `apple,orange,banana` 가
+   아니다)는 **이전에 띄운 브리지에 남아 있던 값**이다. 브리지의 `target_classes`/`seg_source`
+   와 FSM 의 `target` 이 각자 살고 있었고, 둘을 잇는 코드가 없었다.
+
+`ros2 param get /grasp_bridge_node seg_source` → `geometric`, `target_classes` →
+`apple,banana,orange`. `yolo_seg_node` 는 멀쩡히 떠 있었는데 브리지만 geometric 이었다.
+
+**수정(2026-08-09)**: 타겟의 정본을 `task_manager` 하나로 두고, PERCEIVE 진입 때마다
+`SetParameters` 로 `bridge_node`(기본 `/grasp_bridge_node`)에 `target_classes` +
+`bridge_seg_source`(기본 `yolo`)를 **밀어 넣은 뒤에** grasp 계산을 트리거한다. 순서가
+뒤집히면 브리지가 직전 실행의 타겟으로 수십 초를 계산한다. 설정 실패는 SPEAK_FAIL 로
+끊는다 — 조용히 넘기면 "엉뚱한 물체를 잡았는데 로그는 맞다고 말하는" 상태가 된다.
+
+- 사람은 `/pick/target`(String, **TRANSIENT_LOCAL**) 이나 rqt 패널의 타겟 상자로 고른다.
+  빈 문자열 = 자동(브리지가 본 것 전부 중 grasp 점수 최고). 콤마로 여러 개도 된다.
+- ⚠️ CLI 로 쏠 때 `--qos-durability transient_local` 을 빠뜨리면 durability 불일치로
+  **연결 자체가 안 된다** (아무 에러도 안 난다. 그냥 안 먹는다).
+- 진행 중인 작업의 타겟은 안 바뀐다. 다음 `/pick/start` 부터다.
+
+**같이 고친 것**: `grasp_source` 기본값 `compute_grasp` → `legacy_trigger`.
+`/grasp/compute_grasp`(`pick_fsm_msgs/ComputeGrasp`) 서버는 이 ws 어디에도 구현이 없어서,
+기본값으로 두면 PERCEIVE 가 뜨지도 않을 서비스를 120s 기다리다 ABORT 한다. 문서가
+"`grasp_source:=legacy_trigger` 를 명시해야 한다"는 우회를 적고 있던 자리다 —
+**우회를 문서에 적을 게 아니라 기본값을 고쳤어야 했다.**
+
+**검증(2026-08-09)**: 실기 rig 를 안 건드리려고 `target_classes`/`seg_source` 만 갖는 가짜
+노드를 세우고 `bridge_node:=/fake_bridge grasp_trigger_service:=/nonexistent/compute` 로
+띄웠다(모션은 승인 후 STOW 부터라 발생하지 않는다). `target:=apple` 로 시작 → `/pick/target`
+으로 `orange,banana` 를 쏨 → `/pick/start`:
+`[IDLE] -> [PERCEIVE] 타겟 'orange,banana'` → `브리지 설정: target_classes='orange,banana',
+seg_source=yolo` → 가짜 노드가 실제로 `seg_source='geometric'` 에서 `'yolo'` 로 바뀐 것 확인.
+
+---
+
+## 🔴 D435i 지원 스트림 프로파일 — `480x320` 은 **없다** (2026-08-09, 실기 `rs-enumerate-devices`)
+
+`480x320` 을 요구하면 스트림이 안 열린다. 문서 여러 곳이 이 값을 쓰고 있었다
+(`config/testcommand.md` T1 은 **복붙용 명령**으로 적고 있었다 — 2026-08-09 `424x240x15` 로 수정).
+
+| | 지원 목록 (D435i, `lsusb` = `8086:0b3a`) |
+|---|---|
+| **Color** | `320x180` `320x240` `424x240` `640x360` `640x480` `848x480` `960x540` `1280x720` `1920x1080` |
+| **Depth** | `256x144` `424x240` `480x270` `640x360` `640x480` `848x100` `848x480` `1280x720` |
+
+⚠️ **`480x270`(depth 에 있음)과 `480x320`(어디에도 없음)을 헷갈리지 말 것.** 이 한 글자 차이가
+"지원 목록에 있는 것 같다"는 착각의 원인이다.
+
+- **런타임 기본값 `424x240x15` 를 그대로 쓴다** (`camera.launch.py:74-77`). 바꿀 이유가 없다.
+- ⚠️ **캘리브 수집만 예외로 `1280x720`.** 2026-08-09 불합격(병진 41.1 mm)이 바로 `424x240` 으로
+  수집해서 난 것이다 — 32자세를 찍었는데 코너가 5장에서만 검출됐다. 상세는 "재캘리브 (2026-08-09)".
+- `align_depth.enable=true` 라 **depth 가 color 해상도를 따라간다** → color 프로파일 하나가
+  octomap·nvblox 두 경로를 동시에 지배한다.
+
+## 카메라 토픽 실측 대역폭 — 추정하지 말고 이 표를 쓴다 (2026-08-09, `ros2 topic bw` 각 100 msg)
+
+측정 조건: 실기 `rokey`, 프로파일 `424x240x15`, **카메라·nvblox·move_group·cumotion·
+grasp_bridge 전부 가동 중**. 모든 스트림이 ≈15 Hz 로 일치했다.
+
+| 토픽 | 프레임당 | 초당 | 비고 |
+|---|---|---|---|
+| `depth/color/points` (PointCloud2) | **1.34 MB** | 20.0 MB/s = **160 Mbps** | ⚠️ 상한이 아니다 — 아래 |
+| `color/image_raw` (rgb8) | 0.31 MB | 4.60 MB/s = **36.8 Mbps** | |
+| `aligned_depth_to_color/image_raw` (16UC1) | 0.20 MB | 3.06 MB/s = **24.5 Mbps** | |
+| `color/image_raw/compressed` (JPEG) | **46.9 KB** | 708 KB/s = **5.7 Mbps** | 🔴 아래 |
+
+**① 포인트클라우드는 비조밀(unordered)이라 씬에 따라 커진다.** `point_step` 은 16 B 인데
+`width: 89,258` 로 424×240=101,760 자리 중 **유효 depth 만 실린다**(`row_step` 1,381,152 B).
+빈 테이블이면 작고 장면이 꽉 차면 커진다 — **160 Mbps 를 최대치로 읽으면 안 된다.**
+
+**② 🔴 압축 컬러가 JPEG 치고 크다 — `jpeg_quality` 가 설정돼 있지 않다.**
+```
+$ ros2 param get /camera/camera color.image_raw.compressed.jpeg_quality
+Parameter not set          ← image_transport 기본값(95)으로 압축된다
+```
+우리 `yolo_seg_node` 는 q80 을 명시해서 848×480 을 36 KB 로 줄이는데(33배), 드라이버가 내는
+쪽은 q95 라 424×240 인데도 46.9 KB 다. **대역폭이 문제가 되면 이 파라미터가 첫 손잡이다**
+(80 으로 내리면 대략 1/3~1/4 예상 — ⚠️ 미검증, 인식률 영향도 미검증).
+
+## 포인트클라우드를 실제로 구독하는 노드는 `move_group` 하나다 (2026-08-09, 실측)
+
+```
+$ ros2 topic info -v /camera/camera/depth/color/points
+Publisher count: 1     → /camera/camera   (realsense2_camera_node)
+Subscription count: 1  → /move_group      ← 이것뿐
+```
+정적으로도 `src/` 전체에서 `PointCloud2`/`depth/color/points` 를 언급하는 파일은
+**`m0609_rg2_moveit/config/sensors_3d.yaml:45` 단 한 곳**이다(`build/` 제외 전수 grep).
+`pick_fsm`·`graspgenx_perception`·`cumotion` 의 `create_subscription` 에 `PointCloud2` **0건**.
+
+- `graspgenx` 는 점군 토픽을 안 받고 `aligned_depth_to_color` + `camera_info` 로 **직접 역투영**한다.
+- `cumotion` 패키지 코드가 보는 건 nvblox 가 낸 `visualization_msgs/Marker` 복셀이다
+  (`cumotion/arm.py:416`, 타입이 `Marker` 가 아니면 감시를 생략한다 `:410-413`).
+- **→ `pointcloud.enable` 은 octomap 전용 스위치다.** cuMotion 으로 완전히 넘어가면 끌 수 있고
+  그러면 로컬 160 Mbps 발행이 통째로 사라진다. **지금은 못 끈다** — `planner:=ompl` 비교 경로가
+  살아 있고(`cumotion/config/dynamic_avoid.yaml:91-92`) 실측 시점에 `move_group` 이 물고 있었다.
+
+### ⚠️ 현행 기동 구성의 nvblox 는 **color 를 안 먹는다**
+
+```
+/nvblox_node                 ← /cumotion/camera_1/world_depth (Image)
+                               /camera/camera/aligned_depth_to_color/camera_info
+                               (+ /pose, /transform)          ← color 계열 0건
+/cumotion_robot_segmentation ← /camera/camera/aligned_depth_to_color/image_raw
+                               /camera/camera/aligned_depth_to_color/camera_info
+                               /joint_states, /tf, /tf_static
+```
+`config/testcommand.md` T5 는 `camera_0/color/image`·`camera_0/color/camera_info` 리매핑 2줄을
+포함하는데, **실제로 도는 노드에는 그 구독이 없다.** 둘 중 하나다 — 그 2줄 없이 띄웠거나,
+nvblox 가 color 옵션이 꺼진 상태라 리매핑만 받고 구독은 안 하거나. **어느 쪽인지 미확인.**
+`camera/camera/color/camera_info` 의 실측 소비자도 **0건**이라 "nvblox 전용"이라던 기존 기록과
+어긋난다 — nvblox 설정을 만지기 전에 이걸 먼저 확인할 것.
+
+## `~/.local` 오염은 **머신마다 다르다** — 어느 PC 인지 먼저 말하라 (2026-08-09 정정)
+
+`~/.local` 은 홈 디렉토리라 두 PC 가 각각 별개다. 2026-08-08 에 "`~/.local` 이 다시 오염됐다"고
+적힌 것은 **개인PC 에서 잰 값**이었고 머신이 명시돼 있지 않았다.
+
+| | 개인PC (2026-08-08) | 실기 `rokey` (2026-08-09) |
+|---|---|---|
+| `~/.local/.../{torch,cv2,ultralytics,anyio,numpy}` | 전부 존재 | 🟢 **0개** |
+| `import cv2` | `~/.local` 4.10.0 | 🟢 apt **4.5.4** (`/usr/lib/python3/dist-packages`) |
+| `import numpy` | 1.24.4 | 🟢 apt **1.21.5** (같은 경로) |
+| `pytest src/graspgenx_perception/test/*` | `ModuleNotFoundError: _pytest.scope` | 🟢 **24 passed, 0.39s, 우회 없이** |
+
+→ **`-p no:anyio` 는 개인PC 전용 우회다.** 실기에서 이 플래그를 붙일 이유가 없다.
+
+## 탐지 대상·pick 타겟의 정본을 `config/objects.yaml` 하나로 합쳤다 (2026-08-09)
+
+**문제**: 같은 물체 목록을 두 곳에 **다른 표현으로** 적고 있었다.
+
+| | `yolo_seg_node.classes` | `grasp_bridge_node.target_classes` |
+|---|---|---|
+| 표현 | COCO **인덱스** `[46,47,49]` | **이름** `apple,banana,orange` |
+| 위치 | 컨테이너 | 호스트 |
+| 런타임 변경 | ❌ `__init__` 1회 | ✅ `compute()` 마다 |
+
+두 곳을 손으로 맞추면 반드시 어긋난다. 어긋나면 "YOLO 가 애초에 안 찾는 물체를 타겟으로
+지정한" 상태가 되는데, 기존 에러는 `이름이 맞는지(대소문자 구분) 확인할 것` 이라 **오타를
+의심하게 만들었다.** 실제 원인은 탐지 범위인데 몇 시간을 엉뚱한 데서 쓰게 되는 자리다.
+
+**결정**: **ws 루트 `config/objects.yaml`** 하나가 정본. `detect`(이름 목록) +
+`pick_default`(기본 타겟). `yolo_seg_node` 가 `detect` 를 읽고, `pick_fsm.launch.py` 가
+`pick_default` 를 읽는다.
+
+- 🔴 **패키지 안(`src/*/config/`)에 두지 않은 이유**: `--symlink-install` 이어도
+  `ament_python` 패키지의 share 는 `build/` 복사본이라(이 문서 위쪽 항목) 고쳐도 안 먹는다.
+  실측: `install/graspgenx_perception/share/.../graspx.launch.py -> build/...`.
+  ws 루트면 **재빌드 없이** 고치고 다시 띄우면 된다 — 2026-08-09 `pick_default` 를
+  `''`→`apple` 로 고치고 재빌드 없이 런치 기본값이 바뀌는 것으로 확인.
+- **컨테이너도 같은 파일을 본다**: `docker exec od_kimkh head -1 /home/kimkh/cobot2_ws/config/objects.yaml`
+  이 호스트와 같은 내용을 낸다 (ws 가 같은 절대경로로 마운트됨, 2026-08-09 확인).
+  `graspx_container.sh` 가 `-e COBOT2_OBJECTS` 로 경로를 넘긴다.
+- **경로 해결**: 런치가 자기 share 에서 4단계 위(`<ws>/install/<pkg>/share/<pkg>` → `<ws>`)를
+  되짚는다. 하드코딩된 홈 경로가 없다 — 실측으로 `/home/kimkh/cobot2_ws/config/objects.yaml`
+  이 나오는 것 확인. `COBOT2_OBJECTS` 로 덮어쓸 수 있다.
+
+**🔴 인덱스는 사람이 적지 않는다.** 이름→COCO 인덱스 변환은 **실제로 올라간 가중치의
+`model.names`** 로만 한다(`names_to_coco_ids()`). `banana=46` 같은 표를 설정 파일이나 문서에
+베껴 두면 가중치를 바꾼 날 조용히 어긋난다. 검증: `[apple,banana,orange]` → `[46,47,49]`
+(문서가 손으로 적어 두던 값과 일치). 모르는 이름은 **기동 즉시 예외** — 가중치가 아는 이름을
+전부 찍어준다. 조용히 무시하면 "사과를 왜 못 잡지"를 며칠 쫓는다.
+`detect` 에 인덱스(`[46, 47]`)를 적어도 형식 검사에서 죽는다.
+
+**에러 메시지도 같이 고쳤다**: 브리지가 타겟을 못 찾으면 이제 **YOLO 가 이번에 실제로 낸
+클래스 목록**을 같이 찍는다. 그 목록에 타겟이 없으면 오타가 아니라 `detect` 문제라고
+명시한다 — 이 둘은 눈으로 구분이 안 되고, 실제로 본 목록이 있어야만 갈린다.
+
+## RealSense depth 필터 (`camera.launch.py`) — 시도 후 롤백, 2026-08-09
+
+`realsense2_camera_node`에 드라이버 단 `spatial_filter`/`hole_filling_filter`/
+`threshold_filter` on, `min_dist=0.28`/`max_dist=2.5`로 노출했다가 **실기에서 롤백했다.**
+live_viz 포인트클라우드가 필터 적용 후 오히려 구멍·스파클 노이즈가 늘어난 것으로 보여
+(스크린샷 확인, 정량 비교는 안 함) `camera.launch.py`를 원래대로 되돌렸다. 원인
+미조사 — 필터 파라미터 값이 부적절했는지, threshold 범위가 실제 작업 거리와 안 맞았는지,
+아니면 다른 원인인지 다음에 다시 시도할 때는 **원인부터 확인하고** 값을 바꾼다.

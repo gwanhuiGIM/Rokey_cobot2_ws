@@ -13,6 +13,8 @@
   <exec_depend>shape_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>   <!-- rqt_panel 이 task_manager 속도 파라미터를 set/get -->
+
   <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>pick_fsm_msgs</exec_depend>
   <exec_depend>onrobot_rg_msgs</exec_depend>

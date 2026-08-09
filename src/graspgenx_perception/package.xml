@@ -18,6 +18,9 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <!-- /grasp/compute_grasp (폭 포함 응답). import 실패해도 브리지는 Trigger 로 뜬다 —
+       그래도 여기 적는다: 없으면 폭이 FSM 까지 못 간다는 사실이 빌드에 드러나야 한다 -->
+  <exec_depend>pick_fsm_msgs</exec_depend>
   <!-- 기본 가중치(resource/yolo11n-seg.pt)를 이 패키지 share 에서 찾는다 -->
   <exec_depend>object_detection</exec_depend>
   <!-- ultralytics·torch 는 rosdep 키가 없고 apt 로 설치하지 않는다.

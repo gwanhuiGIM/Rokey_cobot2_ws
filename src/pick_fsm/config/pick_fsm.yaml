@@ -5,7 +5,8 @@ task_manager:
   ros__parameters:
 
     # ── 안전 ─────────────────────────────────────────────
-    dry_run: true               # true = plan_only. 궤적만 만들고 로봇은 안 움직인다
+    # ⚠️ dry_run(plan_only) 은 2026-08-09 제거했다. 이 FSM 은 항상 실제로 움직인다.
+    #    남은 소프트 안전장치는 require_approval 하나뿐이고, 최종 안전장치는 비상정지 버튼이다.
     require_approval: true      # /pick/approve 없이는 APPROACH 로 못 넘어간다
     approval_timeout_sec: 300.0
 
@@ -80,6 +81,8 @@ task_manager:
     gripper_backend: real       # real | virtual. 숫자 명령의 의미가 서로 다르다
     gripper_service: /onrobot/sendCommand
     grip_detected_topic: /onrobot/grip_detected
+    # 물체 폭에서 **빼는** 조임 여유. 목표 개구 = 물체 폭 - 이 값.
+    # 더하면 손가락이 물체에 닿기 전에 멈춘다(2026-08-09 부호 수정).
     grip_clearance_m: 0.008     # UNVERIFIED: 도면값 아님. 실측 튜닝 필요
     max_grip_width_m: 0.102     # GraspGenX sweep_volume 기준(하드웨어 0.110보다 좁은 쪽)
     force_down_steps: 0         # 'd' 반복 횟수. 0이면 드라이버 기본 = 40 N (RG2 최대!)
@@ -88,7 +91,11 @@ task_manager:
     grip_retries: 1
 
     # ── 인식 ─────────────────────────────────────────────
-    grasp_source: compute_grasp   # compute_grasp | legacy_trigger | manual
+    # /grasp/compute_grasp 서버는 2026-08-09 에 grasp_bridge_node 에 생겼다.
+    # 🔴 **물체별 폭은 compute_grasp 경로로만 온다.** legacy_trigger(std_srvs/Trigger)는
+    #    응답에 폭 필드가 없어 아래 default_width_m 상수로 전부 때운다 — 물체가 뭐든 같은 폭.
+    #    폭을 쓰려면 compute_grasp 로 바꾼다. 단 **실기 미검증**이다(폭 측정·조임 부호 신규).
+    grasp_source: legacy_trigger  # legacy_trigger | compute_grasp | manual
     grasp_service: /grasp/compute_grasp
     grasp_trigger_service: /grasp/compute
     grasp_best_topic: /grasp/best
@@ -97,9 +104,18 @@ task_manager:
     default_width_m: 0.06       # UNVERIFIED: legacy/manual 경로 전용 임시 폭
     max_alternatives: 5
 
+    # ── 인식 브리지 푸시 ─────────────────────────────────
+    # 타겟의 정본은 이 FSM 이다. PERCEIVE 진입 때 아래 노드의 target_classes(+seg_source)로
+    # 밀어 넣는다 — 안 그러면 브리지에 남은 이전 값과 어긋난 채 조용히 돈다(2026-08-09 실기).
+    bridge_node: /grasp_bridge_node   # 비우면('') 푸시하지 않는다 — 브리지를 직접 설정할 때
+    bridge_seg_source: yolo     # 이 ws 의 기본 파이프라인. geometric 은 클래스를 몰라
+                                # target 을 못 쓴다. ''(빈 문자열)이면 브리지 설정을 안 건드림
+
     # ── 음성 ─────────────────────────────────────────────
     voice_enabled: true
     keyword_service: /get_keyword
-    target: ''                  # voice_enabled=false 일 때 쓸 고정 타겟
+    # voice_enabled=false 일 때의 **초기** 타겟. 콤마로 여러 개('apple,orange'), 비우면
+    # 자동(브리지가 본 것 전부에서 점수 최고). 런타임에는 /pick/target 이 이 값을 덮는다.
+    target: ''
 
     tick_hz: 10.0

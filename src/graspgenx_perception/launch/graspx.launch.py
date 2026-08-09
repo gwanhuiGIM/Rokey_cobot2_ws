@@ -7,10 +7,15 @@ GraspGenX 워커를 `uv` 로 띄우는데 **컨테이너에 uv 가 없다**. 그
   # A) YOLO 세그 (기본값) — 컨테이너와 호스트를 각각 띄운다
   #   컨테이너 (run_yolo=true, run_bridge=false 가 기본이라 인자 없이 그대로 써도 된다):
   #   FASTRTPS_DEFAULT_PROFILES_FILE 필수 (없으면 프레임 0장)
-  ros2 launch graspgenx_perception graspx.launch.py classes:='[46,47]'
+  #   탐지 대상은 ws 루트 `config/objects.yaml` 의 detect 가 정본이다 — 인자로 안 준다
+  ros2 launch graspgenx_perception graspx.launch.py
   #   호스트: run_bridge 는 기본 false 라 켜야 하고, yolo_seg_node 는 컨테이너 쪽 것만 쓴다
-  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true \
-      target_classes:=apple
+  ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true
+  #   ⚠️ pick_fsm 과 같이 쓸 거면 여기 `target_classes:=`/`seg_source:=` 를 주지 않는다 —
+  #      task_manager 가 PERCEIVE 마다 자기 타겟으로 덮어쓴다(2026-08-09). 타겟은
+  #      `/pick/target` 이나 rqt 패널에서 고른다. 브리지 단독으로 돌릴 때만 여기서 준다.
+  #   live_viz 기본 true — 뜨는 순간부터 http://<이 머신>:8080 에 매 캡처가 자동으로
+  #      그려진다(실제 포인트클라우드 + grasp 후보 + 1등 콜리전 메시). 끄려면 live_viz:=false.
 
   # B) 기하 세그 — 호스트 한 대로 끝난다. 물체 클래스를 모른다(target_classes 못 씀)
   ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true \
@@ -31,14 +36,34 @@ seg_source:
               (2026-08-08 확정: 잡을 물체를 target_classes 로 지정해 하나씩 돌린다)
 """
 
+import os
 from typing import List
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def default_objects_file() -> str:
+    """ws 루트의 `config/objects.yaml`. 없으면 `''`(기능 끔).
+
+    패키지 안이 아니라 ws 루트에 두는 이유는 그 파일 머리말에 적어 뒀다 — 요지는
+    `--symlink-install` 이어도 패키지 config 는 `build/` 복사본이라 고쳐도 안 먹는다는 것.
+    share = <ws>/install/<pkg>/share/<pkg> 라 4단계 위가 ws 루트다. 이 배치가 아닐 수도
+    있으니 존재 확인을 하고, `COBOT2_OBJECTS` 로 언제든 덮어쓸 수 있게 둔다.
+    """
+    env = os.environ.get('COBOT2_OBJECTS')
+    if env:
+        return env
+    share = get_package_share_directory('graspgenx_perception')
+    path = os.path.abspath(os.path.join(share, '..', '..', '..', '..',
+                                        'config', 'objects.yaml'))
+    return path if os.path.isfile(path) else ''
+
 
 ARGS = {
     'seg_source': ('yolo', "'geometric' 또는 'yolo'"),
@@ -53,7 +78,12 @@ ARGS = {
     # COCO 80종의 **인덱스** 목록. 비우면 전체. banana=46, apple=47, cup=41, bottle=39,
     # bowl=45, orange=49, scissors=76 (2026-08-07 yolo11n-seg.pt 의 model.names 로 확인).
     # 이 가중치엔 공구 5종이 없다 — 없는 물체는 어떤 인덱스로도 못 잡는다.
-    'classes': ('[]', "COCO 클래스 인덱스 필터. 예: classes:='[39,41,44,46,47,49,64]' (bottle, cup, spoon, banana, apple,orange,mouse)"),
+    # 탐지 대상의 정본. 이름으로 적고 노드가 가중치로 인덱스를 뽑는다 — 아래 `classes` 는
+    # 이 파일이 없을 때만 쓰는 옛 경로다(인덱스를 손으로 적는 쪽).
+    'objects_file': (default_objects_file(),
+                     "탐지 대상·기본 타겟의 정본 yaml. 비우면 아래 classes 를 쓴다"),
+    'classes': ('[]', "objects_file 을 안 쓸 때의 COCO **인덱스** 필터. "
+                      "예: classes:='[46,47,49]' (banana, apple, orange)"),
     'min_pixels': ('300', '이보다 작은 덩어리는 물체로 안 본다'),
     # `classes` 와 역할이 다르다: `classes` 는 **무엇을 탐지할지**(yolo, 넓게 두는 값),
     # `target_classes` 는 **무엇을 잡을지**(bridge, 좁게 두는 값). 브리지는 대상 외 라벨을
@@ -63,6 +93,11 @@ ARGS = {
     'obj_max_h': ('0.12', '상판 위 이 높이를 넘는 픽셀은 버린다 — 로봇 팔/그리퍼 self-filter'),
     'out_dir': ('', '씬 4파일 저장 위치. 비우면 <repo>/data/graspgenx_scene '
                     '(2026-08-07부터 항상 영구 저장 — 임시 디렉토리 아님)'),
+    # 워커 기동 인자라 워커가 이미 떠 있으면 안 먹는다 — 브리지·워커를 새로 띄울 때만 유효.
+    # **기본 켜짐**(2026-08-09) — 발표·디버깅에 상시 쓰기로 함. 끄려면 live_viz:=false.
+    'live_viz': ('true', "compute() 마다 viser 웹뷰어(실제 포인트클라우드+grasp 후보)를 "
+                         "자동 갱신. http://<이 머신>:live_viz_port"),
+    'live_viz_port': ('8080', 'live_viz 웹뷰어 포트'),
 }
 
 
@@ -83,6 +118,7 @@ def generate_launch_description():
             # ParameterValue(value_type=List[int]) 가 YAML 로 파싱해 정수 배열로 만든다
             # (2026-08-07 `LaunchContext` 로 '[]'/'[46,47]' 둘 다 직접 평가해 확인).
             'classes': ParameterValue(cfg['classes'], value_type=List[int]),
+            'objects_file': cfg['objects_file'],
             'min_pixels': cfg['min_pixels'],
         }],
     )
@@ -102,6 +138,8 @@ def generate_launch_description():
             # 문자열로 선언한다 — 리스트였다면 rcl YAML 파서의 타입 함정을 또 밟는다
             # (CLAUDE.md §4). ParameterValue 로 감쌀 필요도 없다.
             'target_classes': cfg['target_classes'],
+            'live_viz': ParameterValue(cfg['live_viz'], value_type=bool),
+            'live_viz_port': ParameterValue(cfg['live_viz_port'], value_type=int),
         }],
     )
 

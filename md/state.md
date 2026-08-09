@@ -97,16 +97,18 @@ cuMotion이 쥔 장애물 복셀 **27,646개**(`/curobo/voxels`) — nvblox 세�
 | 로봇 bringup (real) | ✅ 검증됨 | 실기 연결 후 MoveIt Plan/Execute까지 확인 (2026-08-02) |
 | 카메라 드라이버 (`reals` alias) | ✅ 검증됨 | `/camera/camera/...` 토픽 실측 (2026-08-01) |
 | 카메라 드라이버 (`camera.launch.py`) | ✅ 검증됨 | 실기 D435i로 기동 (2026-08-03). `/camera/camera` + `/camera_calib_tf` 노드 기동, `/camera/camera/depth/color/points` 18~20 Hz 발행, `/tf_static`의 `base_link→camera_link`가 `calib_npy_to_tf.py` 출력과 소수점까지 일치 |
-| 캘리브 TF (`base_link→camera_link`) | ⚠️ **잠정** | 값은 나오나 **카메라 마운트 강성 미확보**. TF 발행 자체는 검증됨(위). 현행 캘리브(2026-08-03, `data/` 34장)는 **자체 진단에서 불합격** — AX=XB 병진잔차 중앙값 40.1 mm, 31쌍 중 21쌍이 30 mm 초과. octomap voxel(20 mm)의 2배라 **octomap 정밀도를 캘리브가 지배한다.** 개발용 TF로는 쓸 수 있으나 인식 정확도 실측의 근거로 삼지 말 것 |
+| 캘리브 TF (`base_link→camera_link`) | ✅ 전파 검증됨 / 🔴 **값은 불합격** | **전파는 확인됨(2026-08-09)**: 실기 `tf2_echo base_link camera_link` = `[1.435, -0.053, 0.822]`, RPY `[-4.98, 30.22, -177.53]°` 로 새 npy 계산값과 소수점까지 일치. npy를 직접 읽는 노드는 없고 전부 tf2 lookup이라 주입점은 `camera_calib_tf` 하나뿐. **그러나 값 자체가 자체 진단 불합격**: `data/` 32자세를 **424x240**으로 수집해 코너가 **5장**만 검출(쌍 4개), 병진잔차 **41.1 mm** + 회전 2.80°(1.65 m에서 **횡 81 mm**). 근거 `corecode/Calibration_Tutorial/calib_report.json`. **카메라를 실제로 옮겼으므로 되돌리기는 불가 — 1280x720 재수집만이 해법.** 상세는 [[ws/cobot2/context/constraints]] "재캘리브 (2026-08-09)" |
 | MoveIt 경로 계획 | ✅ 검증됨 | RRTConnect, 0.019 s |
 | MoveIt 궤적 실행(Execute) | ✅ **실기 검증됨** | 실제 로봇으로 Plan → Execute 확인 (2026-08-02) |
 | RViz 수동 장애물 회피 | ✅ 설정 완료 | `publish_geometry_updates` 등 4개 활성. [README 5절](README.md#5-시뮬레이션에서-장애물-놓고-회피-디버깅) |
 | **3D 장애물 감지 (octomap)** | ✅ **실기 검증됨** (2026-08-03) | `moveit-ros-perception` 설치·self-filter·장애물 회피 확인. 상세 근거는 `md/review_moveit.md`가 단일 출처 |
 | 그리퍼 MoveIt 제어 | ❌ 미지원 | RG2는 `/onrobot/sendCommand` 서비스로 직접 제어. MoveIt 컨트롤러 없음 |
 | YOLO-seg 인식 (컨테이너→호스트) | ✅ 검증됨 | `/yolo_seg/labels` 호스트 수신 25.6 Hz (2026-08-07 21:15). 이전의 "데이터 안 흐름"은 해소됨 |
+| **yolo 경로 테이블 높이 필터링·돌출 계산** | ✅ 구현·합성테스트 5건 PASS / ⚠️ **실기 미검증** | 2026-08-09. `segment_from_labels()`가 물체마다 국소 테이블 기준(±`obj_radius_m`/`yolo_table_ring_m`)으로 `obj_min_h` 미만 픽셀을 다듬고 돌출높이를 로그에 남긴다 — 전엔 yolo 경로에 이 필터가 아예 없었다. `obj_max_h`(기하 전용, 0.12m)는 yolo에 안 건다(서 있는 물체가 잘림). → [`src/PACKAGES.md#graspgenx_perception`](../src/PACKAGES.md#graspgenx_perception) "yolo 경로에도 테이블 높이 필터링이 생겼다" |
 | **물체 종류 선정** (`target_classes`) | ✅ 구현·PASS / ⚠️ 실기 미검증 | 빌드 PASS + 순수함수 24개 PASS + 저장된 실기 씬 이미지로 확인(8검출 → `apple` 1개). 라이브 파이프라인 실행은 안 해봄 (YOLO 주 파이프라인, README 0절·6절) |
 | **물체 개체 선정** (사과 2개 중 하나) | ❌ 미구현 | 설계만 있음 — **정본은 [`md/plans/2026-08-08-vla-integration.md`](plans/2026-08-08-vla-integration.md) §5** (좌표 키 + 클릭/서비스 지정). `graspgenx_perception/README.md` "다음 방향" 절의 옛 2단계 안(`scene_id` 핸들)은 이걸로 대체됐다 |
-| **VLA(`~/M0609_VLA_system`) 통합** | ❌ 미착수 (범위 확정) | **로봇 행동은 이 ws 가 그대로 유지**하고, VLA 는 "어떤 물체를 집을지"만 **외부 PC**(휴대폰 핫스팟 링크) 에서 전달한다. 지시 채널은 `std_msgs/String`(JSON) 하나 — 커스텀 msg·새 패키지 0개. **D435i 영상은 압축 컬러(`color/image_raw/compressed`)만 넘긴다** — 포인트클라우드 ~245 Mbps·raw 컬러 55 Mbps 는 핫스팟에서 불가 |
+| **VLA 지시 채널** (`/vla/pick_command`) | ✅ 구현·빌드 PASS / ⚠️ **노드 단독 실측만** | `voice_processing/vla_command_node` → `task_manager` 의 기존 `/get_keyword` 자리. **`pick_fsm` 코드 0줄·새 msg 0개·새 패키지 0개.** 스키마 27건 PASS + 왕복/TTL/거부/결과판정 실측. 같은 채널로 rqt 패널의 **시작·중단·리셋**(`cmd:"start"/"abort"/"reset"`)도 대신한다 — `승인`만은 코드 경로 자체가 없어 `cmd:"approve"`가 항상 거부됨을 실측 확인. 🔴 **FSM·로봇과 연결한 한 사이클은 미검증**, VLA PC 실연결도 미검증. 실행·테스트 명령 → [README 7-3절](../README.md#7-3-음성vla로-rqt-패널-버튼-대신하기--실행-및-테스트-2026-08-09-구현), 상세 계약 → [`src/PACKAGES.md#voice_processing`](../src/PACKAGES.md#voice_processing) |
+| **VLA(`~/M0609_VLA_system`) 나머지 통합** | ❌ 미착수 (범위 확정) | **로봇 행동은 이 ws 가 그대로 유지**하고, VLA 는 "어떤 물체를 집을지"만 **외부 PC**(휴대폰 핫스팟 링크) 에서 전달한다. **D435i 영상은 압축 컬러(`color/image_raw/compressed`)만 넘긴다** — 포인트클라우드 160 Mbps(실측)·raw 컬러 36.8 Mbps 는 핫스팟에서 불가. 남은 것: 핫스팟 대역폭 실측, 두 PC DDS 도달성, `pixel` 개체 선정(§5) |
 
 > 3D 장애물 감지(octomap) 검증 결과·채택 설정값 스냅샷·cuRobo 비교 설계는 `md/review_moveit.md`가 단일 출처다.
 
@@ -117,10 +119,12 @@ cuMotion이 쥔 장애물 복셀 **27,646개**(`/curobo/voxels`) — nvblox 세�
 | # | 값 | 나오는 곳 | 어긋나면 |
 |---|---|---|---|
 | ① | 네임스페이스 `dsr01` | `bringup.launch.py`(`namespace=`), `moveit_controllers.yaml`(컨트롤러 이름 `/dsr01/...`), `moveit.launch.py`(`-c /dsr01/controller_manager`) — **3곳** | **Plan은 되고 Execute만 ABORTED.** 실제로 겪은 버그다 |
-| ② | 캘리브 `T_cam2base.npy` | `corecode/Calibration_Tutorial/`(생성) → `m0609_rg2_bringup/config/`(소비). 동기화는 **수동 `cp` 하나뿐** | 옛 값으로 TF가 발행된다. 340 mm 어긋난 전례 있음 |
+| ② | 캘리브 `T_cam2base.npy` | `corecode/Calibration_Tutorial/`(**정본, 생성**) → `m0609_rg2_bringup/config/`(symlink) → `install/.../config/`(symlink). 2026-08-03부터 **`cp` 불필요 — 정본만 갈아끼우면 install까지 자동 반영**(2026-08-09 md5로 3곳 일치 재확인) | 반대로 **나쁜 캘리브도 즉시 실기에 반영된다**. 갈아끼우기 전에 `calib_report.json`의 `verdict`를 볼 것 |
 | ③ | xacro 파일명 `m0609_with_rg2.urdf.xacro` | `bringup.launch.py`, `moveit.launch.py` 양쪽이 경로로 직접 읽는다 | moveit이 런타임에 깨진다 |
 | ④ | 관절 이름 `joint_1..6` | SRDF, `dsr_controller2.yaml`의 JTC 설정, `moveit_controllers.yaml` | 궤적이 컨트롤러에 거부된다 |
 | ⑤ | `seg_source` **기본값 `yolo`** (2026-08-08 변경, `capture_graspgenx_scene.py:91`) | `grasp_bridge_node`(호스트, 소비) ← `yolo_seg_node`(**컨테이너**, 발행). 기동 명령이 서로 다른 두 터미널이다 | 컨테이너 쪽을 안 띄우면 `/grasp/compute`가 **`seg_source=yolo 인데 라벨맵을 못 받았다`**로 실패한다. 기동 순서는 **`src/PACKAGES.md`** "pick_fsm §2 실행" 3.5/4번이 정본 (2026-08-09 보강. 패키지 README는 같은 날 포인터만 남기고 이관됐다) |
+| ⑥ | **`ROS_DOMAIN_ID` = 93** (2026-08-09 신설 — VLA 로 **PC 가 둘이 되면서** 대표 사례가 됐다) | 호스트 셸(`rdm` alias) · 컨테이너 이미지(93 박혀 있음) · **외부 VLA PC(지정 0건 → 기본 `0`)** | **토픽이 아예 안 보인다.** 노드는 멀쩡히 떠 있어서 "죽었나?"로 오진하기 쉽다. 판별: **도메인이 탐색을, DDS 프로파일이 데이터를 결정한다** — 토픽 자체가 안 보이면 도메인, 토픽은 보이는데 데이터가 0 이면 프로파일/방화벽 (2026-08-07 A/B 실측) |
+| ⑦ | **카메라 프로파일 `424x240x15`** (`camera.launch.py:74-77` 기본값) | `align_depth.enable=true` 라 **color 프로파일 하나가 octomap·nvblox 두 경로를 동시에** 지배한다 | VLA 대역폭 때문에 올리면 **우리 octomap 이 먼저 밀린다**(updater 단일 스레드). ⚠️ **`480x320` 은 D435i 미지원** — 주면 스트림이 안 열린다. 지원 목록은 [[ws/cobot2/context/constraints]] |
 
 ### 알려진 함정
 
@@ -190,7 +194,17 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
-- 🟡 **VLA 통합 — 범위 확정됨(2026-08-08 사용자), 미착수.** 정본은
+- 🟢 **VLA 통합 — 지시 채널(§2)은 2026-08-09 구현·빌드·단독실측 완료. 남은 병목은 §5.**
+  `src/voice_processing/vla_command_node` 가 `/vla/pick_command`(JSON) 를 받아
+  `task_manager` 가 이미 갖고 있던 `/get_keyword` 자리로 넘긴다 — **`pick_fsm` 코드 0줄,
+  새 msg 0개, 새 패키지 0개.** 결과는 `/vla/pick_result` 로 되돌린다(`/pick/state` 만 보고
+  판정). 🚨 **`/pick/approve` 는 부르지 않는다** — `auto_start` 는 `/pick/start` 까지만이다.
+  🔴 **아직 클래스 이름 지시만 끝까지 동작한다.** `pixel`(어느 개체인가)은 검증만 하고
+  못 쓴다 — `grasp_bridge_node` 에 `select_by_point()` 가 없다(계획 §5, 코드 0줄).
+  같은 클래스 물체가 2개 이상 놓이면 `pixel_policy:=reject` 로 띄운다.
+  🔴 **미검증: `task_manager` 와 실제로 연결한 pick 한 사이클, VLA PC 실연결.**
+  레퍼런스는 [[ws/cobot2/src/PACKAGES]] `#voice_processing`.
+- 🟡 **VLA 통합 — 범위 확정됨(2026-08-08 사용자), §3-3 이하는 미착수.** 정본은
   [[ws/cobot2/plans/2026-08-08-vla-integration]]. 여기엔 값을 베끼지 않는다.
   **로봇 행동(pick_fsm+MoveIt+graspgenx)은 우리가 유지하고, VLA 는 "무엇을 집을지"(나중에
   "어디에 놓을지")만 전달한다. VLA 는 아예 다른 외부 PC 에서 돈다** — 웹캠·homography·LLM 은
@@ -198,20 +212,32 @@ code .                                          # 이후 VS Code Source Control�
   전부 폐기됐다. **3차 개정(같은 날): 링크는 개인 휴대폰 핫스팟이고 D435i 영상을 VLA PC 로
   넘긴다** → 대역폭이 첫 제약이 됐고(포인트클라우드·raw 컬러는 못 넘긴다, 압축 컬러만),
   대신 지시를 **픽셀 좌표**로 보낼 수 있어 좌표계 합의(D3) 문제가 강등됐다.
-  남은 것: **D435i 가 `480x320` 을 지원하는가**(지원 목록에 없어 보임 — 실기에서
-  `rs-enumerate-devices` 로 확인), 핫스팟 실효 대역폭 실측, 두 PC 간 DDS 도달성(우리 93 vs VLA 0).
+  **4차 개정(2026-08-09, 실기 `rokey` 실측)**: ✅ **D5 해결 — `480x320` 미지원 확정,
+  `424x240` 그대로 둔다.** 대역폭도 실측으로 교체 — 클라우드 **160 Mbps**(추정 245보다 작음),
+  raw 컬러 36.8 / depth 24.5(추정 정확), 🔴 **압축 컬러는 5.7 Mbps 로 추정(1.5)의 3.8배**
+  (원인: `jpeg_quality` 미설정 → 기본 95. 80 으로 낮추는 것이 첫 손잡이).
+  **포인트클라우드는 아직 쓴다 — 소비자는 `move_group` 정확히 하나**(`Subscription count: 1`
+  실측). cuMotion 전환 완료 전엔 못 끈다.
+  남은 것: 핫스팟 실효 대역폭 실측(`iperf3`), 두 PC 간 DDS 도달성(우리 93 vs VLA 0),
+  ⚠️ **`~/M0609_VLA_system` 이 실기 머신엔 없다** — VLA 측 값은 전부 개인PC 에서 읽은 스냅샷.
 - 🟡 **두 패키지가 서로 다른 손끝 모델을 쓴다** (2026-08-08 감사에서 발견).
   `pick_fsm` 은 `rg2.fingertip_from_rg2_base_m()`(실측 **218 mm**, 폭에 따라 가변)로
   2026-08-07 에 갈아탔는데, `graspgenx_perception/grasp_bridge_node.py:56` 은 아직
   `tcp_offset_m: 0.18` 상수다. VLA 도 180 mm 를 쓴다 → 통합 시 **38 mm 얕게 잡는다.**
   결정(D4)과 근거는 [[ws/cobot2/plans/2026-08-08-vla-integration]] §3. 실측 출처는
   [[ws/cobot2/context/constraints]]:900-906.
-- 🔴 **`~/.local` 이 다시 오염됐다 — 우리 `pytest` 가 깨져 있다** (2026-08-08 실측).
-  VLA `requirements.txt` 가 `torch 2.7.1`·`opencv-python 4.10`·`ultralytics 8.4.76`·
-  `numpy 1.24.4`·`anyio 4.13` 을 `~/.local` 에 깔았다. `import cv2` 가 apt 4.5.4 가 아니라
-  `~/.local` 4.10.0 을 잡는다. **`pytest` → `ModuleNotFoundError: _pytest.scope`**,
-  우회 `-p no:anyio` 로 24개 PASS 확인. `cv_bridge` 왕복은 아직 정상(segfault 없음).
-  → graspgenx README 의 "우회 불필요(2026-08-07)" 문장은 **지금 사실이 아니다.**
+- 🟡 **`~/.local` 오염 — 개인PC 만의 문제다. 실기 `rokey` 는 깨끗하다** (2026-08-09 정정).
+  08-08 에 "다시 오염됐다"고 적은 것은 **개인PC 에서 잰 값**이었다(머신을 안 적었다).
+  머신별 실측:
+  - **개인PC (2026-08-08)**: VLA `requirements.txt` 가 `torch 2.7.1`·`opencv-python 4.10`·
+    `ultralytics 8.4.76`·`numpy 1.24.4`·`anyio 4.13` 을 `~/.local` 에 깔았다. `import cv2` 가
+    apt 4.5.4 가 아니라 4.10.0 을 잡고, `pytest` → `ModuleNotFoundError: _pytest.scope`.
+    우회 `-p no:anyio` 로 24개 PASS.
+  - **실기 `rokey` (2026-08-09)**: 🟢 `~/.local` 에 해당 패키지 **0개**. `cv2` **4.5.4**,
+    `numpy` **1.21.5** 둘 다 `/usr/lib/python3/dist-packages`(apt). `pytest` **24 PASS,
+    우회 없이 0.39s**.
+  → **`-p no:anyio` 는 개인PC 전용 우회**로 읽는다. graspgenx README 의 "우회 불필요(2026-08-07)"
+  문장은 rokey 에서는 여전히 맞고 개인PC 에서만 틀리다.
 - ⚪ **개인PC(CPU)에는 YOLO 자산이 없다 — 정상이다, 이슈가 아니다** (2026-08-08).
   `nvidia-smi` 없는 머신에서 확인한 것이므로 **GPU PC 상태에 대해서는 아무것도 말해주지
   않는다**(판별 규칙은 아래 "두 PC 체제"). 여기서 관측된 것: 가중치 `yolo11n-seg.pt`
@@ -229,11 +255,12 @@ code .                                          # 이후 VS Code Source Control�
   ⚠️ **그 전에**: `install/pick_and_place_text/share/.../yolov8n_tools_0122.pt` 가 이 파일의
   **유일 사본**이다(`.gitignore` 의 `*.pt` 로 git 히스토리에 없음). 공구 5종 가중치이고
   2026-08-08 시점 "안 쓸 예정"으로 확인받았으므로 소실을 수용하고 진행해도 된다.
-- 🟡 **`voice_processing` 이 `COLCON_IGNORE` 다** (2026-08-08). `setup.py:16` 이 gitignore 된
-  `resource/.env`(API 키)를 `data_files` 에 강제해 `colcon build` 가 실패한다. `.env` 는 원래
-  있어야 하는 파일이라 `setup.py` 를 고치지 않고 빌드에서 뺐다. 지금은 안 쓴다
-  (`pick_fsm` 은 `voice:=false`). **추후 VLA 노드 통합 때 되살린다** — `.env` 를 채우고
-  `src/voice_processing/COLCON_IGNORE` 를 지우면 된다.
+- ✅ ~~**`voice_processing` 이 `COLCON_IGNORE` 다**~~ **해소 (2026-08-09).** `setup.py` 가
+  gitignore 된 `resource/.env` 를 `data_files` 에 **못박아** 파일 없는 머신에서 빌드가 통째로
+  실패하던 것이었다. `['resource/.env']` → **`glob('resource/.env')`** 로 바꿔 고쳤다 —
+  있으면 설치하고 없으면 `[]` 라 빌드가 안 깨진다. `.env` 는 여전히 `get_keyword`(마이크·STT·LLM)
+  의 **런타임** 필수 파일이고, 새로 넣은 `vla_command_node` 는 `.env` 도 추가 의존성도 안 쓴다.
+  `COLCON_IGNORE` 삭제 + `package.xml` 에 `rclpy`/`std_msgs`/`std_srvs` 등록 완료, 빌드 PASS.
 - 🟡 **`testcommand.md`가 vault 밖에 있다** (2026-08-07). 저장소 루트 → `config/testcommand.md`로
   옮겨졌는데, 이 문서는 **md/ 문서 형식으로 쓰여 있다** — meta 헤더(`status: live`,
   `owns: 실행 명령어 · 노드 지도 · 단계별 검증 명령`)가 있고 본문이
@@ -259,16 +286,20 @@ code .                                          # 이후 VS Code Source Control�
 - **캘리브 방식 변경(2026-08-02)**: `easy_handeye2` → `corecode/Calibration_Tutorial`(`eye2hand_calibration.py` / `handeye_calibration.py`). 두 알고리즘 모두 합성 데이터로 정답 복원 확인(오차 ~1e-13). npy(mm) → static TF(m) 변환은 `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`. ~~미해결: `data_recording.py`가 `set_tcp` 후의 `posx`를 기록하므로 결과의 부모 프레임이 flange가 아니라 TCP다~~ → **해소(2026-08-03).** eye-to-hand에서는 판↔그리퍼 변환 G가 AX=XB 유도에서 소거되므로, "그리퍼"를 flange로 잡든 TCP로 잡든 **`T_cam2base` 결과는 같다**(X는 base·camera 쪽 변환이라 팔 쪽 기준 프레임 선택과 무관). `--selfcheck`가 이걸 합성 데이터로 확인한다. 현재 `RECORD_IN_FLANGE_FRAME = False`(TCP 기준)로 두어도 문제 없다.
 - **Day1.5 압축 경로 신설** — 캘리브·인식 전부 생략하고 "장애물 놓으면 궤적이 바뀐다"만 보여주는 시연용 경로. GPU 불필요, 개인PC 가능. 임시 static TF를 쓰므로 **rosbag 녹화와 절대 겹치면 안 된다.**
 - **좌표 규약 버그 발견·수정 (2026-08-02)** — npy는 OpenCV **optical** 규약인데 ROS `camera_link`(body 규약)로 발행해 클라우드가 로봇 옆으로 90° 튀었다. `src/cobot_rg2/rg2/m0609_rg2_bringup/scripts/calib_npy_to_tf.py`가 이제 기본 보정한다. **`inv(T)` 문제가 아니었다** — 규약을 먼저 의심할 것. 채점표는 [[ws/cobot2/context/constraints]].
-- **보류: `sensors_3d.yaml`의 `max_range: 1.5`** (2026-08-03 사용자 결정). 카메라~base_link
-  실측 거리가 이 값을 넘어섰고(주석은 아직 낡은 "약 1.48 m" 기준이라 값과 근거가 어긋나 있다),
-  그만큼 로봇 베이스 주변 점이 잘린다. **재캘리브로 거리가 확정된 뒤에 정한다** — 지금 맞춰봐야
-  또 바뀐다. 재캘리브 직후 `max_range`와 주석을 같이 고칠 것.
-- **캘리브 품질: 현행값은 자체 진단 불합격 (2026-08-03, `data/` 34장)**. AX=XB 병진잔차
-  중앙값 **40.1 mm**, 31쌍 중 **21쌍**이 30 mm 초과. 자세를 34장으로 늘렸는데 26장이던
-  직전 수집(23.5 mm)보다 **나빠졌다** — 장수가 아니라 자세 품질 문제다.
-  **다음 캘리브는 이 40.1 mm와 비교한다.** `eye2hand_calibration.py`가 매 실행 찍는다.
-  **자세 재수집은 미룬다 (2026-08-03 사용자 결정)** — 현행값으로 개발을 진행하고,
-  마운트 강성이 확보되는 시점에 재수집한다. 그 전까지 인식 정확도 실측은 하지 않는다.
+- ~~보류: `sensors_3d.yaml`의 `max_range: 1.5`~~ → **해소 (2026-08-09 확인).** 파일은 이미
+  `max_range: 2.0`이고 변경 이력·근거가 `sensors_3d.yaml:49-56`에 남아 있다. 08-09 재캘리브 후
+  카메라 거리는 **1.655 m**라 2.0 안에 들어온다 — 손댈 것 없다. 거리는 문서에 적지 않는다
+  (yaml 주석의 `np.linalg.norm(T[:3,3])/1000` 한 줄로 그때그때 읽는다).
+- **캘리브 품질: 현행값은 자체 진단 불합격 (2026-08-09 재캘리브, `data/` 32자세 / 실제 표본 5장)**.
+  AX=XB 병진잔차 중앙값 **41.1 mm** (4쌍 중 2쌍이 30 mm 초과). **원인은 수집 해상도 424x240** —
+  `camera.launch.py` 기본값 그대로 띄우고 수집하면 코너가 안 잡힌다.
+  이전 최고값은 08-05 `data2`(1280x720, 18장)의 **6.0 mm**이고 그게 직전까지 커밋돼 있던 값이다.
+  **다음 캘리브는 이 6.0 mm와 비교한다.** 복구/재수집 절차와 두 값의 전체 비교표는
+  [[ws/cobot2/context/constraints]] "재캘리브 (2026-08-09)"가 단일 출처다.
+  ~~2026-08-03 기록(34장, 40.1 mm): 그 `data/`는 08-09 수집으로 덮어써져 더 이상 재현 불가~~
+  - **되돌리기 전에 카메라가 08-05 이후 물리적으로 움직였는지 확인할 것.** 두 값이 198/170/38 mm,
+    pitch 48°→30° 차이라 잔차만으로는 설명되지 않는다. 움직였다면 이전 값도 틀린 것이므로
+    되돌리기가 아니라 **1280x720 재수집만이 답이다.**
   - RMS 재투영오차는 공장 내부파라미터를 쓰는 동안 **결과 품질이 아니다**(참고값).
   - **LOO 수치를 재현성으로 읽지 말 것** — 리스트 순서만 섞어도 같은 크기로 움직이고,
     계통오차에는 눈이 멀다. 잔차 큰 쌍을 한꺼번에 빼면 80 mm 옮겨간 반면 LOO는 3.6 mm였다.
@@ -280,24 +311,31 @@ code .                                          # 이후 VS Code Source Control�
   ③ `move_group` CPU가 견디는지 — 다음 실기에서 확인. 경위: [[ws/cobot2/errors-log]] §7
 - **octomap_rviz_plugins 미설치** — `/octomap_binary`·`/octomap_full`을 RViz에서 볼 수 없다. 당장은 `/octomap_point_cloud_centers`(PointCloud2)로 우회 중. `topic_tools`도 미설치(throttle 불가 → 카메라 프로파일에서 줄인다).
 
-## ⏭ 다음에 GPU PC 앞에 앉으면 **먼저** 이 두 줄 (2026-08-08 미해결, 각 10초)
+## ⏭ GPU PC 확인 항목 — ① 해결, ② 미확인 (2026-08-09)
 
-개인PC 에서는 판정 불가라 남긴 것이다. 답이 나오면 `config/testcommand.md` 의
-"합치면서 드러난 파라미터 불일치" 표에서 해당 칸을 지운다.
+### ✅ ① `480x320` 은 D435i 지원 프로파일이 **아니다** (2026-08-09 `rs-enumerate-devices` 실측)
+
+| | 지원 목록 |
+|---|---|
+| **Color** | `320x180` `320x240` `424x240` `640x360` `640x480` `848x480` `960x540` `1280x720` `1920x1080` |
+| **Depth** | `256x144` `424x240` `480x270` `640x360` `640x480` `848x100` `848x480` `1280x720` |
+
+혼동 주의: depth 에 `480x270` 이 있지 **`480x320` 이 아니다.**
+→ **`config/testcommand.md` T1 이 `480x320` 으로 적혀 있으면 `424x240`(현 기본)으로 고친다.**
+  현 기본을 그대로 두면 바꿀 것이 없다. `config/testcommand.md` 의 "합치면서 드러난 파라미터
+  불일치" 표에서 해당 칸도 지운다.
+⚠️ **재캘리브 때는 예외로 `1280x720`** — `data_recording.py` 가 해상도를 지정하지 않고
+구독만 해서 낮은 해상도로 찍으면 코너 정밀도가 무너진다. **2026-08-09 불합격(41.1 mm)이
+바로 `424x240` 으로 수집해서 난 것이다.**
+
+### ⛔ ② GPU PC 의 alias 정의 — **아직 확인 안 함**
 
 ```bash
-# ① 480x320 이 D435i 지원 프로파일인가 — 카메라 연결 후
-#    config/testcommand.md T1 이 이 값으로 적혀 있다. 미지원이면 스트림이 안 열린다
-rs-enumerate-devices | grep -iE "Depth|Color" | sort -u
-
-# ② GPU PC 의 alias 정의 — 개인PC 와 다르다(이것 때문에 문서 대조가 한 번 틀렸다)
 alias reals; alias br; alias realsense
 ```
-
-- ①이 미지원으로 나오면 지원 목록 중 가장 가까운 값으로 `config/testcommand.md` T1 을 고친다.
-  ⚠️ **재캘리브 때는 예외로 `1280x720`** — `data_recording.py` 가 해상도를 지정하지 않고
-  구독만 해서 낮은 해상도로 찍으면 코너 정밀도가 무너진다(이 파일 "캘리브 수집은 1280x720").
-- ②는 `.bashrc` 가 머신 로컬이라 개인PC 에서 확인할 방법이 없다. [[ws/cobot2/errors-log]] #19.
+`.bashrc` 가 머신 로컬이라 개인PC 에서 확인할 방법이 없었다. [[ws/cobot2/errors-log]] #19.
+(⚠️ Bash 툴은 비대화형 셸이라 `.bashrc` 의 alias 가 안 잡힌다 — **사용자가 터미널에서 직접**
+쳐야 답이 나온다.)
 
 ## 다음 할 일 (순서 고정 — 위가 막히면 아래로 내려가지 않는다)
 > 이 절이 "다음에 뭐 하지"의 단일 출처다. 끝난 항목은 지우고 Day 진행 절로 옮긴다.
@@ -319,6 +357,14 @@ alias reals; alias br; alias realsense
    ROI/마스크 출처는 여전히 검출기(YOLO-seg 또는 RT-DETR)다.
    - **2026-08-09 진행**: 배선(`target_classes`)은 이미 있다 — `seg_source` 기본값이 `yolo`가 되면서
      클래스 이름으로 대상을 좁히는 경로가 살아 있다(`grasp_bridge_node.py:243-245`).
+   - **2026-08-09 (2차)**: **사람이 타겟을 고르는 UI/인터페이스까지 배선 완료.** 정본을
+     `task_manager` 하나로 옮겼다 — PERCEIVE 진입 때 `SetParameters`로 브리지의
+     `target_classes`+`seg_source(=yolo)`를 밀어 넣는다. 사람은 `/pick/target`(String,
+     TRANSIENT_LOCAL)이나 rqt 패널의 타겟 상자(YOLO가 보고 있는 클래스 목록 + [적용]/[자동])로
+     고른다. 빈 문자열 = 자동(점수 최고). `grasp_source` 기본값도 `legacy_trigger`로 바꿨다
+     (`compute_grasp` 서버가 이 ws에 없어 120s 기다리다 ABORT했다).
+     계기가 된 실기 실패(런치 인자 조용히 무시 + 정본 2개)는 constraints.md 맨 끝에 기록.
+     ⚠️ **가중치 블로커는 그대로다** — UI에서 고를 수 있는 건 COCO 80종뿐이다.
      **남은 블로커는 가중치 하나다**: `yolo11n-seg.pt`는 COCO 80종뿐이라 우리 물체를 못 잡는다.
      → 파인튜닝 계획 [[ws/cobot2/plans/2026-08-09-yolo-seg-finetune]] (방법·필요 요소·미결정 4건).
      어노테이션은 **새 툴 없이** `capture_graspgenx_scene.py`의 depth 세그를 그대로 라벨로 쓴다

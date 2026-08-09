@@ -1,0 +1,22 @@
+{
+  "generated": "2026-08-09T14:38:19",
+  "dataset": "data2",
+  "output": "T_cam2base_data2.npy",
+  "image_size": "1280x720",
+  "n_poses": 26,
+  "n_usable_images": 18,
+  "checkerboard": "10x7@24.0mm",
+  "camera_xyz_mm": [
+    1237.17,
+    -222.76,
+    783.65
+  ],
+  "n_pairs": 17,
+  "median_trans_mm": 6.0,
+  "median_rot_deg": 0.5,
+  "rot_lateral_mm": 12.9,
+  "max_trans_mm": 37.64,
+  "n_trans_over_30mm": 2,
+  "verdict": "양호",
+  "fail_reasons": []
+}

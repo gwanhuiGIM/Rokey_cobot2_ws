@@ -79,6 +79,22 @@ def fingertip_from_rg2_base_m(width_m: float) -> float:
     return fingertip_length_m(width_m) - RG2_BRACKET_LENGTH_M
 
 
+def grip_target_width_m(object_width_m: float, clearance_m: float,
+                        max_width_m: float = RG2_MODEL_WIDTH_M) -> float:
+    """**물체 폭** [m] -> 그리퍼에 명령할 **목표 개구 폭** [m].
+
+    🔴 조임 여유는 **뺀다**(2026-08-09 부호 수정). `close_async` 가 보내는 값은 "여기까지
+       닫아라"는 목표 개구 폭이다 — 물체 폭보다 **넓게** 명령하면 손가락이 물체에 닿기 전에
+       멈추고, 힘이 안 걸려 `grip_detected` 가 false 로 남는다(= 잡은 줄 알았는데 빈 손).
+       더하는 게 맞아 보이는 건 "물체를 넣을 틈"을 떠올려서인데, 그 틈은 접근 전에 보내는
+       `open_async()`('o' = 완전 개방)가 이미 만든다. 이 값은 **닫은 뒤** 폭이다.
+
+    과하게 빼는 쪽은 드라이버 힘 제한(rgfr)이 막아준다 — 접촉하면 거기서 스톨한다.
+    반대로 덜 빼면 아무 힘도 안 걸린다. 그래서 **비대칭 위험**이고, 부호를 틀리면 안 된다.
+    """
+    return max(0.0, min(float(max_width_m), float(object_width_m) - float(clearance_m)))
+
+
 def width_to_rgwd(width_m: float) -> int:
     """개구 폭 [m] → 드라이버 명령값 [1/10 mm], 유효범위로 클램프.
 

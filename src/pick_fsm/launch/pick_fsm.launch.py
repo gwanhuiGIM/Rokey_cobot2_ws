@@ -9,20 +9,73 @@
 하기 때문이다 — rqt 패널은 이 런치와 별개로 필요할 때만 띄운다(README "UI" 절):
     rqt --standalone pick_fsm
 
-    ros2 launch pick_fsm pick_fsm.launch.py                    # 계획만 (기본, 안전)
-    ros2 launch pick_fsm pick_fsm.launch.py dry_run:=false     # 실행. 승인은 여전히 필요
+⚠️ `dry_run`(계획만) 인자는 2026-08-09 제거했다. **이 런치는 항상 실기를 움직인다.**
+남은 소프트 안전장치는 `require_approval:=true`(기본값) 하나이고, 최종 안전장치는
+비상정지 버튼이다.
+
+🔴 **여기 선언되지 않은 인자는 에러도 경고도 없이 조용히 무시된다** (2026-08-09 실측).
+   두 번 밟은 자리라 이름을 적어둔다:
+   - `dry_run:=true` — 붙여도 로봇은 **움직인다**. "안전하게 켰다"는 착각을 준다
+   - `target_classes:=apple` — 이 런치의 이름이 아니다. 잡을 대상은 **`target:=`** 다
+     (`target_classes` 는 `grasp_bridge_node` 쪽 이름이고, task_manager 가 `target` 을
+     PERCEIVE 마다 거기로 밀어 넣는다)
+
+    ros2 launch pick_fsm pick_fsm.launch.py                    # 실행. 승인은 필요
     ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=apple
+    ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=apple,orange   # 셋 중 최고점
+    ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=              # 자동(전부)
     ros2 launch pick_fsm pick_fsm.launch.py planning_pipeline:=isaac_ros_cumotion
+
+타겟은 런치 인자로 못 박지 않아도 된다 — 돌고 있는 동안 바꾸는 쪽이 정상 운용이다:
+
+    rqt --standalone pick_fsm                                  # '타겟' 상자 + [자동] 버튼
+    ros2 topic pub -1 /pick/target std_msgs/String "data: apple" \
+        --qos-durability transient_local
 """
 
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def default_target() -> str:
+    """ws 루트 `config/objects.yaml` 의 `pick_default`. 없으면 `''`(자동).
+
+    같은 파일의 `detect` 를 `yolo_seg_node` 가 읽는다 — 탐지 대상과 기본 pick 타겟이
+    한 파일에 있어야 "YOLO 는 안 찾는데 타겟으로 지정된" 조합이 안 생긴다.
+    경로 규칙은 `graspx.launch.py:default_objects_file()` 과 같다(`COBOT2_OBJECTS` 로 덮어씀).
+    여기서 실패해도 런치를 막지 않는다 — 타겟은 rqt 패널로도 정할 수 있고, 이 파일 하나
+    때문에 로봇을 못 띄우는 게 더 나쁘다. 대신 무엇이 잘못됐는지는 반드시 찍는다.
+    """
+    path = os.environ.get('COBOT2_OBJECTS')
+    if not path:
+        share = get_package_share_directory('pick_fsm')
+        path = os.path.abspath(os.path.join(share, '..', '..', '..', '..',
+                                            'config', 'objects.yaml'))
+    if not os.path.isfile(path):
+        return ''
+    try:
+        doc = yaml.safe_load(open(path, encoding='utf-8')) or {}
+        pick = str(doc.get('pick_default') or '').strip()
+    except Exception as exc:                                    # noqa: BLE001
+        print(f'[pick_fsm.launch] {path} 를 못 읽었다 ({exc}) — 타겟을 자동으로 둔다')
+        return ''
+    # 같은 파일 안에서 어긋나는 조합을 여기서 끊는다. 안 걸러도 결국 실패하지만, 그건
+    # 촬영+GPU 왕복 수십 초 뒤이고 메시지도 "해당하는 물체가 없다"라 원인이 안 보인다.
+    detect = doc.get('detect') or []
+    wanted = [s.strip() for s in pick.split(',') if s.strip()]
+    outside = [w for w in wanted if w not in detect]
+    if outside:
+        print(f'[pick_fsm.launch] ⚠️ {path}: pick_default 의 {outside} 가 detect{list(detect)} '
+              '밖이다 — YOLO 가 애초에 안 찾으므로 절대 못 잡는다. 타겟을 자동으로 둔다')
+        return ''
+    return pick
 
 
 def generate_launch_description():
@@ -32,16 +85,23 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument('params_file', default_value=default_params,
                               description='파라미터 yaml. 값의 정본은 이 파일이다'),
-        DeclareLaunchArgument('dry_run', default_value='true',
-                              description='true=계획만(plan_only). 실기 실행은 false'),
         DeclareLaunchArgument('require_approval', default_value='true',
                               description='false 로 두면 사람 승인 없이 실행한다'),
         DeclareLaunchArgument('voice', default_value='true',
                               description='false 면 get_keyword 를 건너뛰고 target 인자를 쓴다'),
-        DeclareLaunchArgument('target', default_value='',
-                              description='voice:=false 일 때의 고정 타겟'),
-        DeclareLaunchArgument('grasp_source', default_value='compute_grasp',
-                              description='compute_grasp | legacy_trigger | manual'),
+        DeclareLaunchArgument('target', default_value=default_target(),
+                              description='voice:=false 일 때의 초기 타겟. 기본값은 '
+                                          'config/objects.yaml 의 pick_default. 콤마로 여러 개, '
+                                          '비우면 자동(점수 최고). 런타임에는 /pick/target 이 이긴다'),
+        DeclareLaunchArgument('grasp_source', default_value='legacy_trigger',
+                              description='legacy_trigger | compute_grasp | manual. '
+                                          'compute_grasp 서버는 이 ws 에 아직 없다'),
+        DeclareLaunchArgument('seg_source', default_value='yolo',
+                              description="grasp_bridge_node 에 밀어 넣을 세그 방식. "
+                                          "yolo | geometric | '' (안 건드림). "
+                                          'geometric 은 클래스를 몰라 target 을 못 쓴다'),
+        DeclareLaunchArgument('bridge_node', default_value='/grasp_bridge_node',
+                              description='타겟을 밀어 넣을 인식 브리지 노드. 비우면 안 민다'),
         DeclareLaunchArgument('planning_pipeline', default_value='ompl',
                               description='ompl | isaac_ros_cumotion — move_group 에 그 파이프라인이 '
                                           '떠 있어야 한다(moveit.launch.py 쪽 설정)'),
@@ -68,12 +128,15 @@ def generate_launch_description():
         parameters=[
             LaunchConfiguration('params_file'),
             {
-                'dry_run': as_bool('dry_run'),
                 'require_approval': as_bool('require_approval'),
                 'voice_enabled': as_bool('voice'),
                 'target': ParameterValue(LaunchConfiguration('target'), value_type=str),
                 'grasp_source': ParameterValue(LaunchConfiguration('grasp_source'),
                                                value_type=str),
+                'bridge_seg_source': ParameterValue(LaunchConfiguration('seg_source'),
+                                                    value_type=str),
+                'bridge_node': ParameterValue(LaunchConfiguration('bridge_node'),
+                                              value_type=str),
                 'planning_pipeline': ParameterValue(LaunchConfiguration('planning_pipeline'),
                                                     value_type=str),
                 'gripper_backend': ParameterValue(LaunchConfiguration('gripper_backend'),

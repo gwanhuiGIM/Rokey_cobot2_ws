@@ -133,10 +133,10 @@ config yaml 이 없다 — **전부 런치 인자다.** 실행마다 바뀌는 �
 
 | 인자 | 기본값 | 설명 |
 |---|---|---|
-| `dry_run` | `true` | true=계획만. **실기 실행은 `false` 를 명시해야 한다** |
-| `require_approval` | `true` | `/pick/approve` 없이는 APPROACH 로 못 간다 |
-| `voice` / `target` | `true` / `''` | voice:=false 면 `target` 을 쓴다 |
-| `grasp_source` | `compute_grasp` | `compute_grasp` \| `legacy_trigger` \| `manual` |
+| ~~`dry_run`~~ | — | **2026-08-09 제거.** 이 FSM 은 항상 실기를 움직인다. 🔴 옛 인자를 붙여도 **경고 없이 무시된다** — `dry_run:=true` 로 안전하다고 착각하지 말 것 |
+| `require_approval` | `true` | `/pick/approve` 없이는 APPROACH 로 못 간다. **남은 유일한 소프트 안전장치** |
+| `voice` / `target` | `true` / `''` | voice:=false 면 `target` 을 쓴다. **voice:=true 면 `/get_keyword` 를 제공하는 노드가 있어야 한다** → 아래 4-1 |
+| `grasp_source` | `legacy_trigger` | `legacy_trigger` \| `compute_grasp` \| `manual`. ⚠️ 2026-08-09 에 기본값이 `compute_grasp` → `legacy_trigger` 로 바뀌었다(그 서버는 이 ws 에 없다). 이 표가 옛 값을 적고 있었다 |
 | `planning_pipeline` | `ompl` | move_group 에 그 파이프라인이 떠 있어야 한다 |
 | `gripper_backend` | `real` | `real` \| `virtual`. 숫자 명령의 **단위가 다르다** |
 | `robot_ns` / `log_level` / `params_file` | `dsr01` / `info` / (share) | |
@@ -144,6 +144,34 @@ config yaml 이 없다 — **전부 런치 인자다.** 실행마다 바뀌는 �
 yaml 쪽에서 실기 전에 반드시 보는 값: `vel_scale`/`acc_scale`(0.05), `home_joints_deg`,
 `place_joints_deg`, `grasp_standoff_m`, `force_down_steps`, `max_grip_width_m`.
 UNVERIFIED 표시가 붙은 값은 지우지 말 것 — 실측 안 된 값이라는 뜻이다.
+
+---
+
+## 4-1. `voice_processing` — `vla_command.launch.py` [지시 입력]
+
+외부 VLA(또는 음성)의 "이걸 집어라"(JSON)를 `pick_fsm` 의 기존 `/get_keyword` 자리로 넘긴다.
+같은 채널로 rqt 패널의 **시작·중단·리셋** 버튼도 대신할 수 있다(`cmd:"start"/"abort"/"reset"`,
+`voice` 값과 무관하게 항상 동작). **`승인` 버튼만은 명령어 자체가 없다** — `cmd:"approve"`는
+코드 경로가 없어 무조건 거부된다.
+
+pick 지시(`cmd:"pick"`)를 쓰려면 `pick_fsm` 을 `voice:=true`(기본)로 띄워야 한다 —
+`voice:=false` 면 `LISTENING` 을 건너뛰어 `/get_keyword` 를 아무도 안 부른다.
+
+| 인자 | 기본값 | 설명 |
+|---|---|---|
+| `auto_start` | `false` | `pick` 지시가 오면 이 노드가 **덧붙여서** `/pick/start` 도 부른다. `cmd:"start"` 를 명시적으로 보내는 것과 별개 |
+| `pixel_policy` | `warn` | `warn` \| `reject`. 🔴 `pixel`(개체 지정)은 아직 선정에 안 쓰인다. **같은 클래스 물체가 2개 이상이면 `reject`** |
+| `ttl_sec` | `10.0` | `pick` 지시 유효시간. **받은 시각** 기준(송신 `stamp_ns` 아님 — 두 PC 시계가 안 맞는다) |
+| `wait_timeout_sec` | `50.0` | `/get_keyword` 를 붙잡고 기다릴 시간. ⚠️ `fsm_listening_timeout_sec - listening_margin_sec` 보다 커지면 **노드가 기동 때 죽는다**(의도된 것 — 안 죽으면 매 사이클 ABORT) |
+| `fsm_listening_timeout_sec` / `listening_margin_sec` | `60.0` / `5.0` | 전자는 `task_manager.DEFAULT_TIMEOUTS[State.LISTENING]` 의 사본(정본이 바뀌면 같이 바꾼다), 후자는 서비스 탐색 여유 |
+| `allowed_classes` | `config/objects.yaml` 의 `detect` | 콤마 목록. 밖의 클래스는 즉시 거부 |
+| `command_topic` / `result_topic` / `keyword_service` | `/vla/pick_command` / `/vla/pick_result` / `/get_keyword` | |
+| `start_service` / `abort_service` / `reset_service` | `/pick/start` / `/pick/abort` / `/pick/reset` | `cmd:"start"/"abort"/"reset"` 이 부르는 서비스 이름 |
+
+⚠️ **마이크 노드(`voice_processing get_keyword`)와 동시에 띄우지 않는다** — 둘 다
+`/get_keyword` 를 제공해서 어느 쪽이 답할지 알 수 없다.
+
+스키마·결과 계약·검증 상태는 [`src/PACKAGES.md#voice_processing`](../src/PACKAGES.md#voice_processing).
 
 ---
 

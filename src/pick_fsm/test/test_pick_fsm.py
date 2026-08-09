@@ -25,8 +25,10 @@ from pick_fsm.moveit_bridge import OCTOMAP_ACM_NAME, merge_acm
 from pick_fsm.rg2 import (
     RG2_BRACKET_LENGTH_M,
     RG2_MAX_RGWD,
+    RG2_MODEL_WIDTH_M,
     fingertip_from_rg2_base_m,
     fingertip_length_m,
+    grip_target_width_m,
     width_to_rgwd,
 )
 from pick_fsm.states import TRANSITIONS, State, is_allowed
@@ -42,6 +44,20 @@ def test_width_to_rgwd_는_1_10mm_단위다():
 def test_width_to_rgwd_는_유효범위로_클램프한다():
     assert width_to_rgwd(-1.0) == 0
     assert width_to_rgwd(5.0) == RG2_MAX_RGWD   # 범위를 넘겨 보내면 드라이버가 무시/오동작
+
+
+def test_grip_target_width_m_은_조임_여유를_뺀다():
+    # 🔴 부호가 뒤집히면 손가락이 물체 표면 **앞에서** 멈춘다 — 힘이 안 걸려 grip_detected 가
+    #    false 로 남고, 로그는 "그리퍼 닫기 68 mm" 라고 정상처럼 찍힌다. 가장 찾기 어려운 실패다.
+    #    2026-08-09 이전 코드가 `+clearance` 였고, default_width_m(0.06)이 실제 물체보다 작은
+    #    상수였던 덕에 우연히 조여져서 증상이 안 보였다.
+    assert grip_target_width_m(0.075, 0.008) == pytest.approx(0.067)   # 사과 75mm -> 67mm
+    assert grip_target_width_m(0.075, 0.008) < 0.075                   # 이게 핵심이다
+
+
+def test_grip_target_width_m_은_모델_한계와_0_으로_클램프한다():
+    assert grip_target_width_m(0.500, 0.008) == pytest.approx(RG2_MODEL_WIDTH_M)
+    assert grip_target_width_m(0.003, 0.008) == 0.0    # 여유가 폭보다 커도 음수로 안 나간다
 
 
 def test_fingertip_length_m_은_실측_보정점을_그대로_재현한다():
