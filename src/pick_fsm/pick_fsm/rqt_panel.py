@@ -46,7 +46,17 @@ CONFIRM = {
                                 '전환 직후 팔이 갑자기 무거움/가벼움이 바뀔 수 있습니다 — '
                                 '준비된 상태에서 누르세요.'),
     '안전모드 해제': '정상 모드로 복귀합니다. 팔 주변에 손이 없는지 확인하세요.',
+    '그리퍼 파워사이클': ('RG2 Compute Box 전원을 1~2초 껐다 켭니다(OnRobot 매뉴얼 p.62 — '
+                        '손끝 안쪽 안전스위치가 눌려 그리퍼가 멈췄을 때 쓰는 공식 복구 절차).\n'
+                        '전원이 끊기는 동안 잡고 있던 물체가 떨어질 수 있습니다 — 물체를 쥔 '
+                        '상태라면 누르기 전에 내려놓으세요.'),
 }
+
+#: task_manager.PLACE_LOCATIONS 중 아직 teach 안 된 것들. yaml 의 place_table/discard_joints_deg
+#: 가 home_joints_deg 를 그대로 복사한 placeholder 인 동안은 콤보에서 원클릭으로 못 나가게 막는다
+#: (cross-review 2026-08-10: 확인창 없이 고르면 홈 자세에서 그리퍼가 열려 물체가 떨어진다).
+#: 실기 teach 를 마치면 여기서 빼면 된다.
+UNVERIFIED_PLACE_LOCATIONS = {'table', 'discard'}
 
 #: 서비스가 이 시간 안에 응답 안 하면 결과 표시에서 "시간초과"로 걷어낸다.
 #: (버튼 자체가 fire-and-forget 라 로봇 명령이 취소되는 건 아니다 — UI 표시만 정리한다)
@@ -87,6 +97,7 @@ class PickFsmPanel(Plugin):
         self._pending = []          # [(label, future, deadline)] — 완료되면 QTimer 가 걷어간다
         self._clients = []          # 버튼마다 하나씩, __init__ 에서만 만든다 (재사용, 안 새로 안 만듦)
         self._active_target = None  # /pick/target_active 로 FSM 이 되돌려주는 현재 타겟
+        self._active_place = None   # /pick/place_location_active 로 FSM 이 되돌려주는 현재 위치
         self._detected = []         # [(클래스이름, 개수)] — /yolo_seg/classes 최신 프레임
         self._detected_at = 0.0     # 그 프레임을 받은 시각 (monotonic)
         self._shown_classes = []    # 콤보에 지금 들어있는 목록. 같으면 다시 안 채운다
@@ -137,6 +148,30 @@ class PickFsmPanel(Plugin):
         self._lbl_target.setWordWrap(True)
         target_col.addWidget(self._lbl_target)
         outer.addWidget(target_box)
+
+        # ── 내려놓을 위치 ────────────────────────────────────
+        # basket(장바구니) / table(작업테이블 지정 자리) / discard(테이블 밖 폐기) 중 하나.
+        # task_manager 의 PLACE_LOCATIONS 키와 그대로 맞아야 한다 — 편집 가능한 콤보가
+        # 아닌 이유는(타겟과 달리) 여기 세 값 밖은 FSM 이 그냥 무시하기 때문이다.
+        self.place_pub = node.create_publisher(String, '/pick/place_location', TARGET_QOS)
+        place_box = QGroupBox('내려놓을 위치')
+        place_col = QVBoxLayout(place_box)
+        place_row = QHBoxLayout()
+        self._place_combo = QComboBox()
+        self._place_combo.addItems(['basket', 'table', 'discard'])
+        self._place_combo.setToolTip('basket=장바구니 · table=작업테이블 지정 자리 · '
+                                     'discard=작업테이블 바깥(폐기)')
+        place_row.addWidget(QLabel('위치'))
+        place_row.addWidget(self._place_combo, 1)
+        btn_place_apply = QPushButton('적용')
+        btn_place_apply.clicked.connect(
+            lambda: self._set_place(self._place_combo.currentText()))
+        place_row.addWidget(btn_place_apply)
+        place_col.addLayout(place_row)
+        self._lbl_place = QLabel('현재 위치: (수신 대기)')
+        self._lbl_place.setWordWrap(True)
+        place_col.addWidget(self._lbl_place)
+        outer.addWidget(place_box)
 
         # ── 속도 ────────────────────────────────────────────
         # MoveIt 의 max_velocity/acceleration_scaling_factor. 계획된 궤적을 시간축으로
@@ -201,6 +236,18 @@ class PickFsmPanel(Plugin):
         warn.setStyleSheet('color:#c0392b;')
         outer.addWidget(warn)
 
+        # 로봇 bringup/MoveIt을 안 건드리고 그리퍼만 복구한다. OnRobotRGControllerServer.py
+        # 가 이미 만들어둔 /onrobot/restartPower 를 쓴다(mode:=real 일 때만 뜬다) — Modbus로
+        # Compute Box 전원만 끊었다 붙이는 명령이라 드라이버 노드 자체는 안 죽는다. 노드를
+        # 껐다 켜는 방식(재프로세스 실행)은 일부러 안 썼다: rqt 플러그인에서 launch 가 관리하는
+        # 프로세스를 개별로 죽이려면 별도 프로세스 관리가 필요해지는데, 이미 하드웨어가
+        # 이 상황을 위한 명령을 노출해두고 있어 그걸로 충분하다.
+        gripper_box = QGroupBox('그리퍼 (안전스위치로 멈췄을 때)')
+        gripper_row = QHBoxLayout(gripper_box)
+        gripper_row.addWidget(self._make_button(
+            node, '그리퍼 파워사이클', Trigger, '/onrobot/restartPower'))
+        outer.addWidget(gripper_box)
+
         outer.addWidget(self._lbl_result)
         outer.addStretch(1)
         context.add_widget(self._widget)
@@ -210,6 +257,8 @@ class PickFsmPanel(Plugin):
             Int8, '/pick/robot_state_code', self._on_robot, 10)
         self._sub_target = node.create_subscription(
             String, '/pick/target_active', self._on_target, TARGET_QOS)
+        self._sub_place = node.create_subscription(
+            String, '/pick/place_location_active', self._on_place, TARGET_QOS)
         # yolo_seg_node 가 프레임마다 내는 "라벨 -> 클래스 이름". 컨테이너 쪽에서 뜨므로
         # 이 패널만 켜고 YOLO 를 안 띄우면 목록은 비어 있는 게 정상이다.
         self._sub_classes = node.create_subscription(
@@ -230,6 +279,9 @@ class PickFsmPanel(Plugin):
 
     def _on_target(self, msg):
         self._active_target = msg.data
+
+    def _on_place(self, msg):
+        self._active_place = msg.data
 
     def _on_classes(self, msg):
         """`{"objects": [{"label":101,"class":"apple","conf":0.9}, ...]}` -> 이름별 개수.
@@ -254,6 +306,9 @@ class PickFsmPanel(Plugin):
         self._lbl_robot.setText(f'로봇 상태: {self._robot_state}' + ('  ⚠️ 안전정지류' if unsafe else ''))
         self._lbl_robot.setStyleSheet('color:#c0392b; font-weight:bold;' if unsafe else '')
         self._refresh_target()
+        self._lbl_place.setText('현재 위치: ' + (
+            '(수신 대기 — task_manager 가 떠 있는지 확인)' if self._active_place is None
+            else self._active_place))
         # task_manager 가 우리보다 늦게 떠도 한 번은 현재값을 맞춘다. 성공하면 다시 안 부른다
         # (주기적으로 폴링하면 서비스 호출만 쌓인다 — 사람이 바꾸면 [현재값 읽기]를 쓴다).
         if not self._speed_synced and self.get_param_cli.service_is_ready():
@@ -318,6 +373,19 @@ class PickFsmPanel(Plugin):
         self.target_pub.publish(String(data=text))
         self._lbl_result.setText(
             f"타겟 지정: {text or AUTO_LABEL} — 진행 중인 작업에는 적용되지 않는다. "
+            '다음 [시작] 부터다')
+
+    def _set_place(self, value: str):
+        """`/pick/place_location` 발행. FSM 은 다음 /pick/start 부터 이 값을 쓴다."""
+        if value in UNVERIFIED_PLACE_LOCATIONS and QMessageBox.question(
+                self._widget, f"'{value}' 선택",
+                f"place_{value}_joints_deg 는 아직 teach 된 적 없다(홈 자세를 임시로 복사해둔 "
+                '값). 다음 [시작]부터 홈 자세에서 그리퍼가 열려 물체가 떨어질 수 있다.\n'
+                '계속할까요?') != QMessageBox.Yes:
+            return
+        self.place_pub.publish(String(data=value))
+        self._lbl_result.setText(
+            f'내려놓을 위치 지정: {value} — 진행 중인 작업에는 적용되지 않는다. '
             '다음 [시작] 부터다')
 
     # ── 속도 ────────────────────────────────────────────────
@@ -430,8 +498,10 @@ class PickFsmPanel(Plugin):
             self._sub_fsm.destroy()
             self._sub_robot.destroy()
             self._sub_target.destroy()
+            self._sub_place.destroy()
             self._sub_classes.destroy()
             self.target_pub.destroy()
+            self.place_pub.destroy()
             for client in self._clients:
                 client.destroy()
         except Exception:                                  # noqa: BLE001

@@ -60,7 +60,13 @@ task_manager:
     #    BUCKET_POS [4,38,64,-0.1,78,4])
     # 2026-08-08: joint_5 가 400.0 → 40.0 (오타. 400° 는 M0609 가동범위 밖이라 movej/IK 실패)
     home_joints_deg: [0.0, 0.0, 40.0, 0.0, 40.0, 0.0]
-    place_joints_deg: [77.0, 4.0, 80.0, 0.0, 62.0, 0.0]
+    place_joints_deg: [77.0, 4.0, 80.0, 0.0, 62.0, 0.0]   # 'basket' — 실기 teach 값(위 참고)
+    # UNVERIFIED: 아래 둘은 teach 된 적 없다. home_joints_deg 를 임시로 복사해 둔 것뿐이라
+    # 실기에서 안전한 관절자세로 다시 잡기 전에는 place_location:=table/discard 를 쓰지 말 것.
+    place_table_joints_deg: [0.0, 0.0, 40.0, 0.0, 40.0, 0.0]
+    place_discard_joints_deg: [0.0, 0.0, 40.0, 0.0, 40.0, 0.0]
+    place_location: basket   # basket(장바구니) | table(작업테이블 지정 자리) | discard(테이블 밖 폐기)
+                              # 런타임엔 /pick/place_location(rqt 패널)이 이 값을 이긴다
 
     # ── 씬 ───────────────────────────────────────────────
     object_id: pick_target

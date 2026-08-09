@@ -1015,43 +1015,94 @@ dimensions:
 *음성/타겟 지시로 물체를 집는 상태머신. `task_manager`(로봇 명령 배타권 소유) +
 `robot_safety_node`(별도 프로세스, 안전정지·backdrive).*
 
-설계 출처: `md/voice-pick-statemachine.md` (§1 노드 그래프 · §2 노드 간 계약 · §3 상태머신)
+설계 출처: 이 절 자체가 단일 출처다. `md/voice-pick-statemachine.md`는 더 이상 존재하지 않는다
+(2026-08-08 ws-cleanup 때 지워지고 역참조만 4곳에 남아있었다 — task_manager.py·states.py·
+ComputeGrasp.srv 의 같은 문구도 참고용일 뿐, 실제 최신 내용은 여기).
+
+> **발표용 정리본**: 아래 mermaid는 GitHub/에디터에서 그대로 렌더링되는 원본이다. 색·범례·
+> "push vs pull" 비교도·검증 상태표까지 곁들인 프레젠테이션용 정리본은
+> [cobot2_ws 통합 파이프라인 (아티팩트)](https://claude.ai/code/artifact/7204c2b7-5297-4b18-ab4b-756fa10339fe) 참고.
 
 ```mermaid
-flowchart LR
-    vla["VLA (외부 PC)<br/>~/M0609_VLA_system"]
-    voice["voice_processing<br/>vla_command_node 또는 get_keyword"]
-    rqt["rqt 패널<br/>pick_fsm.rqt_panel"]
-    tm["<b>task_manager</b><br/>상태머신 · 로봇 명령 배타권"]
-    bridge["grasp_bridge_node<br/>graspgenx_perception"]
-    gpu["GraspGenX · GPU"]
-    mg["move_group<br/>MoveIt"]
-    rg2["RG2 드라이버<br/>OnRobotRGControllerServer"]
-    safety["robot_safety_node<br/>별도 프로세스"]
-    robot["M0609 · dsr01"]
+flowchart TB
+    subgraph INPUT["지시 입력"]
+        vla["VLA 외부 PC<br/>~/M0609_VLA_system"]
+        voice["voice_processing<br/>vla_command_node · get_keyword"]
+        rqtp["rqt_panel"]
+    end
 
-    vla -->|"/vla/pick_command · String(JSON)"| voice
-    voice -->|"/vla/pick_result · String(JSON)"| vla
-    voice -->|"/get_keyword · Trigger"| tm
-    voice -->|"/pick/start · abort · reset<br/>(cmd:start/abort/reset — approve 없음)"| tm
-    rqt -->|"/pick/start · approve · abort · reset"| tm
-    tm -->|"/pick/state · String"| rqt
-    tm -->|"/pick/state · String"| voice
+    subgraph FSMG["pick_fsm"]
+        tm["<b>task_manager</b><br/>상태머신 · 로봇명령 배타권"]
+        safety["robot_safety_node<br/>별도 프로세스"]
+    end
 
-    tm -->|"/grasp/compute_grasp 또는 /grasp/compute"| bridge
+    subgraph PERC["graspgenx_perception"]
+        yolo["yolo_seg_node<br/>YOLO11n-seg"]
+        bridge["grasp_bridge_node"]
+        gpu["graspgen_worker<br/>GraspGenX · GPU"]
+    end
+
+    subgraph PLANB["기본 경로 · 호스트<br/>OMPL + octomap"]
+        octo["octomap<br/>sensors_3d.yaml ← D435i"]
+        ompl["ompl_planning.yaml<br/>RRTConnect"]
+    end
+
+    subgraph MG["move_group (T7)<br/>pipeline_id 로 분기"]
+        mg["/move_action"]
+    end
+
+    subgraph PLANA["옵션 경로 · 컨테이너<br/>cuMotion + nvblox — 실기 미검증"]
+        segn["robot_segmenter_node (T4)"]
+        nvb["nvblox_node (T5)<br/>ESDF 지도"]
+        cup["cumotion_planner_node (T6)<br/>plan() 마다 ESDF 1회 pull"]
+        dyn["dynamic_avoid / arm.py<br/>pipeline_id=isaac_ros_cumotion<br/>(task_manager 와 무관한 독립 데모)"]
+    end
+
+    subgraph EXEC["실행"]
+        jtc["dsr_moveit_controller (JTC)"]
+        rg2["RG2 드라이버"]
+        robot["M0609 · dsr01"]
+    end
+
+    vla -->|"/vla/pick_command JSON"| voice
+    voice -->|"/vla/pick_result JSON"| vla
+    voice -->|"/get_keyword"| tm
+    voice -->|"/pick/start·abort·reset"| tm
+    rqtp -->|"/pick/start·approve·abort·reset"| tm
+    tm -->|"/pick/state"| rqtp
+    tm -->|"/pick/state"| voice
+
+    tm -->|"/grasp/compute_grasp · /grasp/compute"| bridge
+    yolo -->|"/yolo_seg/mask·labels·classes"| bridge
     bridge --> gpu
+    gpu -->|"grasp pose"| bridge
     bridge -->|"/grasp/best · /grasp/candidates"| tm
 
-    tm -->|"/compute_ik · /apply_planning_scene<br/>/move_action 액션"| mg
-    tm -->|"/onrobot/sendCommand"| rg2
-    rg2 -->|"/onrobot/grip_detected · Bool"| tm
+    tm -->|"/compute_ik · /apply_planning_scene"| mg
+    tm -->|"/move_action (기본 파이프라인)"| mg
+    octo -.- mg
+    ompl -.- mg
 
-    safety -->|"/pick/robot_state_code · Int8<br/>안전정지면 자동 ABORT"| tm
-    rqt -->|"/safety/stop · enter/exit_backdrive"| safety
+    dyn -->|"/move_action (pipeline_id=isaac_ros_cumotion)"| mg
+    segn --> nvb
+    cup -.->|"get_esdf_and_gradient (pull)"| nvb
+    dyn --> cup
+
+    tm -->|"/onrobot/sendCommand"| rg2
+    rg2 -->|"/onrobot/grip_detected"| tm
+    safety -->|"/pick/robot_state_code"| tm
+    rqtp -->|"/safety/stop · backdrive"| safety
     safety --> robot
-    mg -->|"JTC · dsr_moveit_controller"| robot
+    mg -->|"FollowJointTrajectory"| jtc
+    jtc --> robot
     rg2 --> robot
+
+    classDef optionalNode stroke-dasharray: 4 3,stroke:#a13f37,color:#a13f37;
+    class segn,nvb,cup,dyn optionalNode
 ```
+
+`dyn`(cuMotion 실행 노드)은 `task_manager`가 부르지 않는 **독립 데모 진입점**이다 — 같은
+`move_group`을 대안 파이프라인으로 공유할 뿐, 지금 pick 사이클에 물려 있지 않다.
 
 `task_manager` 는 **로봇 명령 경로의 배타권을 소유하는 노드**다.
 이 ws 에는 `dsr_controller2`(서비스 movej/movel)와 `dsr_moveit_controller`(JTC) 두 경로가

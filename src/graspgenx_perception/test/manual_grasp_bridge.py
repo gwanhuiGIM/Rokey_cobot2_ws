@@ -78,6 +78,14 @@ assert select(empty, p)[0] is None
 now = {'obj_1': {'grasps': [good.tolist()], 'scores': [0.6], 'n_pts': 500}}
 assert select(now, p)[3] == 0.0, select(now, p)[3]
 
+# widths 길이가 grasps 와 안 맞는 경우 -> 0.0("모름")으로 낮추고 계속 돈다(죽지 않는다).
+# `select()` 는 모듈 함수라 `self.get_logger()` 를 쓸 수 없다 — logger 인자가 없으면
+# NameError 로 죽었던 버그(2026-08-09)가 재발하면 여기서 걸린다.
+mismatched = {'obj_1': {'grasps': [good.tolist()], 'scores': [0.6],
+                        'widths': [0.05, 0.06], 'n_pts': 500}}
+r = select(mismatched, p)
+assert r[0] == 'obj_1' and r[3] == 0.0, r
+
 # 여러 물체 중 점수 최고를 고른다
 two = {
     'obj_1': {'grasps': [good.tolist()], 'scores': [0.6], 'n_pts': 500},

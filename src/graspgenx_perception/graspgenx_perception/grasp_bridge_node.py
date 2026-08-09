@@ -127,7 +127,7 @@ def tcp_of(g, offset):
     return g[:, :3, 3] + offset * g[:, :3, 2]
 
 
-def select(objects, p):
+def select(objects, p, logger=None):
     """워커 결과 -> (label, T, score, width, g_ok, s_ok, w_ok, 진단문자열). 없으면 앞 7개가 None.
 
     grasp 는 이미 base_link 프레임이다(씬의 camera_pose 를 로더가 적용한다).
@@ -146,9 +146,10 @@ def select(objects, p):
             # 맞지만, 여기선 그 불변식을 신뢰만 하고 확인하지 않았었다(cross-review 2026-08-09).
             # 안 맞으면 아래 w[i]/w[ok] 가 IndexError 나 "boolean index did not match" 로
             # 죽는데, 스택트레이스만 남고 원인이 안 드러난다 — "모름"으로 낮춰서 계속 돈다.
-            self.get_logger().warn(
-                f'{label}: widths 길이 {len(w)} != grasps {len(g)} — 워커 응답이 깨졌다. '
-                '폭을 전부 "모름"(0.0) 으로 낮춘다')
+            if logger is not None:
+                logger.warn(
+                    f'{label}: widths 길이 {len(w)} != grasps {len(g)} — 워커 응답이 깨졌다. '
+                    '폭을 전부 "모름"(0.0) 으로 낮춘다')
             w = np.zeros(len(g), dtype=float)
         if len(g) == 0:
             lines.append(f'  {label}: 후보 0')
@@ -436,7 +437,8 @@ class GraspBridge(SceneCapture):
             return False, f"워커 오류: {res.get('error')}"
 
         # 4) 선택
-        label, T, score, width_m, g_ok, _s_ok, w_ok, sel_diag = select(res.get('objects', {}), p)
+        label, T, score, width_m, g_ok, _s_ok, w_ok, sel_diag = select(
+            res.get('objects', {}), p, self.get_logger())
         self.get_logger().info(f'선택 단계:\n{sel_diag}')
         if label is None:
             return False, f'조건을 통과한 grasp 0개\n{sel_diag}'

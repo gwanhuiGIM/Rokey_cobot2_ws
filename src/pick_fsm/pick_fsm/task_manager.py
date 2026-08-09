@@ -76,6 +76,16 @@ MAX_FAIL_STREAK = 3
 #: 어긋나면 아예 연결이 안 된다) — 그래서 여기 한 곳에 두고 rqt_panel 이 import 한다.
 TARGET_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
+#: `/pick/place_location` 로 고를 수 있는 값 -> 실제로 쓸 joint 파라미터 이름.
+#: '내려놓는 위치' 세 경우(장바구니/작업테이블 지정 자리/작업테이블 바깥 폐기)를
+#: 관절각 프리셋 세 개로 나눈다 — grasp pose 처럼 좌표를 계산하지 않고 home/place 와
+#: 같은 고정 관절이동이라 IK 가 필요 없다(_joint_move 재사용).
+PLACE_LOCATIONS = {
+    'basket': 'place_joints_deg',
+    'table': 'place_table_joints_deg',
+    'discard': 'place_discard_joints_deg',
+}
+
 
 def str_param(name: str, value: str) -> Parameter:
     """rcl_interfaces 문자열 파라미터 하나. `SetParameters` 요청에 넣는다."""
@@ -130,7 +140,14 @@ PARAM_DEFAULTS = {
     # 2026-08-07 실측(폭에 따라 손끝이 짧아지는 비선형 보정표)으로 대체했다.
     'max_reach_m': 0.900,            # M0609 URDF 실측 (shoulder 기준)
     'home_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],     # robot_control JReady
-    'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS
+    'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS ('basket')
+    # UNVERIFIED: 아래 둘은 teach 된 적 없다 — home_joints_deg 를 임시로 복사해 둔 것뿐이다.
+    # 실기에서 안전한 자세로 다시 잡기 전에는 'table'/'discard' 를 쓰지 말 것.
+    'place_table_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],
+    'place_discard_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],
+    # PLACE_LOCATIONS 의 키 중 하나('basket'|'table'|'discard'). 런타임엔 /pick/place_location
+    # (rqt 패널)이 이 값을 이긴다 — /pick/target 과 같은 패턴.
+    'place_location': 'basket',
 
     # 씬
     'object_id': 'pick_target',
@@ -195,6 +212,15 @@ class TaskManager(Node):
     def __init__(self):
         super().__init__('task_manager')
         p = self._declare_params()
+        # ⚠️ 여기서 죽는 게 맞다 (vla_command_node.pixel_policy 검증과 같은 이유). 검증을
+        # 안 하면 yaml 오타(`place_location: bakset`)가 조용히 통과해 rqt 패널엔 오타 그대로
+        # 표시되면서 실제 이동은 _st_place 의 fallback 으로 basket 에 접힌다 — 표시값과
+        # 실제 목적지가 갈라진다. `/pick/place_location`(토픽) 쪽은 _on_place_location 이
+        # 따로 막는다(2026-08-10 cross-review 지적).
+        if p['place_location'] not in PLACE_LOCATIONS:
+            raise ValueError(
+                f"place_location 파라미터 기본값이 잘못됐다: {p['place_location']!r} "
+                f'(허용: {sorted(PLACE_LOCATIONS)})')
         cb = ReentrantCallbackGroup()
 
         self.moveit = MoveItBridge(self, cb, base_frame=p['base_frame'])
@@ -259,6 +285,11 @@ class TaskManager(Node):
         self.target_pub = self.create_publisher(String, '/pick/target_active', TARGET_QOS)
         self.create_subscription(String, '/pick/target', self._on_target, TARGET_QOS,
                                  callback_group=cb)
+        # 내려놓을 위치 — basket(장바구니)/table(작업테이블 지정 자리)/discard(테이블 밖 폐기).
+        # /pick/target 과 똑같은 패턴: 사람이 못 바꾸면 파라미터 기본값을 쓴다.
+        self.place_pub = self.create_publisher(String, '/pick/place_location_active', TARGET_QOS)
+        self.create_subscription(String, '/pick/place_location', self._on_place_location,
+                                 TARGET_QOS, callback_group=cb)
         self.create_service(Trigger, '/pick/start', self._srv_start, callback_group=cb)
         self.create_service(Trigger, '/pick/approve', self._srv_approve, callback_group=cb)
         self.create_service(Trigger, '/pick/abort', self._srv_abort, callback_group=cb)
@@ -282,6 +313,8 @@ class TaskManager(Node):
         self._acm = None
         self.target = ''
         self._target_override = None   # `/pick/target` 로 들어온 값. None = 파라미터를 쓴다
+        self.place_location = ''
+        self._place_override = None    # `/pick/place_location` 로 들어온 값. None = 파라미터를 쓴다
         self._push_fut = None          # 브리지 SetParameters future (_fut 과 겹치면 안 된다)
         self._pushed = False           # 이번 PERCEIVE 에서 푸시를 끝냈는지
         self.grasp = None           # PoseStamped, ee_link 목표 자세
@@ -301,6 +334,7 @@ class TaskManager(Node):
 
         self.timer = self.create_timer(1.0 / p['tick_hz'], self._tick, callback_group=cb)
         self._publish_target(p['target'])
+        self._publish_place(p['place_location'])
         self.get_logger().info(
             f"준비됨 — require_approval={p['require_approval']}, "
             f"grasp_source={p['grasp_source']}, gripper_backend={p['gripper_backend']}")
@@ -367,6 +401,29 @@ class TaskManager(Node):
 
     def _publish_target(self, value: str):
         self.target_pub.publish(String(data=str(value)))
+
+    def _on_place_location(self, msg):
+        """내려놓을 위치 지정. `PLACE_LOCATIONS` 키가 아니면 무시하고 이전 값을 유지한다.
+
+        ⚠️ target 과 같은 이유로 **진행 중인 작업에는 적용하지 않는다** — PICK 도중에
+        바뀌면 로그가 가리키는 목적지와 실제 PLACE 관절이 갈라진다. 다음 `/pick/start`부터.
+        """
+        value = msg.data.strip()
+        if value not in PLACE_LOCATIONS:
+            self.get_logger().warn(
+                f"잘못된 place_location '{value}' — {list(PLACE_LOCATIONS)} 중 하나만 된다. 무시함")
+            return
+        self._place_override = value
+        if self.state is State.IDLE:
+            self.get_logger().info(f'내려놓을 위치 지정: {value}')
+        else:
+            self.get_logger().warn(
+                f'내려놓을 위치 지정 {value} — 진행 중인 {self.state.name} 에는 적용하지 않는다. '
+                '다음 /pick/start 부터다')
+        self._publish_place(self._place_override)
+
+    def _publish_place(self, value: str):
+        self.place_pub.publish(String(data=str(value)))
 
     def _srv_start(self, _req, res):
         if self.state is not State.IDLE:
@@ -505,6 +562,10 @@ class TaskManager(Node):
         self.alternatives = []
         self.solutions.clear()
         self.poses.clear()
+        # `/pick/place_location` 로 들어온 값이 파라미터를 이긴다 (target 과 같은 패턴).
+        self.place_location = (self._place_override if self._place_override is not None
+                               else self.p('place_location'))
+        self._publish_place(self.place_location)
         if self.p('voice_enabled'):
             self._to(State.LISTENING)
         else:
@@ -962,7 +1023,12 @@ class TaskManager(Node):
         self._move('lift', State.PLACE, State.ABORT)
 
     def _st_place(self):
-        self._joint_move('place_joints_deg', State.RELEASE)
+        # _st_idle 이 잠근 self.place_location 을 쓴다. 정상 경로로는 여기 도달할 때 항상
+        # PLACE_LOCATIONS 의 키다 — __init__ 이 파라미터 기본값을, _on_place_location 이
+        # 토픽 오버라이드를 각각 진입 시점에 검증해서 막는다. .get() 의 기본값은 그 두 검증을
+        # 모두 우회하는 경로가 생기더라도 조용히 잘못된 곳으로 움직이지 않기 위한 방어선이다.
+        param_name = PLACE_LOCATIONS.get(self.place_location, PLACE_LOCATIONS['basket'])
+        self._joint_move(param_name, State.RELEASE)
 
     def _st_release(self):
         if not self._extra:
