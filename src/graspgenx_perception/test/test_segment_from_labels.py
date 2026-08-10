@@ -24,7 +24,10 @@ def _params(**over):
     p = dict(DEFAULTS)
     p.update(x_min=-1.0, x_max=1.0, y_min=-1.0, y_max=1.0, z_min=0.0, z_max=2.0,
              min_pixels=5, obj_radius_m=0.02, yolo_table_ring_m=0.05,
-             yolo_min_ring_px=5, obj_min_h=0.015)
+             yolo_min_ring_px=5, obj_min_h=0.015,
+             # mask_erode_m 은 다른 메커니즘(반경/높이 크롭)을 검증하는 테스트와 얽히면
+             # 안 되므로 기본으로 끈다 — 전용 테스트(test_mask_erode_*)에서 따로 켠다.
+             mask_erode_m=0.0)
     p.update(over)
     return p
 
@@ -199,3 +202,45 @@ def test_class_dims_defaults_to_off():
     seg, label_map, diag = segment_from_labels(labels, depth, K, T_IDENTITY, _params())
     assert set(label_map) == {'obj_1', 'obj_2'}
     assert '실측' not in diag
+
+
+def test_mask_erode_shrinks_object_boundary():
+    """mask_erode_m 은 마스크 테두리를 실측 거리만큼 깎는다 — 안쪽만 남는다.
+
+    depth=1.05, fx=200 -> 픽셀 피치 ~5.25mm/px. erode_m=0.005 -> erode_px round(0.95)=1
+    -> 6x6 블록의 테두리 1px 링이 지워지고 안쪽 4x4만 남는다.
+    """
+    depth = np.full((H, W), 1.0, dtype=np.float32)
+    labels = np.zeros((H, W), dtype=np.uint8)
+    labels[10:16, 15:21] = LABEL_OBJ_BASE + 1
+    depth[10:16, 15:21] = 1.05
+
+    p = _params(obj_radius_m=float('nan'), mask_erode_m=0.005)  # 반경 크롭은 끄고 erosion만 본다
+    seg, label_map, _ = segment_from_labels(labels, depth, K, T_IDENTITY, p)
+
+    assert 'obj_1' in label_map
+    assert (seg[11:15, 16:20] == LABEL_OBJ_BASE + 1).all()   # 안쪽 4x4는 남는다
+    assert (seg[10, 15:21] == 0).all()      # 윗변
+    assert (seg[15, 15:21] == 0).all()      # 아랫변
+    assert (seg[10:16, 15] == 0).all()      # 왼변
+    assert (seg[10:16, 20] == 0).all()      # 오른변
+
+
+def test_mask_erode_zero_is_noop():
+    """mask_erode_m=0(기본, _params override)이면 기존 동작과 같다 — 회귀 방지."""
+    labels, depth = _two_objects_on_tilted_table()
+    seg, label_map, _ = segment_from_labels(
+        labels, depth, K, T_IDENTITY, _params(mask_erode_m=0.0))
+    assert set(label_map) == {'obj_1', 'obj_2'}
+
+
+def test_mask_erode_can_remove_small_object_entirely():
+    """erode_m 이 물체 반폭보다 크면 min_pixels 밑으로 깎여 라벨 자체가 사라진다."""
+    depth = np.full((H, W), 1.0, dtype=np.float32)
+    labels = np.zeros((H, W), dtype=np.uint8)
+    labels[10:16, 15:21] = LABEL_OBJ_BASE + 1
+    depth[10:16, 15:21] = 1.05
+
+    p = _params(obj_radius_m=float('nan'), mask_erode_m=0.02)  # 20mm — 6px(~30mm) 물체를 통째로 깎음
+    seg, label_map, _ = segment_from_labels(labels, depth, K, T_IDENTITY, p)
+    assert label_map == {}

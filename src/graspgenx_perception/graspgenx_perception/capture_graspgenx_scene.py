@@ -59,12 +59,12 @@ DEFAULTS = {
     # base_link 기준 작업공간 박스 [m]. 로봇 베이스가 테이블에 앉아 있다고 보고 잡은 값 — UNVERIFIED
     'x_min': 0.10, 'x_max': 0.90,
     'y_min': -0.50, 'y_max': 0.50,
-    'z_min': -0.05, 'z_max': 0.60,
+    'z_min': -0.05, 'z_max': 0.70,
     'table_z': float('nan'),  # nan이면 박스 안 z 중앙값으로 자동 추정 (geometric 경로 전용)
     # 테이블면 위 이 높이부터 물체로 본다. **2026-08-09부터 yolo 경로도 이 값을 쓴다** —
     # segment_from_labels() 가 각 물체 주변 국소 테이블 기준(아래 yolo_table_ring_m)으로
     # 마스크 하단의 가림꼬리·경계오염 픽셀을 잘라낸다. 물체 자체가 낮으면(<15mm) 안 잡힌다.
-    'obj_min_h': 0.015,
+    'obj_min_h': 0.02,
     # 로봇 팔·그리퍼는 작업공간 박스 **안**에 있어 xy 로 뺄 수 없다 — 높이로 자른다.
     # 0.12 는 2026-08-08 실측 튜닝값이다(씬 cmp_geo): 그리퍼가 상판 위 17.9~33.0 cm 에
     # 걸쳐 4182 px 짜리 obj_1 로 잡혔고, 같은 씬의 사과는 상판 위 최대 7.2 cm 였다.
@@ -84,6 +84,18 @@ DEFAULTS = {
     # 링 안 배경 픽셀이 이보다 적으면(작업공간 가장자리·물체가 빽빽할 때) 국소값을
     # 못 믿고 전역 table_z 로 폴백한다.
     'yolo_min_ring_px': 20,
+    # yolo 경로 전용: 각 물체 마스크를 실측 거리 기준 이만큼[m] 안쪽으로 깎는다
+    # (erode_footprint_m). obj_radius_m(원형 크롭, 물체 중심 기준)과 역할이 겹치는 것 같지만
+    # 다르다 — obj_radius_m 은 매끈한 원이라 물체 실제 윤곽(예: 각진 병)의 오목한 부분을 못
+    # 따라간다. 이건 YOLO 마스크가 원래 그리는 윤곽을 그대로 깎아 들어간다. 물체의 평균
+    # depth 로 그 지역 실측 픽셀 피치(depth/fx)를 구해 erode_m 을 픽셀 수로 환산해서 깎으므로,
+    # 이미지 해상도·물체까지 거리와 무관하게 항상 "약 이만큼[mm]"을 깎는다(erode_footprint_m
+    # 의 docstring 참고 — base XY 격자 리샘플링은 작은 물체를 통째로 지우는 버그가 나서 폐기).
+    # 이 장면은 가림이 없다는 전제(2026-08-10 사용자 확인)라 경계를 통째로 깎아도 손해가
+    # 없다 — occlusion 이 있는 씬이면 이 값을 올리면 물체 자체가 줄어들 수 있으니 주의.
+    # UNVERIFIED: 3mm 는 아직 실기로 잰 값이 아니다. 첫 캡처 로그(물체별 px 수 변화, 특히
+    # 작은 물체가 min_pixels 밑으로 떨어지는지)를 보고 다시 잡는다. 0이면 끄기(기존 동작).
+    'mask_erode_m': 0.003,
     'min_pixels': 300,        # 이보다 작은 덩어리는 버린다(노이즈)
     # 단일 시점 depth 는 물체 뒤 가림영역을 전경 깊이로 메운다(occlusion shadow).
     # 그 꼬리가 덩어리에 붙어 OBB 를 부풀리고, 심하면 grasp 가 0개가 된다
@@ -106,7 +118,7 @@ DEFAULTS = {
     # 실측 height 위로 이만큼까지는 허용한다 — 측정 오차·바닥 접지 오차·국소 테이블 기준의
     # 잔차를 흡수한다. 너무 좁히면 진짜 물체 꼭대기까지 잘려나간다.
     'class_dims_margin_m': 0.03,
-    'frames': 10,             # depth 를 이만큼 모아 픽셀별 중앙값. 정지 장면이라 가능하다
+    'frames': 5,             # depth 를 이만큼 모아 픽셀별 중앙값. 정지 장면이라 가능하다
     'min_valid_ratio': 0.5,   # 프레임 중 이 비율 이상에서 유효해야 그 픽셀을 쓴다
     'timeout_sec': 10.0,
     # 세그멘테이션 백엔드. 'geometric' = 작업공간 박스 + connectedComponents (신경망 0개),
@@ -341,20 +353,51 @@ def workspace_mask(depth, K, T_base_cam, p):
     return in_box, X, Y, Z
 
 
+def erode_footprint_m(m, depth, K, erode_m):
+    """마스크 `m`을 `erode_m`[m] 만큼(실측 거리 기준) 안쪽으로 깎는다.
+
+    ⚠️ 첫 시도는 base 프레임 X,Y 로 마스크 픽셀을 성긴 격자에 다시 뿌려 거기서 깎는
+    것이었다 — 실측(2026-08-10, 이 함수의 이전 버전으로 재현)해보니 depth 픽셀 간격이
+    격자 셀보다 성겨서(픽셀마다 점 하나씩만 찍히고 그 사이는 빈칸) erode 커널이 고립된
+    점을 전부 지워버려 **작은 물체가 통째로 사라졌다**(36px 마스크가 erode 3mm에 0px).
+    그래서 리샘플링 없이 **이미지 고유 격자**(빈틈이 없다)에서 깎는다: 물체의 평균 depth
+    로 그 지역의 실측 픽셀 피치(depth/fx, m/px)를 구해 erode_m 을 픽셀 수로 환산한다.
+    카메라가 테이블을 비스듬히 보면(eye-to-hand) 시선 방향 성분이 살짝 섞이지만
+    (cos(기울기) 배 정도 언더/오버 컷), 격자 리샘플링의 빈틈 버그보다는 훨씬 안전하다.
+    """
+    if erode_m <= 0 or not m.any():
+        return m
+    fx = K[0, 0]
+    mean_depth = float(depth[m].mean())
+    if mean_depth <= 0:
+        return m
+    pitch = mean_depth / fx      # m/px 근사
+    erode_px = max(1, int(round(erode_m / pitch)))
+    kernel = np.ones((2 * erode_px + 1, 2 * erode_px + 1), np.uint8)
+    return cv2.erode(m.astype(np.uint8), kernel) > 0
+
+
 def segment_from_labels(labels, depth, K, T_base_cam, p, class_map=None):
     """yolo_seg 라벨맵(101,102,...)을 그대로 씬 seg 로 쓴다.
 
     라벨 규약이 이미 같으므로 하는 일은 네 가지다:
       1. **유효 depth 로 마스킹.** GraspGenX 는 depth 역투영으로 점군을 만든다. depth 가 0 인
          픽셀에 라벨이 붙어 있으면 그 물체의 점 수만 부풀고 점군에는 안 들어간다.
-      2. 반경 크롭. `class_map`으로 그 물체의 클래스를 알고 `p['class_dims']`에 실측치가
+      2. **마스크 침식(erosion), 실측 거리 기준.** 반경 크롭(3번)은 물체 중심 기준 원형
+         크롭이라 반경 안쪽은 그대로 통과한다 — 스테레오 depth 의 flying pixel(물체~배경
+         경계에서 depth 가 섞이는 현상)은 그 반경 *안쪽* 마스크 경계에서 생기므로 반경
+         크롭으로는 못 거른다. `mask_erode_m`(미터)만큼 마스크 경계를 통째로 깎는다
+         (erode_footprint_m) — 물체의 평균 depth 로 그 지역 실측 픽셀 피치를 구해 미터를
+         픽셀 수로 환산하므로 거리·해상도에 상관없이 "약 이만큼[mm]"을 일관되게 깎는다.
+         **가림이 없는 씬 전제**(2026-08-10)라 경계를 깎아도 물체 자체가 사라지지 않는다.
+      3. 반경 크롭. `class_map`으로 그 물체의 클래스를 알고 `p['class_dims']`에 실측치가
          있으면 **그 물체의 실측 반경**을 쓴다 — 없으면 전역 `obj_radius_m`(기존 동작).
-      3. **물체마다 자기 주변의 국소 테이블 높이를 재서 그 위 obj_min_h 미만인 픽셀을
+      4. **물체마다 자기 주변의 국소 테이블 높이를 재서 그 위 obj_min_h 미만인 픽셀을
          잘라낸다.** 마스크 경계가 테이블로 살짝 새거나, 단일 시점 depth 의 가림꼬리가
          물체 밑에 붙는 걸 막는다. 클래스별 실측 height 를 알면 그 값 + 여유(margin) 위도
          같이 잘라낸다(이웃 물체·팔의 오염 방지) — **모르면 상한을 안 건다.** 서 있는 물체
          (콜라병 등)를 기하 경로 기준값(12cm) 하나로 자르면 통째로 잘려나가기 때문이다.
-      4. 남은 라벨을 label_map 으로 정리 + 물체별 돌출 높이(+실측 대비 편차)를 진단에 남긴다.
+      5. 남은 라벨을 label_map 으로 정리 + 물체별 돌출 높이(+실측 대비 편차)를 진단에 남긴다.
     역할 분담은 **YOLO 가 "어느 물체인지", 기하가 "닿을 수 있는 곳·얼마나 튀어나왔는지"** 다.
 
     ⚠️ `class_dims` 는 depth 자체의 결손(반사면이라 점이 아예 안 찍히는 것)을 못 고친다 —
@@ -398,6 +441,11 @@ def segment_from_labels(labels, depth, K, T_base_cam, p, class_map=None):
         radius = dims[0] if dims else default_radius
 
         m = seg == v
+        erode_m = float(p.get('mask_erode_m', 0.0))
+        if erode_m > 0:
+            eroded = erode_footprint_m(m, depth, K, erode_m)
+            seg[m & ~eroded] = 0
+            m = eroded
         px = int(m.sum())
         cx = cy = float('nan')
         if np.isfinite(radius) and px >= p['min_pixels']:

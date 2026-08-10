@@ -1147,7 +1147,8 @@ stateDiagram-v2
     NEXT_CANDIDATE --> PLAN : alternatives 에서 하나 꺼냄 · GPU 재호출 없음
     NEXT_CANDIDATE --> SPEAK_FAIL : 후보 소진
 
-    VERIFY --> RELEASE_RETRY : 파지 실패
+    VERIFY --> CLOSE : 파지 실패 · 좁게 재시도 · grip_narrow_retries 이내
+    VERIFY --> RELEASE_RETRY : 파지 실패 · grip_narrow_retries 소진
     RELEASE_RETRY --> HOME : 열고 홈 복귀 · grip_retries 이내
     RELEASE_RETRY --> ABORT : grip_retries 초과
 
@@ -1432,6 +1433,17 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
 
 단 **가상 그리퍼 노드는 이 토픽을 발행하지 않는다.** 못 받았을 때는 판정을 `None`(모름)으로
 두고 기본값에서는 통과시킨다(`verify_required: false`). 실패로 읽으면 시뮬이 매번 멈춘다.
+
+#### VERIFY 실패 시 "좁게 재시도"부터 한다 (`grip_narrow_retries`)
+
+`width_m`(`grasp_bridge_node.select()` → `_grip_width`)은 **GraspGenX 가 고른 grasp 후보의
+닫힘축 폭**이다 — 병처럼 단면이 급변하는 물체에서는 몸통(넓은 부분) 기준으로 나올 수 있는데
+실제로 노린 접근점은 목(얇은 부분)인 경우, 그 폭까지만 닫으면 손가락이 물체에 닿기 전에
+멈춰 힘이 안 걸리고 `grip_detected=False`(파지 실패로 오판)가 뜬다. `VERIFY` 는 곧장
+`RELEASE_RETRY`(열고 홈 복귀 → 재인식)로 가지 않고, 같은 자세에서 `width_m` 을
+`grip_narrow_step_m` 씩 줄여 `CLOSE` 로 최대 `grip_narrow_retries` 번 더 닫아본다 — 그래도
+안 잡히면 그때 `RELEASE_RETRY` 로 넘어간다. 실기 미검증 튜닝값(`grip_narrow_step_m: 0.015`)이라
+현장에서 조정이 필요할 수 있다.
 
 #### 🔴 그리퍼 힘이 기본 40 N (RG2 최대)이다
 

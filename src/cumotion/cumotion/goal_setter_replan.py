@@ -89,6 +89,40 @@ D2R = math.pi / 180.0
 JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
 
 
+def _quat_mul(q1: tuple, q2: tuple) -> tuple:
+    """쿼터니언 곱, (w, x, y, z) 순서."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return (
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    )
+
+
+def euler_zyz_to_quat(a: float, b: float, c: float) -> Quaternion:
+    """두산 posx 의 Euler ZYZ(a, b, c, rad) → 쿼터니언.
+
+    두산 정의(dsr_common2/include/DRFS.h:769): base 기준 Rz(a)·Ry(b)·Rz(c) 순서의
+    내적 회전. ROS 의 roll-pitch-yaw(quat_from_rpy, ZYX)와는 다른 회전축 순서라
+    섞어 쓰면 안 된다.
+    """
+    qz_a = (math.cos(a * 0.5), 0.0, 0.0, math.sin(a * 0.5))
+    qy_b = (math.cos(b * 0.5), 0.0, math.sin(b * 0.5), 0.0)
+    qz_c = (math.cos(c * 0.5), 0.0, 0.0, math.sin(c * 0.5))
+    w, x, y, z = _quat_mul(_quat_mul(qz_a, qy_b), qz_c)
+    return Quaternion(x=x, y=y, z=z, w=w)
+
+
+def posx_from_pendant(x_mm: float, y_mm: float, z_mm: float,
+                       a_deg: float, b_deg: float, c_deg: float) -> List[float]:
+    """티치펜던트 posx(x, y, z, a, b, c)[mm, deg] 를 그대로 받아
+    이 파일이 쓰는 GOAL_*_POSE 형식(m + 쿼터니언 7개)으로 변환한다."""
+    q = euler_zyz_to_quat(a_deg * D2R, b_deg * D2R, c_deg * D2R)
+    return [x_mm / 1000.0, y_mm / 1000.0, z_mm / 1000.0, q.x, q.y, q.z, q.w]
+
+
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║                                                                           ║
 # ║   🎯 목표 설정 — 여기만 고치면 된다. ①과 ② 중 **하나만** 주석을 푼다.      ║
@@ -135,13 +169,14 @@ GOAL_MODE = 'pose'
 # ⚠️ 기준 링크는 **tool0** 이지 RG2 손가락 끝(TCP)이 아니다 (m0609_rg2.xrdf 주석).
 # ⚠️ 두산 API 의 posx(x,y,z,a,b,c)를 그대로 옮기면 안 된다. 두산은 **mm + Euler ZYZ**
 #    (dsr_common2/include/DRFS.h:769), 여기는 **m + 쿼터니언**이다. 숫자가 6개로
-#    똑같이 생겨서 조용히 틀린다.
+#    똑같이 생겨서 조용히 틀린다 — 그래서 아래는 posx_from_pendant() 로 변환해서 넣는다.
 # GOAL_A_POSE = [0.2558, 0.2646, 0.4244, -0.653298, -0.270371, 0.653320, -0.270692]
 # GOAL_B_POSE = [0.2646, -0.2558, 0.4244, -0.653132, 0.270770, 0.653376, 0.270559]
 
-GOAL_A_POSE = [-0.0986, 0.4997, 0.3486, -0.522916, 0.457456, 0.557351, 0.454591]
-GOAL_B_POSE = [ 0.4571, -0.4301, 0.3218,  0.249740, 0.599607, -0.280211, 0.706812]
-
+# 🎯 티치펜던트 화면(또는 get_current_posx())에 뜨는 x,y,z,rx,ry,rz 를 그대로 옮겨 적는다.
+#    mm→m, Euler ZYZ(deg)→쿼터니언 변환은 posx_from_pendant() 가 처리한다.
+GOAL_A_POSE = posx_from_pendant(504, -448,146,129,-165,169)
+GOAL_B_POSE = posx_from_pendant(-47, 612, 174, 91, 158, 176)
 
 # ═══════════════════════ 목표 설정 끝 ═══════════════════════════════════════
 

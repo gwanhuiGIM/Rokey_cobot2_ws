@@ -95,6 +95,11 @@ task_manager:
     gripper_settle_sec: 1.5     # UNVERIFIED
     verify_required: false      # grip_detected 를 못 받아도 진행 (가상 그리퍼 대응)
     grip_retries: 1
+    # 파지 실패 시 놓고 재인식(grip_retries)하기 전에, 같은 자세에서 이만큼씩 좁혀
+    # 다시 닫아보는 횟수. 병처럼 기입된 width_m(=최대 단면)보다 얇은 부위(목)를
+    # 노렸을 때 손가락이 접촉 전에 멈춰 "실패"로 오판되는 경우를 구제한다.
+    grip_narrow_retries: 1
+    grip_narrow_step_m: 0.015   # UNVERIFIED: 실측 튜닝값
 
     # ── 인식 ─────────────────────────────────────────────
     # /grasp/compute_grasp 서버는 2026-08-09 에 grasp_bridge_node 에 생겼다.

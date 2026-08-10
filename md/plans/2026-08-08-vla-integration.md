@@ -1,16 +1,22 @@
 <!-- meta
-updated: 2026-08-09 (4차 개정 — **실기 PC(`rokey`)에서 전 스택 가동 중 실측**. D5 해결,
-         대역폭 추정치를 실측으로 교체, 캘리브·`~/.local`·`grasp_source` 항목 갱신)
-status:  live (§2 지시 채널 구현됨 2026-08-09 — §0-C. §5 선정 로직은 여전히 미착수)
-owns:    M0609_VLA_system ↔ cobot2_ws 통합 · 역할 경계 · 지시 채널 계약 · 물체 선정(target selection) 설계
+updated: 2026-08-10 (5차 개정 — `2026-08-10-integ-plan.md`(§0-D)와
+         `2026-08-10-fsm-merge.md`(§9) 를 여기로 병합 후 원본 삭제.
+         "원본 = M0609_VLA_system" 보류 해제, place 3종 지원 추가, ~/.local 오염 정리)
+status:  live (§2 지시 채널 구현됨 2026-08-09 — §0-C. place 는 2026-08-10 — §0-D.
+         §5 선정 로직은 여전히 미착수)
+owns:    M0609_VLA_system ↔ cobot2_ws 통합 · 역할 경계 · 지시 채널 계약 · 물체 선정(target selection) 설계.
+         이 ws 의 VLA 통합 관련 md 는 **이 문서 하나**로 통일한다 — 새 통합 관련 파일을
+         또 만들지 말고 여기 개정 절(0-A/0-B/0-C/0-D...)을 추가한다.
 -->
 
-# VLA 통합 — 필요 부분 정리 (2026-08-08, 2026-08-09 실측 갱신)
+# VLA 통합 — 필요 부분 정리 (2026-08-08, 2026-08-10 실측 갱신)
 
 > **상대 저장소**: `~/M0609_VLA_system` (별도 repo)
-> 🔴 **2026-08-09: 이 머신(`rokey`)에 `~/M0609_VLA_system` 이 없다.** 08-08 스냅샷(`5a10649`)은
-> **개인PC 에서 읽은 것**이다. 여기 적힌 VLA 측 값(`system.yaml:107` 등)은 전부 그 스냅샷이고
-> **이 머신에서는 재확인할 방법이 없다.** §7 시작절차 3번은 이 머신에서 실행 불가다.
+> ⚠️ **2026-08-09 시점엔 이 머신(`rokey`)에 `~/M0609_VLA_system` 이 없었다** (당시엔 개인PC
+> 에서만 읽을 수 있었다 — 08-08 스냅샷 `5a10649`). **2026-08-10 기준 지금은 이 머신에도
+> 있다** — §0-D 참고. 그래도 08-08/08-09 시점 값(`system.yaml:107` 등 아래 §3)은 여전히
+> "그 스냅샷 기준"이라는 꼬리표를 달고 읽을 것 — 최신 재확인은 안 됐다. §9(구 `fsm-merge.md`)
+> 는 2026-08-10 에 이 머신에서 직접 그 repo 를 열어 쓴 것이라 이 문제가 없다.
 
 ---
 
@@ -114,6 +120,53 @@ VLA 는 아무 때나 쏘고(push), FSM 은 `LISTENING` 에 들어와야 물어�
 스모크 중 실제로 죽었다).
 
 레퍼런스(스키마 전체·파라미터·결과 계약·검증 상태): [[ws/cobot2/src/PACKAGES]] `#voice_processing`
+
+---
+
+## 0-D. 🟢 2026-08-10 — "원본이 M0609_VLA_system 맞나" 보류 해제 + place 지원 추가
+
+`2026-08-10-integ-plan.md`(별도 파일)로 잠깐 갈라졌던 보류 기록을 여기로 합친다 — 그
+문서는 삭제했다. 아래가 그 문서가 갖고 있던 전부다.
+
+**왜 보류했었나 (2026-08-09)**: 이 문서(08-08)는 `~/M0609_VLA_system`을
+`vla_command_node`의 상대 원본으로 전제하고 쓰였는데, 2026-08-09 대화 중 그 repo를 직접
+열어보니 `voice_processing`의 두 노드(`get_keyword` 계열 / `vla_command_node`)가 실제로는
+그 repo에서 가져온 게 아니라 서로 다른 두 계보였다는 게 드러나 전제 자체가 의심됐다.
+그래서 **팀원 확인 전까지 추가 코드 작성·병합을 보류**했었다(`get_keyword.py` 원조가
+`M0609_VLA_system`이 아니라 이 ws의 옛 `pick_and_place_voice`/`corecode/VoiceProcessing`
+튜토리얼이라는 점은 사실로 남는다 — 그 부분은 여전히 그 repo와 무관하다).
+
+**해제 (2026-08-10, `M0609_VLA_system/2026-08-10-fsm-merge.md` §0)**: 사용자가 "최종 병합의
+원본은 `M0609_VLA_system` 워크스페이스다"라고 확답 — `get_keyword` 계열의 실제 원조가
+무엇이었냐는 위 사실과는 별개로, **앞으로의 최종 병합 방향**은 그 repo가 정본이라는 뜻이다.
+구조: 그쪽이 대화·의도 판단(`vla_agent`, 멀티턴·되묻기·취소)을 소유하고, 이쪽
+(`pick_fsm`/`voice_processing`)이 모션·IK·충돌회피·그리퍼·6D 파지를 소유. 경계는 지금
+그대로 `/vla/pick_command`↔`/vla/pick_result`(JSON, `vla_command_node.parse_command()`가
+정본) — 새 msg·새 패키지 안 만든다는 §0-C 결정이 그대로 이어진다.
+
+**⚠️ §7 "다음 세션 시작 절차" 3번(`VLA repo — rokey 에는 없다`)은 낡았다.** 2026-08-10
+기준 이 머신(`rokey`)에 `~/M0609_VLA_system`이 실재한다 — 개인PC 전용이 아니게 됐다.
+
+**`fsm-merge.md`는 이제 이 파일 §9다 — 별도 파일이 아니다.** 처음엔
+`~/M0609_VLA_system/2026-08-10-fsm-merge.md`로 있었지만, 그 repo 쪽 판단으로
+"이제 cobot2_ws가 정본"이 되어 이 문서 §9로 옮겨왔다(2026-08-10, 원본은 그쪽에서 삭제).
+같은 이유로 `2026-08-10-integ-plan.md`(잠깐 따로 있던 보류 기록)도 여기 §0-D로
+합쳐 삭제했다 — **이 ws에서 VLA/M0609 통합 관련 md는 이 파일 하나로 통일한다.**
+
+**이번에 반영한 첫 항목 — `place`**: `parse_command()`가 예전엔 `place` 키가 있으면
+무조건 거부했다(당시 근거: "FSM 의 place 는 고정 관절값 하나"). 그런데 2026-08-09
+`place_logic_0809`(`task_manager.PLACE_LOCATIONS`)로 FSM이 먼저 `basket`/`table`/`discard`
+세 곳을 지원하게 되면서 그 거부 사유가 낡았다 — `vla_command_node`도 같은 세 값을
+검증·통과시키고 `/pick/place_location` 토픽으로 넘기도록 맞췄다(상세는
+`vla_command_node.py` 상단 주석 + `parse_command()` 본문). `table`/`discard`의 관절값은
+아직 teach 안 된 자리표시자라는 제약은 그대로 유효(`pick_fsm.yaml` UNVERIFIED 주석).
+
+**부수 발견 — `~/.local` 오염 (2026-08-10)**: `M0609_VLA_system/README.md`가
+`pip install --user`를 써서, 같은 계정을 공유하는 이쪽 `colcon build`가 한 차례 전부
+깨졌다(`opencv-python`/`pydantic` v2/`setuptools`+`anyio` 충돌 — §6-2가 이미 알고 있던
+"pip install을 ~/.local에 안 한다" 실패 패턴이 그대로 재현됨). 정리 완료, 재발 방지 규약은
+그쪽 repo에 `PYTHON_ENV_CONVENTION.md`로 작성해 전달함(venv `--system-site-packages`).
+이쪽에서 할 일 없음 — 다음에 `colcon build`가 이유 없이 깨지면 이 패턴부터 의심할 것.
 
 ---
 
@@ -772,3 +825,450 @@ iperf3 -c <VLA_PC_IP> -t 10
 >   이번엔 **실기 `rokey` 에서 전 스택이 도는 상태로 실측**했다. 요약표는 §0-A.
 >   추정이 사실로 바뀐 것 9개, 추정이 틀렸던 것 2개(JPEG 3.8배 과소, nvblox color 입력),
 >   새로 생긴 제약 1개(`dry_run` 제거 → §0-B), 나빠진 것 1개(캘리브 불합격본이 실기에 물려 있음).
+
+---
+
+## 9. 최종 병합 체크리스트 (2026-08-10, `M0609_VLA_system/2026-08-10-fsm-merge.md`에서 병합)
+
+> 이 절 아래는 원래 별도 파일이었다. 그 repo(`M0609_VLA_system`) 쪽에서 이 repo가
+> 정본이 되는 게 맞다고 판단해 옮겨졌다(2026-08-10) — 원본은 그쪽에서 삭제됨.
+> 제목·번호는 원문 그대로, 이 문서의 §0~§8과 번호가 겹치지 않도록 계층만 한 단계
+> 내렸다(원 `##`→`###`, 원 `###`→`####`). 코드/명령 인용 안의 내용은 그대로다.
+
+<!-- meta
+updated: 2026-08-10
+status:  live — 브리지 이중 설계 해소가 첫 블로커
+owns:    이 ws(원본) ↔ cobot2_ws/pick_fsm 최종 병합에 필요한 것의 단일 목록
+location: 2026-08-10 부터 이 파일은 cobot2_ws/md/plans/ 에 물리적으로 위치한다
+         (원래 M0609_VLA_system 에서 작성됨). 본문의 "이 ws"는 여전히
+         M0609_VLA_system 을 가리킨다 — 아래 주의 참고.
+-->
+
+> ⚠️ **용어 주의 (2026-08-10 이 문서를 cobot2_ws 로 이관하며 추가)**
+> 이 문서는 원래 `M0609_VLA_system` 저장소에서 작성됐고, 병합 작업의 단일 관리 지점으로
+> 삼기 위해 **`cobot2_ws/md/plans/` 로 옮겨졌다.** 본문 전체에서 **"이 ws"는 옮겨온 지금도
+> 여전히 `M0609_VLA_system`(VLA 대화 에이전트 쪽)을 가리킨다** — 이 파일이 물리적으로
+> 들어와 있는 `cobot2_ws`를 가리키지 않는다. `cobot2_ws`는 본문에서 "대상 repo",
+> "저쪽", 또는 이름을 그대로 `cobot2_ws`라고 명시한 곳이다. 헷갈리면 표 제목(예:
+> "A. 이 ws … / B. cobot2_ws …", §2)처럼 두 이름이 나란히 있는 곳을 기준으로 삼는다.
+
+### 최종 병합 필요 사항 — `M0609_VLA_system`("이 ws") ↔ `cobot2_ws/pick_fsm` (2026-08-10)
+
+### 0. 이 문서에 대해
+
+**확정된 것 (2026-08-10 사용자 지시)**
+
+1. **최종 병합의 원본은 이 워크스페이스다.** (당시) `~/cobot2_ws/md/plans/2026-08-10-integ-plan.md` 가
+   `status: blocked — 팀원 확인 대기` 로 물어둔 질문 *"`voice_processing` 의 진짜 원본이
+   `M0609_VLA_system` 이 맞는가"* 에 대한 답이 **예**다. 그 문서의 보류를 해제해도 된다.
+   → **완료.** `integ-plan.md` 는 이 문서 §0-D 로 병합되고 삭제됐다.
+2. **구조**: 이 ws 가 사용자와의 대화로 키 명령어를 인식하고, 그 명령을 `cobot2_ws` 의
+   `pick_fsm` 과 연동한다. 로봇 실행(모션·IK·충돌회피·그리퍼·6D 파지)은 전부 저쪽이 소유한다.
+
+**단일 출처 관계** — 값이 어긋나면 아래가 이긴다.
+
+| 주제 | 정본 |
+|---|---|
+| 이 시스템 설계·동작 원리 | `M0609_VLA_system/README.md` (다른 저장소 — 절대경로 `/home/kimkh/M0609_VLA_system/README.md`) |
+| 이 시스템 파라미터 | `M0609_VLA_system/src/vla_system/config/system.yaml` (다른 저장소) |
+| 통합 경계·역할 분담 | 이 repo `md/plans/2026-08-08-vla-integration.md` |
+| 대상 FSM 인터페이스 | 이 repo `src/pick_fsm/README.md`, `config/pick_fsm.yaml` |
+| **넘길 코드의 생존/폐기 판정** | `M0609_VLA_system/HANDOVER.md` §3 (다른 저장소 — 절대경로 `/home/kimkh/M0609_VLA_system/HANDOVER.md`) |
+| **이 문서** | 병합에 *실제로 필요한 작업*의 목록. 위 문서들의 값을 다시 적지 않고 링크한다 |
+
+⚠️ `HANDOVER.md` 는 2026-08-09 작성본이고 **전제 3개가 이미 낡았다** → §4.
+
+---
+
+### 1. ✅ "브리지가 필요한가" — 확인 결과: **필요하다**
+
+세 가지가 각각 독립적으로 브리지를 강제한다. 셋 다 소스로 확인했다.
+
+#### 1-1. FSM 은 우리 메시지 타입을 모른다 (검증됨)
+
+`~/cobot2_ws/src/pick_fsm/pick_fsm/task_manager.py:24-42` 의 import 전체:
+
+```python
+from geometry_msgs.msg import PoseArray, PoseStamped
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Int8, String
+from std_srvs.srv import Trigger
+```
+
+**`vla_interfaces` 가 없다.** `RobotAction`·`RobotState`·`SceneSnapshot`·`AgentReply` 는
+FSM 이 타입 수준에서 인식하지 못한다. 우리 토픽을 그대로 쏘면 아무도 받지 않는다.
+
+#### 1-2. 커스텀 msg 를 경계로 쓰면 두 repo 가 버전으로 묶인다
+
+`vla_interfaces` 를 대상 PC 에 빌드·배포하면, 한쪽만 빌드가 갱신됐을 때
+**타입 해시가 어긋나 조용히 매칭이 끊긴다**(에러가 아니라 "토픽은 보이는데 데이터가 안 옴"으로
+나타나 도메인/프로파일 문제와 구분이 안 된다). 저쪽 계획서 §2 가 이 이유로
+**`std_msgs/String`(JSON) 경계**를 채택했다. 이 ws 도 같은 결론을 따르는 것이 맞다.
+
+#### 1-3. push ↔ pull 임피던스 불일치 — 래치가 필요하다
+
+VLA(LLM)는 사용자가 말한 **그 순간** 결정을 내린다(push). FSM 은 `LISTENING` 상태에
+들어와야 `/get_keyword` 를 부른다(pull). 그 사이를 잇는 **한 건짜리 래치**가 없으면
+지시가 유실되거나 다음 사이클에 늦게 팔린다.
+
+래치를 제대로 만들려면 아래 4개를 명시적으로 다뤄야 한다 — 저쪽이 cross-review 로
+**전부 실제 버그로 잡아낸 것들**이다(대상 `vla_command_node.py` 문서화 주석):
+
+| 함정 | 왜 |
+|---|---|
+| 성공을 `RELEASE` 진입으로 판정 | `_to()` 는 상태 **진입** 때 발행하고 그리퍼 열기·detach 는 그 뒤다. `RELEASE → ABORT` 도 허용 전이라 최대 20 s 이르고 뒤따르는 ABORT 는 보고조차 안 된다 → **`HOME` 진입**으로 판정해야 한다 |
+| 버려진 `/get_keyword` 호출이 다음 지시를 가로챔 | `task_manager._to()` 는 전이 시 `_fut = None` 으로 진행 중 future 를 버린다. 그 콜백이 살아남아 다음 지시를 삼키면 그 지시는 영영 결과가 없다 |
+| "타임아웃 50 s < 60 s 라 안전"이 불변식이 아님 | `_service()` 는 우리 서버가 없어도 기다린다 → `LISTENING` 시계는 이미 돌고 있다 |
+| 대기 중 Ctrl-C 가 최대 50 s 먹힘 | `Executor.shutdown()` 이 콜백 종료를 기다린다 |
+
+**→ 결론: 브리지는 필수다. 그리고 얇지 않다.**
+
+---
+
+### 2. 🔴 첫 블로커 — 브리지가 **두 개** 설계돼 있고 서로 배타적이다
+
+| | **A. 이 ws** `HANDOVER.md` §4.2 `vla_pick_bridge` | **B. cobot2_ws** `voice_processing/vla_command_node` |
+|---|---|---|
+| 위치 | VLA PC (신규, **미구현**) | 대상 PC (**구현·빌드·설치 완료**) |
+| `/get_keyword` 서버 | **직접 제공** | **직접 제공** |
+| 경계 형식 | 서비스 직결 (JSON 없음) | `/vla/pick_command` ↔ `/vla/pick_result` (JSON) |
+| 핫스팟 통과 | 서비스 4개 + `/pick/state` | 토픽 2개 (JSON) |
+| `/pick/approve` | `approve_plan(say)` 툴로 **호출** | 🔴 **코드 경로 자체가 없음** (의도적) |
+| 스키마 검증·TTL·`request_id` | 설계에 없음 | 있음 (21건 단위테스트) |
+| `allowed_classes` 화이트리스트 | 없음 | 있음 |
+
+> 🔴 **둘 다 `/get_keyword` 서버를 연다. 동시에 띄우면 어느 쪽이 응답할지 알 수 없다.**
+> (대상 `voice_processing/README.md:14` 가 마이크 노드 `get_keyword` 에 대해 같은 경고를 한다.)
+
+#### 판단: **B 를 유지하고, 이 ws 에는 발행자만 만든다**
+
+```
+[이 ws · VLA PC]                              [cobot2_ws · 대상 PC]
+ vla_agent ──> vla_pick_bridge (신규, 발행자)
+                  │  /vla/pick_command (JSON)
+                  ├───────────────────────────>  vla_command_node (래치, 기구현)
+                  │                                   │ /get_keyword (Trigger)
+                  │  /vla/pick_result (JSON)          ▼
+                  <───────────────────────────  task_manager (FSM)
+                                                      │ /pick/state
+                                                      ▼ MoveIt → M0609+RG2
+```
+
+근거 4개:
+
+1. **B 는 이미 돌아간다.** 빌드·설치 확인(`install/voice_processing/lib/voice_processing/vla_command_node`),
+   `COLCON_IGNORE` 없음, `launch/vla_command.launch.py` 있음, `setup.py` entry point 등록됨.
+2. **§1-3 의 함정 4개를 B 가 이미 다 막았다.** A 로 가면 그 4개를 처음부터 다시 밟는다.
+3. **경계가 JSON 이라 버전 결합이 없다** (§1-2).
+4. **`/pick/approve` 차단은 안전 결정이다.** 저쪽 `dry_run`(plan_only) 이 2026-08-09 에
+   **제거**돼서 FSM 은 항상 실제로 움직인다. 남은 소프트 안전장치가 `require_approval`
+   **하나뿐**이라, VLA 가 승인까지 보내면 안전장치가 0 이 된다. A 의 `approve_plan(say)` 툴은
+   이 결정을 뒤집는 것이므로 **채택하지 않는다.**
+
+⚠️ **대가**: 매 pick 사이클마다 **사람이 rqt 패널에서 승인 버튼을 눌러야 한다.**
+"계속 말을 걸면 알아서 담는" 데모 시나리오와 정면으로 부딪친다 → §6-1.
+
+---
+
+### 2-B. 두 번째 겹침 축 — `get_keyword`(프론트엔드) vs `vla_agent`(핵심 로직)
+
+§2 는 *어댑터* 축이었다. 여기는 *프론트엔드* 축이다. 혼동 주의:
+`vla_command_node`(래치)는 듣지도 판단하지도 않으므로 이 겹침이 아니다.
+
+| | `get_keyword` (cobot2, 222줄) | `vla_gui`+`vla_agent` (이 ws) |
+|---|---|---|
+| 흐름 | 마이크→wakeword→STT→**1샷** gpt-4o→`[물체/목적지]` 문자열 | STT→**멀티턴** function-calling 에이전트 |
+| 상태 | 무상태 | 대화 히스토리 + scene 주입 + `RobotState` ground truth |
+| 되묻기·취소 | 없음 | `ask_clarification`·`cancel_current_action` |
+
+**같은 역할의 경쟁 구현이고, 이 ws 것이 `get_keyword` 의 완전한 상위집합이다.**
+사용자가 "추가할 의향"이라 한 VLA 핵심 로직이 바로 `vla_agent` 다.
+
+#### 역할별 활용 위치 (2026-08-10 결정)
+
+| 역할 | 겹침 | **어디서 켤까** | 왜 |
+|---|---|---|---|
+| 음성 이해 + 대화 판단 (VLA 핵심) | ✅ `get_keyword` 와 | **이 ws** `vla_agent` | 멀티턴·되묻기·취소·scene 인식 |
+| 경계 어댑터/래치 | ❌ | **cobot2** `vla_command_node` | `/get_keyword` 계약을 이미 말한다. FSM 옆에 있어야 |
+| FSM·모션·6D 파지 | ❌ | **cobot2** | 역할 경계 |
+
+#### 기능을 안 해치는 방법 — 삭제가 아니라 배타 기동
+
+`get_keyword` 를 **지우지 않는다.** VLA PC 없이 마이크만으로 돌리는 **폴백**으로 남긴다.
+
+```
+VLA 대화 모드 :  이 ws vla_agent ──JSON──> cobot2 vla_command_node ──> FSM   (get_keyword OFF)
+마이크 단독 모드:  cobot2 get_keyword ──> FSM                                 (이 ws OFF)
+```
+
+- **두 모드가 `/get_keyword` 서버를 동시에 열지 않는다** — 둘 다 열면 어느 쪽이 응답할지
+  알 수 없다(저쪽 `voice_processing/README.md:14`). 런치 파라미터로 하나만 고른다.
+- 이러면 이 ws 는 대화 에이전트를 **통째로 보존**, cobot2 는 `get_keyword`(폴백) +
+  `vla_command_node`(VLA 수신)를 **둘 다 보존**. 실행 시 겹치는 프론트엔드만 하나 켠다.
+
+#### 병합 단계의 단일 규칙
+
+**JSON 경계(`/vla/pick_command` ↔ `/vla/pick_result`)를 넘어 코드를 옮기지 않는다.**
+각 조각을 그 의존성·소유자가 이미 있는 곳에 둔다. `vla_agent`(openai·대화 상태·스키마)를
+저쪽으로 이식하면 `pick_fsm` 보존 원칙이 깨지고, `vla_command_node`(21 테스트)를 이쪽으로
+가져오면 그 검증을 버린다. **각자 자기 자리에서, 사이만 JSON 으로 잇는다.**
+
+---
+
+### 3. 계약 (대상 `vla_command_node.parse_command()` 가 정본)
+
+#### 3-1. 이 ws → FSM : `/vla/pick_command` (`std_msgs/String`, JSON)
+
+```json
+{"cmd": "pick", "class": "apple", "request_id": "a17-3", "stamp_ns": 1754640000123456789}
+```
+
+| 필드 | 규칙 |
+|---|---|
+| `cmd` | `pick` / `pick_and_place` / `start` / `abort` / `reset` |
+| `class` | **필수.** 공백 불가(여러 개는 콤마 `apple,orange`). `class_name` 으로 보내도 받는다 |
+| `request_id` | 그대로 echo 된다. **결과 판정은 반드시 이걸로 대조** — 핫스팟이 끊겼다 붙으면 결과 메시지를 놓친다(QoS VOLATILE) |
+| `stamp_ns` | 에코만 된다. **TTL 은 수신 시각 기준**이라 두 PC 시계 동기 불필요 |
+| `pixel` + `pixel_wh` | 검증만 되고 선정에 안 쓰인다 → §6-2. `pixel` 만 보내면 **거부** |
+| `base_xy` | 무시됨 (`ignored` 로 회신) |
+| `place` | **키가 존재하면 거부.** FSM 의 place 는 고정 관절값 하나 |
+| `approve` | 🔴 무조건 거부 |
+
+#### 3-2. FSM → 이 ws : `/vla/pick_result` (`std_msgs/String`, JSON)
+
+```json
+{"request_id":"a17-3","accepted":true,"result":"succeeded",
+ "reason":"...","ignored":[],"stamp_ns":null,"state":"HOME"}
+```
+
+`result` ∈ `rejected | accepted | succeeded | failed | superseded`
+
+#### 3-3. `RobotState` 로의 매핑 (이 ws 내부)
+
+`vla_agent` 는 이미 `RobotState` 를 매 LLM 호출에 주입하도록 짜여 있다. 브리지가 이것만
+채우면 대화 루프가 그대로 닫힌다.
+
+| `/vla/pick_result` | `RobotState` |
+|---|---|
+| `accepted` | `status=moving`, `current_action_id=request_id` |
+| `succeeded` | `status=idle`, `last_result=succeeded` |
+| `failed` | `status=idle`, `last_result=failed` |
+| `rejected` / `superseded` | `status=idle`, `last_result=rejected` |
+
+`/pick/state` 를 직접 구독해 세분화할 수도 있다(`VERIFY`·`LIFT`·`PLACE` → `holding`).
+단 **`WAIT_APPROVAL` 에 대응하는 값이 우리 `RobotState.status` 에 없다** → §6-1.
+
+---
+
+### 4. 🔴 `HANDOVER.md` 에서 낡은 전제 — 그대로 따르면 안 된다
+
+2026-08-09 작성 이후 대상 ws 가 바뀌었다. **아래 3개는 이 문서가 이깁니다.**
+
+| `HANDOVER.md` 기술 | 2026-08-10 실측 | 영향 |
+|---|---|---|
+| §4.1 *"`voice_processing` 이 `COLCON_IGNORE` 로 빠져 있다 → `/get_keyword` 슬롯이 비어 있다"* | 🔴 **틀림.** `COLCON_IGNORE` 없음, `vla_command_node` 빌드·설치 완료 | §4.2 의 "우리가 `/get_keyword` 서버를 구현한다"는 **전제가 무너진다** → §2 |
+| §4.6 *"`dry_run:=true` + `require_approval:=true` 가 기본값이다. 대화 루프 검증은 이 상태에서 전부 된다"* | 🔴 **틀림.** `dry_run`(plan_only) 은 2026-08-09 **제거됐다.** FSM 은 항상 실제로 움직인다 | **로봇 없이 검증하려면 다른 방법이 필요하다** → §5-3 |
+| §4.4 `approve_plan(say)` → `/pick/approve` | 🔴 **채택 불가.** 저쪽이 파라미터로도 못 열게 의도적으로 막았다 | 승인은 사람 몫 → §6-1 |
+
+§4.5 의 제약 3개(`LISTENING` 60 s · `MAX_FAIL_STREAK=3` · `_service()` 논블로킹)와
+§3 의 코드 생존/폐기 판정, §1.1 의 하드웨어 대조표는 **여전히 유효하다.**
+
+---
+
+### 5. 이 ws 에서 실제로 할 일
+
+#### 5-1. 먼저 (전제 복구)
+
+- [ ] `git restore src/vla_system` — **워킹트리에서 46개 파일이 삭제돼 있다**(git HEAD 에만 존재).
+      이게 안 되면 아래 전부 시작 불가. (아직 미확인 — 이 문서 병합 작업에서는 안 건드림)
+- [x] ~~`~/cobot2_ws/md/plans/2026-08-10-integ-plan.md` 의 blocked 해제~~ — 완료(§0-D).
+
+#### 5-2. 신규 — `vla_pick_bridge` 노드 하나
+
+| 입력 | 출력 |
+|---|---|
+| `/vla/robot/action` (`RobotAction`) | `/vla/pick_command` (JSON) |
+| `/vla/robot/stop`, `/vla/estop` | `{"cmd":"abort"}` (+ `/safety/stop` 직접 호출은 §6-3) |
+| `/vla/scene` (`SceneSnapshot`) | — (`object_id` → `class_name` 조회용) |
+| `/vla/pick_result` (JSON) | `/vla/robot/state` (`RobotState`) — §3-3 |
+
+핵심 변환: **`object_id` → `class_name`.** `apple_17` 은 경계를 못 넘는다. `class` 만 통과한다.
+
+LLM 도구 재매핑:
+
+| 도구 | 매핑 | 상태 |
+|---|---|---|
+| `pick_and_place(object_id)` | `{"cmd":"pick","class":<조회>,"request_id":<action_id>}` | 🟡 개체가 아니라 클래스까지만 (§6-2) |
+| `cancel_current_action()` | `{"cmd":"abort"}` | 🟢 |
+| `ask_clarification` | 변경 없음 (이 ws 안에서 완결) | 🟢 |
+| `wait` | 변경 없음 | 🟢 |
+| `pick_and_hold(object_id)` | — | 🔴 **제거.** FSM 은 항상 place 까지 간다 |
+| `release()` | — | 🔴 **제거.** FSM 에 "제자리에 놓기"가 없다 |
+
+⚠️ 도구를 제거하면 `agent/tools.py` 의 `TOOLS` 스키마와 `agent/prompt.py` 의 지침,
+`test/test_tools_schema.py` 가 같이 바뀐다. 프롬프트에서 그 도구를 지우지 않으면
+LLM 이 계속 호출하고 브리지가 매번 거부하게 된다.
+
+#### 5-3. 폐기 — 켜지 않는다
+
+| 대상 | 이유 |
+|---|---|
+| `vla_robot` (`nodes/robot_node.py`, `robot/moves.py`) | 🔴 **켜는 것 자체가 금지.** `dsr_controller2`(네이티브 `amovel`)와 `dsr_moveit_controller`(JTC)가 같은 DRFL TCP 연결 하나를 공유한다 |
+| `robot/gripper.py` (`pymodbus` → RG2 :502 직결) | 🔴 저쪽 `OnRobotRGControllerServer` 와 **같은 Modbus 레지스터에 두 주체가 write** 한다. ROS 레벨이 아니라 장비 레벨 충돌 |
+| `perception/` 의 table homography 좌표 | 좌표는 저쪽 D435i + `T_cam2base` 가 만든다. YOLO-seg·추적·개체 handle 은 살린다 |
+| `vla_interfaces` | 내부 전용으로 강등. 경계는 JSON |
+
+> ⚠️ **`dry_run` 이 사라졌으므로 "로봇 없이 대화 루프 검증"의 방법이 바뀐다.**
+> `vla_pick_bridge` 와 `vla_command_node` 만 띄우고 **`task_manager` 를 안 띄우는**
+> 왕복 테스트가 새 검증 경로다(JSON 스키마·`request_id` 상관·TTL·거부 사유까지 확인 가능).
+> FSM 을 포함한 검증은 실기 시간이 필요하다.
+
+#### 5-4. 런타임 환경
+
+```bash
+export ROS_DOMAIN_ID=93                     # 이 ws 는 미지정(=0) → 반드시 맞춘다
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/cobot2_ws/fastdds_udp_only.xml
+```
+
+- 🔴 **`/camera/camera/depth/color/points` 를 절대 구독하지 않는다.** 160 Mbps 실측치라
+  핫스팟을 즉시 포화시키고 **대상 PC 의 로컬 octomap 경로까지 같이 죽는다.**
+- 영상이 필요하면 `…/color/image_raw/compressed` 만 (실측 5.7 Mbps).
+  부담되면 대상 쪽 `color.image_raw.compressed.jpeg_quality:=80` → ~1.5–2 Mbps.
+  ⚠️ 낮춘 뒤 우리 YOLO 인식률이 유지되는지는 **미검증**.
+
+---
+
+### 6. 결정이 필요한 것 (내가 정할 수 없는 것)
+
+#### 6-1. 🔴 승인 게이트와 자율 대화의 충돌 — **가장 먼저 답해야 한다**
+
+`require_approval: true` 는 저쪽에 남은 **유일한** 소프트 안전장치다(§2). 이대로면
+**매 pick 마다 사람이 rqt 승인 버튼을 눌러야 한다.** 선택지:
+
+| 안 | 내용 | 대가 |
+|---|---|---|
+| **가** (권장, 실기 초기) | 그대로 둔다. VLA GUI 안에 승인 버튼을 띄워 사람이 누른다 | 완전 자율이 아니다 |
+| 나 | `require_approval:=false` 로 띄우고 `ask_clarification` 이 승인 역할 | **소프트 안전장치 0.** 최종 방어는 물리 비상정지뿐 |
+| 다 | LLM 확신도가 낮을 때만 승인 요구 | 저쪽 FSM 에 조건부 승인이 없다 → 저쪽 코드 수정 필요(§0 원칙 위배) |
+
+부수 작업: 어느 안이든 `RobotState.status` 에 `WAIT_APPROVAL` 대응 값이 없다.
+LLM 이 "지금 사람 승인 대기 중"을 알아야 엉뚱한 말을 안 한다.
+
+#### 6-2. 🔴 되묻기가 파이프라인 끝까지 못 간다
+
+이 시스템의 자랑은 *"사과 2개 → `ask_clarification` → '1번' → `apple_17` 을 집는다"* 다
+(`M0609_VLA_system/README.md` 검증표 첫 줄, 다른 저장소). 그런데 경계를 넘는 것은 `class` 뿐이다 —
+대상 `grasp_bridge_node` 에 **`select_by_point()` 가 없다**(저쪽 계획서 §5, 미구현).
+
+| 설정 | 결과 |
+|---|---|
+| `pixel_policy: warn` (기본) | 사과가 2개면 **FSM 이 확률적으로 다른 사과를 집는다.** "1번"의 의미가 사라진다 |
+| `pixel_policy: reject` | 안 집는다. 안전하지만 되묻기가 무용지물 |
+
+**이 결합의 유일한 진짜 미싱 피스다.** 답이 필요한 질문:
+
+> 되묻기("1번")가 **실제로 그 개체를 집어야** 하는가?
+> - 예 → 저쪽 `select_by_point()` 구현이 필수 경로 (저쪽 작업, §0 원칙과 충돌 없음 — 저쪽 계획서가 이미 자기 할 일로 적어둠)
+> - 아니오 → 씬에 같은 클래스 1개만 두는 데모로 범위를 좁히고 지금 바로 접합 가능
+
+부수 문제: `pixel` 을 보내려면 **어느 카메라의 픽셀인가**가 정의돼야 한다. 이 ws 는 고정
+C270, 저쪽은 고정 D435i. 픽셀은 그대로 못 넘긴다 — 저쪽 압축 컬러를 우리가 구독해서
+**저쪽 프레임 픽셀**로 보내야 한다(저쪽 계획서 §3-3(c) 가 이 경로를 기본으로 정해뒀다).
+
+#### 6-3. 정지 경로 응답성 저하
+
+이 ws 의 `vla_robot` 이 가진 20 ms 폴링 취소 + stop epoch 이중 방어가 사라진다.
+`{"cmd":"abort"}` → `/pick/abort` → FSM 이 MoveIt goal 취소로 느려진다.
+저쪽 `robot_safety_node` 의 `/safety/stop` 을 브리지가 **직접** 부를지 결정해야 한다
+(별도 프로세스라 FSM 이 죽어도 먹는다). 최종 방어는 물리 비상정지 버튼.
+
+#### 6-4. `allowed_classes` 합의
+
+대상 `vla_command_node` 는 이 목록 밖 클래스를 **거부**한다. 두 PC 의 YOLO 가 다른
+모델이므로(이쪽 `yolo26n`, 저쪽 `yolo_seg` 컨테이너) 클래스 이름을 맞추지 않으면
+**모든 지시가 거부된다.** 저쪽 `grasp_bridge_node` 의 `target_classes` 와 같은 이름이어야 한다.
+
+#### 6-5. 네트워크 실측 미완
+
+두 PC 를 **휴대폰 핫스팟**으로 잇는다. DDS 도달성(멀티캐스트 통과 여부)이 **아직 미실측**이다.
+안 되면 `fastdds_udp_only.xml` 의 `initialPeersList` 에 유니캐스트로 상대 IP 를 명시한다.
+핫스팟 IP 는 접속마다 바뀌므로 `ip a` 확인이 매번 필요하다.
+
+---
+
+### 7. 순서
+
+1. §5-1 전제 복구 (`git restore`, 저쪽 blocked 해제)
+2. **§6-1 승인 정책 결정** ← 이게 정해져야 브리지의 도구 목록이 확정된다
+3. **§6-2 되묻기 범위 결정** ← 이게 정해져야 JSON 에 `pixel` 을 넣을지가 확정된다
+4. `vla_pick_bridge` 작성 → **로봇 없이** `vla_command_node` 와 JSON 왕복만 검증 (§5-3 주석)
+5. `agent/tools.py`·`prompt.py`·`test_tools_schema.py` 에서 `pick_and_hold`·`release` 제거
+6. 도메인·프로파일 맞추고 DDS 도달성 실측 (§6-5)
+7. 실기: `require_approval` 켠 채, 같은 클래스 물체 1개인 씬에서 1사이클
+
+---
+
+### 7-B. 부록 — 이 ws 내부 파이프라인 (음성/텍스트 입력 → 키워드·의도 추출)
+
+`vla_agent`(§2-B, §5-2)가 정확히 무엇을 대체하는지 이해하려면 이 ws 내부에서
+입력이 어떻게 "키워드"(tool call)로 바뀌는지 먼저 봐야 한다. **정규식/NLU 엔진이 아니라
+OpenAI function-calling 이 그 역할을 한다** — `get_keyword`(1샷 gpt-4o) 와 겹치는 지점이자
+§5-2 브리지가 변환해야 할 출력의 원천이다.
+
+```mermaid
+flowchart TD
+    A["사용자: 텍스트 입력"] --> C
+    B["사용자: 마이크 버튼 누르고 말하기"] --> B1["sounddevice 녹음 (16kHz PCM)<br/>vla_gui.py:790-813"]
+    B1 --> B2["OpenAI STT (gpt-4o-transcribe)<br/>agent/llm.py:52-63"]
+    B2 --> C["handle_user_text(text)<br/>vla_gui.py:719-726"]
+
+    C --> D{"STOP_PATTERN 정규식 매치?<br/>vla_gui.py:68-73<br/>(정지/멈춰/그만/stop...)"}
+    D -- 예 --> E["/vla/estop 즉시 발행<br/>vla_gui.py:728-731<br/>(LLM 완전 우회)"]
+    D -- 아니오 --> F["/vla/user_utterance 발행<br/>(std_msgs/String)<br/>vla_gui.py:389-390"]
+
+    F --> G["utterance_callback()<br/>agent_node.py:169-174<br/>(trim/empty 체크만, 정규화 없음)"]
+    G --> H["build_situation()<br/>발화 + scene + robot_state 결합<br/>agent/conversation.py:79-83"]
+    H --> I["AgentLLM.respond()<br/>OpenAI Responses API, model=gpt-5-mini<br/>tools=TOOLS, agent/llm.py:65-72"]
+
+    I -->|"★ 여기가 키워드/의도 추출<br/>function-calling → object_id·의도 구조화"| J["_parse()<br/>function_call → ToolCall(name,args)<br/>agent/llm.py:74-101"]
+
+    J --> K{"dispatch()<br/>agent_node.py:356-427"}
+    K -->|"pick_and_place / pick_and_hold / release"| L["find_object() 유효성 검사 후<br/>/vla/robot/action 발행 (RobotAction)"]
+    K -->|"cancel_current_action"| M["/vla/robot/stop 발행"]
+    K -->|"ask_clarification"| N["/vla/agent/reply 발행<br/>(되묻기, LLM으로 회신)"]
+    K -->|"wait"| O["아무 발행 없음, turn 종료"]
+
+    L --> P["robot_node.py (vla_robot)<br/>실제 팔 모션·그립 실행"]
+    P --> Q["/vla/robot/state 발행"]
+    Q -.피드백.-> H
+
+    style I fill:#ffe9a8,stroke:#c98a00
+    style J fill:#ffe9a8,stroke:#c98a00
+    style E fill:#ffd0d0,stroke:#c00
+```
+
+**이 부록이 §5-2 브리지와 만나는 지점**: 위 `L`(`/vla/robot/action` 발행)이 §5-2 표의
+입력이다. 브리지는 이 `RobotAction`(object_id 포함)을 `/vla/pick_command` JSON(`class`만
+포함)으로 변환해야 하므로, `object_id → class_name` 조회가 브리지의 핵심 로직이 된다(§5-2
+"핵심 변환"). 또한 §6-2 되묻기 문제는 위 `N`(`ask_clarification`) 이후 사용자가 "1번"이라고
+답했을 때, 그 결과가 다시 `object_id`(예: `apple_17`)로 `L`에 도달하지만 `class`만 경계를
+넘을 수 있어 발생한다.
+
+---
+
+### 8. 검증 상태
+
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| `task_manager` 가 `vla_interfaces` 를 모른다 | ✅ 검증됨 | `task_manager.py:24-42` import 전체 |
+| `vla_command_node` 가 빌드·설치돼 있다 | ✅ 검증됨 | `install/voice_processing/lib/voice_processing/vla_command_node`, `setup.py` entry point, `launch/vla_command.launch.py` |
+| `voice_processing` 의 `COLCON_IGNORE` 가 없다 | ✅ 검증됨 | 디렉터리 조회 |
+| `/get_keyword` 를 두 노드가 다 연다 | ✅ 검증됨 | `vla_command_node.py` 헤더 경고 + `voice_processing/README.md:14` |
+| `dry_run` 제거 · `require_approval` 이 유일한 소프트 안전장치 | ✅ 검증됨 | `pick_fsm.yaml` 안전 절 주석 |
+| `/pick/approve` 가 코드 경로 자체로 막혀 있다 | ✅ 검증됨 | `vla_command_node.py` `BLOCKED_CMDS`, 헤더 §0-B 인용 |
+| JSON 스키마 필드별 규칙 | ✅ 검증됨 | `parse_command()` 본문 |
+| `select_by_point()` 부재 | ⚠️ **추론** | 저쪽 계획서 §5·§8 과 어댑터 주석 근거. `grasp_bridge_node.py` 직접 미확인 |
+| 핫스팟 DDS 도달성 | 🔴 **미검증** | §6-5 |
+| 브리지 왕복 실동작 | 🔴 **미검증** | 이 ws 에 발행자가 아직 없다 |

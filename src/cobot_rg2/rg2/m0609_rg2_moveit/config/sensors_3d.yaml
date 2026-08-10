@@ -75,7 +75,7 @@ realsense_pointcloud:
   # [튜닝] 로봇 자기 몸을 클라우드에서 지울 때 링크를 얼마나 부풀릴지.
   # 자기 팔이 장애물로 잡혀 계획이 실패하면 padding_offset을 키운다(단위 m).
   padding_offset: 0.15
-  padding_scale: 2.5
+  padding_scale: 1.5
 
   # [튜닝] octomap 갱신 주파수(Hz). **RViz에서 체감하는 "장애물 반영 지연"의 상한이 여기다** —
   # 1.0이면 아무리 CPU/GPU가 남아돌아도 장애물이 최대 1초 늦게 반영된다. 렌더링 성능 문제로

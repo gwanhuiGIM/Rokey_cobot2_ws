@@ -137,7 +137,7 @@ PARAM_DEFAULTS = {
     'perceive_retries': 2,
 
     # 자세
-    'approach_offset_m': 0.10,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
+    'approach_offset_m': 0.15,       # pre-grasp: grasp 의 -Z 로 물러나는 거리
     'grasp_standoff_m': 0.0,         # DESCEND 종점을 grasp 의 -Z 로 덜 내리는 양
     'lift_offset_m': 0.15,           # LIFT: 월드 +Z
     # tcp_offset_m 은 더 이상 파라미터가 아니다 — rg2.fingertip_length_m(width_m)이
@@ -147,8 +147,8 @@ PARAM_DEFAULTS = {
     'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS ('basket')
     # UNVERIFIED: 아래 둘은 teach 된 적 없다 — home_joints_deg 를 임시로 복사해 둔 것뿐이다.
     # 실기에서 안전한 자세로 다시 잡기 전에는 'table'/'discard' 를 쓰지 말 것.
-    'place_table_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],
-    'place_discard_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],
+    'place_table_joints_deg': [-131.32, -6.53, 119.71, -0.08, 67.19, -12.96],
+    'place_discard_joints_deg': [-185.57, 39.37, 107.75, -0.25, 33.09, -67.15],
     # PLACE_LOCATIONS 의 키 중 하나('basket'|'table'|'discard'). 런타임엔 /pick/place_location
     # (rqt 패널)이 이 값을 이긴다 — /pick/target 과 같은 패턴.
     'place_location': 'basket',
@@ -174,6 +174,13 @@ PARAM_DEFAULTS = {
     'gripper_settle_sec': 1.5,
     'verify_required': False,        # true 면 grip_detected 를 못 받았을 때도 실패 처리
     'grip_retries': 1,
+    # 파지 실패 시 RELEASE_RETRY(놓고 재인식)로 가기 전에, 같은 자세에서 이만큼씩
+    # 좁혀 다시 닫아보는 횟수. width_m 은 GraspGenX 가 고른 grasp 의 폭이라 병처럼
+    # 단면이 급변하는 물체에서는 "최대 폭"에 가깝고, 그보다 얇은 부위(목)를 잡으려 하면
+    # 손가락이 접촉 전에 멈춰 힘이 안 걸린다(grip_detected=False, 물체는 그대로 있는데
+    # "실패"로 오판). 0 이면 이 재시도를 끈다.
+    'grip_narrow_retries': 1,
+    'grip_narrow_step_m': 0.015,     # UNVERIFIED: 실측 튜닝값. 좁힐 때마다 이만큼 뺀다
 
     # 인식
     # `/grasp/compute_grasp`(pick_fsm_msgs/ComputeGrasp) 서버는 2026-08-09 에
@@ -330,6 +337,7 @@ class TaskManager(Node):
         self._plan_i = 0
         self._retry_motion = 0
         self._retry_grip = 0
+        self._retry_narrow = 0      # VERIFY 실패 후 "좁게 재시도" 횟수. _st_descend 가 그랩마다 되돌린다
         self._retry_perceive = 0
         self._fail_streak = 0       # SPEAK_FAIL 연속 횟수. _st_idle 이 start 마다 0 으로 되돌린다
         self._object_added = False
@@ -970,6 +978,7 @@ class TaskManager(Node):
         self._to(State.DESCEND)
 
     def _st_descend(self):
+        self._retry_narrow = 0      # 새 그랩 시도 — 좁게-재시도 예산을 다시 채운다
         if bool(self.p('clear_octomap_before_descend')) and not self._octomap_cleared:
             self._octomap_cleared = True
             self.moveit.clear_octomap_async()
@@ -1004,6 +1013,18 @@ class TaskManager(Node):
             return
         if ok:
             self._attach_then_lift()
+            return
+        limit = int(self.p('grip_narrow_retries'))
+        if self._retry_narrow < limit:
+            # 놓고 재인식(RELEASE_RETRY)하기 전에, 같은 자세·같은 접근에서 더 좁게 한 번
+            # 더 닫아본다 — width_m 이 병처럼 단면이 급변하는 물체의 "최대 폭"이라 얇은
+            # 부위(목)를 노렸을 때 손가락이 접촉 전에 멈춘 것일 수 있다(_grip_width 참고).
+            self._retry_narrow += 1
+            self.width_m = max(0.0, self.width_m - float(self.p('grip_narrow_step_m')))
+            self.get_logger().warn(
+                f'파지 실패 ({why}) — 좁게 재시도 {self._retry_narrow}/{limit} '
+                f'({self.width_m * 1000:.1f} mm)')
+            self._to(State.CLOSE, '좁게 재시도')
         else:
             self._to(State.RELEASE_RETRY, f'파지 실패 ({why})')
 

@@ -54,7 +54,10 @@ TRANSITIONS: dict[State, set[State]] = {
     State.OPEN_GRIPPER:   {State.DESCEND, State.ABORT},
     State.DESCEND:        {State.CLOSE, State.NEXT_CANDIDATE, State.ABORT},
     State.CLOSE:          {State.VERIFY, State.ABORT},
-    State.VERIFY:         {State.LIFT, State.RELEASE_RETRY, State.ABORT},
+    # VERIFY -> CLOSE: 파지 실패 시 놓았다 재인식(RELEASE_RETRY)하기 전에, 같은 자세에서
+    # 더 좁게 한 번 더 닫아본다(grip_narrow_retries). 병처럼 기입된 폭(최대 단면)이 실제
+    # 잡으려는 부위(목처럼 얇은 곳)보다 넓어 손가락이 접촉 전에 멈추는 경우를 구제한다.
+    State.VERIFY:         {State.LIFT, State.CLOSE, State.RELEASE_RETRY, State.ABORT},
     # RELEASE_RETRY, SAFE_STOP 모두 곧장 PERCEIVE/IDLE 로 가지 않고 HOME 을 거친다 —
     # 팔이 작업공간 박스 안(물체 높이)에 남은 채 재촬영하면 그리퍼 자신이 물체로
     # 오인식된다 (2026-08-07 발견: capture_graspgenx_scene.py 의 세그멘테이션은 팔을

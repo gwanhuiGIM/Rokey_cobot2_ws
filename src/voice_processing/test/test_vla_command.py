@@ -122,7 +122,8 @@ def test_allowed_classes_empty_means_no_check():
     assert out is not None
 
 
-def test_place_is_rejected():
+def test_place_wrong_shape_is_rejected():
+    # 2026-08-10: place 는 이제 basket/table/discard 이름 하나만 받는다 — 좌표/객체는 여전히 거부.
     out, why = parse_command(cmd(place={'kind': 'named', 'value': 'basket'}))
     assert out is None and 'place' in why
 
@@ -132,6 +133,24 @@ def test_falsy_place_is_also_rejected():
     for falsy in ({}, '', 0, []):
         out, why = parse_command(cmd(place=falsy))
         assert out is None and 'place' in why, f'{falsy!r} 가 통과했다'
+
+
+def test_place_accepted_value_passes_through():
+    # pick_fsm.task_manager.PLACE_LOCATIONS 의 키와 같아야 한다 — 어긋나면 이 테스트가 잡는다.
+    for value in ('basket', 'table', 'discard'):
+        out, warn = parse_command(cmd(place=value))
+        assert out is not None and out['place'] == value and warn == ''
+
+
+def test_place_unknown_name_is_rejected():
+    out, why = parse_command(cmd(place='attic'))
+    assert out is None and 'place' in why and 'attic' in why
+
+
+def test_place_absent_means_no_override():
+    # place 를 아예 안 보내면 None — task_manager 쪽 파라미터 기본값(basket)이 그대로 쓰인다.
+    out, _ = parse_command(cmd())
+    assert out['place'] is None
 
 
 def test_class_is_normalised():

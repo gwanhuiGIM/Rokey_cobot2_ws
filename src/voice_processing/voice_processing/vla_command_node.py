@@ -62,7 +62,14 @@ rqt 패널(`pick_fsm.rqt_panel`)의 시작/중단/리셋 버튼은 `/pick/start`
 
 `class`(클래스 이름)만 끝까지 동작한다. `pixel`(어느 개체인가)·`base_xy` 는 **검증만 하고
 선정에 못 쓴다** — `grasp_bridge_node` 에 `select_by_point()` 가 없다(계획 §5).
-`place` 는 범위 밖이다(FSM 의 place 는 고정 관절값 하나).
+
+`place` 는 2026-08-09 `pick_fsm.task_manager` 가 `PLACE_LOCATIONS`(basket/table/discard
+세 고정 관절자세)을 갖게 되면서 **여기서도 받는다.** 좌표가 아니라 그 세 이름 중 하나만
+받는다 — 이 값은 그대로 `/pick/place_location` 토픽으로 넘어간다(`_publish_place`,
+`task_manager._on_place_location` 과 같은 계약). `basket`/`table`/`discard` 가 아닌 값은
+거부한다. `table`/`discard` 관절값은 **아직 teach 되지 않은 자리표시자**다 —
+`pick_fsm/config/pick_fsm.yaml` 의 `place_table_joints_deg`/`place_discard_joints_deg`
+UNVERIFIED 주석 참고. 안전한 자세로 잡히기 전까지는 VLA 쪽에서도 `basket` 만 쓸 것.
 
 **미구현 필드를 조용히 무시하지 않는다.** `pixel_policy` 가 그 처리를 정한다:
 `warn` 이면 클래스만으로 진행하되 `/vla/pick_result` 의 `ignored` 로 되돌려주고, `reject` 면
@@ -95,6 +102,12 @@ from std_srvs.srv import Trigger
 COMMAND_QOS = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=10,
                          reliability=ReliabilityPolicy.RELIABLE,
                          durability=DurabilityPolicy.VOLATILE)
+
+#: `task_manager.TARGET_QOS` 와 **글자 그대로 같아야 한다** — `/pick/place_location` 구독자가
+#: TRANSIENT_LOCAL 을 요구하므로(늦게 붙어도 마지막 값을 받는다), 발행자가 이보다 얕은
+#: durability(기본 VOLATILE)면 아예 매칭이 안 된다(2026-08-08 place_location 도입 당시와
+#: 같은 이유 — `task_manager.py` 상단 주석 참고).
+PLACE_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 #: FSM 이 실패로 끝났다고 볼 상태. 판정은 `/pick/state` 하나로만 한다 — FSM 에 결과 토픽을
 #: 새로 만들면 그쪽 코드를 건드려야 하고, 그건 이 통합의 전제("FSM 보존")를 깬다.
@@ -131,6 +144,11 @@ BLOCKED_CMDS = ('approve',)
 #: `pixel_policy` 가 이상한 값이면 여기로 떨어진다. 안전한 쪽(거부)으로 넘어져야 한다 —
 #: 오타 하나로 "같은 클래스 2개일 때의 유일한 방어"가 조용히 꺼지면 안 된다.
 FALLBACK_PIXEL_POLICY = 'reject'
+
+#: `pick_fsm.task_manager.PLACE_LOCATIONS` 의 키와 **반드시 같아야 한다.** 패키지 경계를
+#: 넘는 import 는 안 하므로(둘 다 토픽/서비스로만 통신 — 헤더 참고) 값을 여기 복제해 둔다.
+#: 저쪽에 위치를 추가/삭제하면 이 집합도 손으로 맞춰야 한다.
+PLACE_VALUES = frozenset({'basket', 'table', 'discard'})
 
 
 def classify_cmd(cmd: str) -> str:
@@ -202,9 +220,15 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
                           f'절대 못 잡는다 (허용: {sorted(allowed_classes)})')
 
     # ⚠️ `doc.get('place')` 의 truthiness 로 보면 `{}` · `""` · `0` 이 통과한다.
-    #    "미구현 필드를 조용히 무시하지 않는다"는 계약이므로 **키의 존재**로 판정한다.
+    #    "미구현 필드를 조용히 무시하지 않는다"는 계약이므로 **키의 존재**로 판정한다 —
+    #    타입이 안 맞거나 목록 밖 값이면 기본값(basket)으로 조용히 넘어가지 않고 거부한다.
+    place = None
     if 'place' in doc:
-        return None, 'place 지정은 아직 지원하지 않는다 — FSM 의 place 는 고정 관절값 하나다'
+        raw_place = doc['place']
+        if not isinstance(raw_place, str) or raw_place.strip() not in PLACE_VALUES:
+            return None, (f'place 는 {sorted(PLACE_VALUES)} 중 하나여야 한다 '
+                          f'(받은 값: {raw_place!r})')
+        place = raw_place.strip()
 
     ignored = []
     pixel = None
@@ -232,10 +256,13 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
         'cmd': cmd,
         'class': ','.join(wanted),
         'request_id': str(doc.get('request_id', '')),
-        # 아래 둘은 지금 선정에 안 쓴다. `stamp_ns` 는 결과에 에코해 상관관계 추적에 쓰고,
-        # `pixel` 은 `select_by_point()`(계획 §5)가 들어올 자리다 — 그때까지는 검증만 한다.
+        # `stamp_ns` 는 결과에 에코해 상관관계 추적에 쓴다. `pixel` 은 `select_by_point()`
+        # (계획 §5)가 들어올 자리다 — 그때까지는 검증만 한다. `place` 는 None 이면
+        # "지정 안 함"(호출부가 `/pick/place_location` 을 건드리지 않는다) — 파라미터
+        # 기본값(`basket`)이 그대로 쓰인다(task_manager 쪽 계약, `_on_pick_command` 참고).
         'stamp_ns': doc.get('stamp_ns'),
         'pixel': pixel,
+        'place': place,
         'ignored': ignored,
     }
     warn = ''
@@ -261,6 +288,9 @@ class VlaCommandNode(Node):
         self.declare_parameter('start_service', '/pick/start')
         self.declare_parameter('abort_service', '/pick/abort')
         self.declare_parameter('reset_service', '/pick/reset')
+        # `task_manager._on_place_location` 이 듣는 그 토픽이다 — 이름을 바꾸면 저쪽 launch
+        # 인자도 같이 바꿔야 매칭된다.
+        self.declare_parameter('place_location_topic', '/pick/place_location')
         # 🔴 승인 서비스는 파라미터로도 두지 않는다 — 있으면 언젠가 켜진다 (§0-B).
         self.declare_parameter('auto_start', False)
         self.declare_parameter('ttl_sec', 10.0)
@@ -308,6 +338,9 @@ class VlaCommandNode(Node):
 
         self.result_pub = self.create_publisher(
             String, str(self.get_parameter('result_topic').value), COMMAND_QOS)
+        # QoS 는 `PLACE_QOS`(TRANSIENT_LOCAL) — task_manager 구독이 이걸 요구한다(위 정의부 참고).
+        self.place_pub = self.create_publisher(
+            String, str(self.get_parameter('place_location_topic').value), PLACE_QOS)
         self.create_subscription(
             String, str(self.get_parameter('command_topic').value),
             self._on_command, COMMAND_QOS, callback_group=cb)
@@ -446,6 +479,16 @@ class VlaCommandNode(Node):
             return
         if why:
             self.get_logger().warn(f"[{cmd['request_id'] or '-'}] {why}")
+
+        if cmd['place'] is not None:
+            # `task_manager._on_place_location` 이 이 값을 상태와 무관하게 즉시
+            # `self._place_override` 에 반영한다 — 진행 중인 사이클에는 안 먹히고
+            # (저쪽이 경고 로그를 낸다) 다음 `_st_idle` 부터 적용된다. 이 pick 지시가
+            # 같은 사이클에서 그 place 를 쓰길 기대하므로, **래치에 넣기 전에** 먼저
+            # 보낸다 — 순서를 바꾸면 이번 지시가 이전 place 값으로 진행될 수 있다.
+            self.place_pub.publish(String(data=cmd['place']))
+            self.get_logger().info(
+                f"[{cmd['request_id'] or '-'}] 내려놓을 위치 지정: {cmd['place']}")
 
         with self._cv:
             old = self._pending[0] if self._pending is not None else None

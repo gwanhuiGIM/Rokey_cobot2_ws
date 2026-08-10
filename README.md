@@ -645,6 +645,39 @@ ros2 topic pub -1 /vla/pick_command std_msgs/String "data: '{\"cmd\":\"approve\"
 있지 않아도(`m0609_rg2_bringup mode:=virtual`) 안전합니다 — `/pick/*` 서비스만 살아 있으면
 됩니다.
 
+### 7-3-1. 실제 목소리로 말하기 — `vla_command.launch.py`엔 마이크가 없다
+
+`vla_command.launch.py`는 **JSON 토픽 브리지 하나**다. 마이크도, "눌러서 말하기" 버튼도
+없다 — 위 7-3절의 `ros2 topic pub`이 사람 대신 VLA(또는 사람 목소리)를 흉내 내는 자리다.
+실제 목소리로 상호작용하려면 **다른 노드**를 띄워야 한다: `get_keyword`(마이크 경로,
+launch 파일 없음). 상세 계약은
+[`src/PACKAGES.md#voice_processing`](src/PACKAGES.md#voice_processing).
+
+```bash
+# [터미널 11] "이 지시 입력 층" 자리를 vla_command.launch.py 대신 이걸로 띄운다
+export ROS_DOMAIN_ID=93
+ros2 run voice_processing get_keyword
+```
+
+⚠️ **`vla_command_node`와 동시에 띄우지 않는다.** 둘 다 `/get_keyword`
+(`std_srvs/srv/Trigger`)를 제공해서 어느 쪽이 응답할지 알 수 없다 — 마이크로 말하려면
+[터미널 11]을 `vla_command.launch.py` 대신 이 노드로 바꿔 띄운다(같이 켜지 않는다).
+
+이 노드엔 "누르면 말하기" 버튼이 없다 — **웨이크워드 방식**이다. 서비스가 호출되면(=
+`task_manager`가 `LISTENING`에 들어가 `/get_keyword`를 부르면) 오디오 스트림을 열고
+"hello_rokey"가 들릴 때까지 블로킹으로 기다린 뒤 STT → LLM으로 물체명을 뽑는다
+(`get_keyword.py`의 `while not self.wakeup_word.is_wakeup(): pass`). 결과는 노드 터미널의
+`Detected tools: [...]` 로그로 보거나, 단독으로 직접 확인한다:
+
+```bash
+ros2 service call /get_keyword std_srvs/srv/Trigger "{}"
+```
+
+🚨 **마이크 경로는 아직 실기 미검증**이다(`src/voice_processing/README.md`). `openai`
+`langchain-openai` `python-dotenv` `pyaudio` `openwakeword` `sounddevice` 추가 의존성과
+`resource/.env`(`OPENAI_API_KEY`)가 필요하다 — `vla_command_node`(표준 ROS 2만 필요)보다
+준비물이 많다.
+
 ### 7-4. 라이브 뷰어 (`live_viz`) — 매 캡처를 실제 형상으로 보기
 
 RViz의 축·화살표 대신, **실제 포인트클라우드(RGB) + grasp 후보 + 1등 콜리전 메시**를
