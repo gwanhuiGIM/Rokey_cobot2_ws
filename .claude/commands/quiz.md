@@ -38,4 +38,4 @@ disable-model-invocation: true
 블랙박스 영역 (위험):  ← 여기가 다음에 직접 손으로 만들어봐야 할 곳
 권장 학습 1가지:
 ```
-`docs/growth-log.md`에 결과를 누적하라.
+`md/growth-log.md`에 결과를 누적하라.

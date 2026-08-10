@@ -14,11 +14,11 @@ $ARGUMENTS
 
 | 분류 | 저장 위치 |
 |---|---|
-| 물리적·환경적 제약, 이미 실패한 접근 | `docs/context/constraints.md` |
-| 사람·역할·합의·마감 | `docs/context/team.md` |
-| 답을 모르는 질문 | `docs/context/unknowns.md` |
-| 확정된 기술 결정 + 근거 | `docs/decisions/` (ADR) |
-| 당장 할 일 | `docs/state.md`의 "다음에 할 일" |
+| 물리적·환경적 제약, 이미 실패한 접근 | `md/context/constraints.md` |
+| 사람·역할·합의·마감 | `md/context/team.md` |
+| 답을 모르는 질문 | `md/context/unknowns.md` |
+| 확정된 기술 결정 + 근거 | `md/decisions/` (ADR) |
+| 당장 할 일 | `md/state.md`의 "다음에 할 일" |
 
 2. **기존 파일과 모순되는 내용이 있으면 덮어쓰지 말고 지적하라.** 어느 쪽이 맞는지 나에게 물어라.
 3. 내용이 모호해서 분류할 수 없으면 추측하지 말고, 그 조각만 따로 모아 나에게 되물어라.

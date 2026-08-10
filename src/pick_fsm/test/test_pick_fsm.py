@@ -254,9 +254,11 @@ _UNDRAWN = {
 
 
 def _readme_state_edges() -> set:
-    readme = Path(__file__).resolve().parent.parent / 'README.md'
-    if not readme.exists():                     # 설치 트리에서 돌 때는 README 가 없다
-        pytest.skip(f'README 없음: {readme}')
+    # README.md 가 아니라 PACKAGES.md 다 — 2026-08-08 문서 개편으로 다이어그램 정본이
+    # `src/PACKAGES.md#pick_fsm` 으로 옮겨갔다(README.md 에는 stateDiagram 블록이 없다).
+    readme = Path(__file__).resolve().parent.parent.parent / 'PACKAGES.md'
+    if not readme.exists():                     # 설치 트리에서 돌 때는 PACKAGES.md 가 없다
+        pytest.skip(f'PACKAGES.md 없음: {readme}')
     for block in _MERMAID.findall(readme.read_text(encoding='utf-8')):
         if 'stateDiagram' not in block:
             continue
@@ -271,9 +273,9 @@ def _readme_state_edges() -> set:
                     unknown.append(name)
             if not unknown:
                 edges.add((State[src], State[dst]))
-        assert not unknown, f'README 다이어그램에 없는 상태 이름: {unknown}'
+        assert not unknown, f'PACKAGES.md 다이어그램에 없는 상태 이름: {unknown}'
         return edges
-    pytest.fail('README 에 stateDiagram mermaid 블록이 없다')
+    pytest.fail('PACKAGES.md 에 stateDiagram mermaid 블록이 없다')
 
 
 def test_README_다이어그램의_전이가_전부_전이표에_있다():

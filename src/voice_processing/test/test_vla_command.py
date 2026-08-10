@@ -11,11 +11,36 @@
 (`md/plans/2026-08-08-vla-integration.md` §0-B).
 """
 
+import ast
 import json
+from pathlib import Path
 
-from voice_processing.vla_command_node import classify_cmd, parse_command
+import pytest
+
+from voice_processing.vla_command_node import (
+    ABANDON_STATES,
+    BYPASS_STATE,
+    DONE_STATE,
+    FAIL_STATES,
+    RELEASE_STATE,
+    classify_cmd,
+    parse_command,
+)
+
+try:
+    from pick_fsm.states import State
+    from pick_fsm.task_manager import DEFAULT_TIMEOUTS
+except ImportError:
+    # pick_fsm 이 이 환경에 빌드/설치돼 있지 않다 — voice_processing 은 런타임에도
+    # pick_fsm 에 의존하지 않으므로(토픽/서비스로만 통신) package.xml 에 의존성을
+    # 추가하지 않는다. 여기서는 skip 으로만 처리한다.
+    State = None
+    DEFAULT_TIMEOUTS = None
 
 DETECT = {'apple', 'orange', 'banana', 'cup'}
+
+requires_pick_fsm = pytest.mark.skipif(
+    State is None, reason='pick_fsm 이 설치돼 있지 않다 (빌드/소스 안 됨)')
 
 
 def cmd(**fields) -> str:
@@ -180,3 +205,76 @@ def test_classify_pick_and_unknown_both_fall_through_to_pick():
     assert classify_cmd('pick') == 'pick'
     assert classify_cmd('pick_and_place') == 'pick'
     assert classify_cmd('drop') == 'pick'
+
+
+# ── 경계 원본 이슈 A: LISTENING 타임아웃 3중 복제 대조 ─────────
+# (code-audit-vla-integration.md 항목 A)
+#
+# task_manager.DEFAULT_TIMEOUTS[State.LISTENING] 이 원본이고, 이 값이
+# vla_command_node 의 파라미터 기본값·launch 기본값 두 곳에 그대로 복제돼 있다.
+# 자동으로 대조하는 코드가 없어 셋 중 하나만 바뀌면 조용히 어긋난다 — 사본이
+# 원본보다 크면(margin 계산이 실제 FSM 타임아웃보다 늦게 걸려) SAFE_STOP 오경보로
+# 이어진다.
+
+def _node_declare_default(param_name: str):
+    """`vla_command_node.py` 안 `self.declare_parameter(param_name, <default>)` 호출에서
+    <default> 리터럴을 ast 로 뽑는다. 노드를 실제로 띄우지 않고(rclpy.init 불필요) 값만 본다."""
+    src_path = Path(__file__).resolve().parents[1] / 'voice_processing' / 'vla_command_node.py'
+    tree = ast.parse(src_path.read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'declare_parameter'
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == param_name):
+            return ast.literal_eval(node.args[1])
+    raise AssertionError(f'declare_parameter({param_name!r}, ...) 를 소스에서 못 찾았다')
+
+
+def _launch_default(arg_name: str):
+    """`vla_command.launch.py` 의 `DeclareLaunchArgument(arg_name, default_value=...)` 에서
+    default_value 리터럴을 ast 로 뽑는다."""
+    src_path = Path(__file__).resolve().parents[1] / 'launch' / 'vla_command.launch.py'
+    tree = ast.parse(src_path.read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == 'DeclareLaunchArgument'
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == arg_name):
+            for kw in node.keywords:
+                if kw.arg == 'default_value':
+                    return ast.literal_eval(kw.value)
+    raise AssertionError(f'DeclareLaunchArgument({arg_name!r}, ...) 를 소스에서 못 찾았다')
+
+
+@requires_pick_fsm
+def test_node_default_matches_fsm_listening_timeout():
+    node_default = float(_node_declare_default('fsm_listening_timeout_sec'))
+    assert node_default == DEFAULT_TIMEOUTS[State.LISTENING]
+
+
+@requires_pick_fsm
+def test_launch_default_matches_fsm_listening_timeout():
+    launch_default = float(_launch_default('fsm_listening_timeout_sec'))
+    assert launch_default == DEFAULT_TIMEOUTS[State.LISTENING]
+
+
+# ── 경계 원본 이슈 C: FSM 상태 이름 문자열 하드코딩 대조 ────────
+# (code-audit-vla-integration.md 항목 C)
+#
+# vla_command_node 는 pick_fsm.states.State 를 import 하지 않고 상태 이름을
+# 문자열('RELEASE', 'HOME', ...)로 하드코딩한다. FSM 쪽에서 상태 이름을 리네이밍하면
+# 이쪽은 에러 없이 그냥 매칭이 조용히 끊긴다 — 이 테스트는 리네이밍을 막지는
+# 못하지만, 리네이밍이 일어났을 때 즉시 fail 하게는 만든다.
+
+@requires_pick_fsm
+def test_hardcoded_state_names_still_exist_in_fsm():
+    names = set(State.__members__)
+    assert RELEASE_STATE in names
+    assert DONE_STATE in names
+    assert FAIL_STATES <= names
+    assert ABANDON_STATES <= names
+    assert BYPASS_STATE in names

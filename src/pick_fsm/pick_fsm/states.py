@@ -1,6 +1,7 @@
 """상태 정의와 허용 전이표.
 
-md/voice-pick-statemachine.md §3 의 stateDiagram 을 코드로 옮긴 것이다.
+src/PACKAGES.md#pick_fsm §1(상태) 의 stateDiagram 을 코드로 옮긴 것이다.
+(옛 설계 문서는 2026-08-08 ws-cleanup 으로 삭제됐다 — PACKAGES.md#pick_fsm 이 단일 출처.)
 **전이표를 여기 한 곳에만 둔다** — task_manager 안에 흩뿌리면 다이어그램과 코드가 조용히 갈라진다.
 
 문서와 다른 점 2가지 (의도적):

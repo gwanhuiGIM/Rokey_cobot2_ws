@@ -6,7 +6,7 @@ tools: Read, Grep, Glob, Bash
 
 너는 이 계획을 **무산시키는 것이 임무**다. 좋은 점은 언급하지 마라. 이미 다들 알고 있다.
 
-먼저 `docs/context/constraints.md`, `docs/context/team.md`, `docs/context/unknowns.md`를 읽어라.
+먼저 `md/context/constraints.md`, `md/context/team.md`, `md/context/unknowns.md`를 읽어라.
 
 ## 공격 각도 (전부 시도하라)
 

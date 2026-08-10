@@ -1015,9 +1015,8 @@ dimensions:
 *음성/타겟 지시로 물체를 집는 상태머신. `task_manager`(로봇 명령 배타권 소유) +
 `robot_safety_node`(별도 프로세스, 안전정지·backdrive).*
 
-설계 출처: 이 절 자체가 단일 출처다. `md/voice-pick-statemachine.md`는 더 이상 존재하지 않는다
-(2026-08-08 ws-cleanup 때 지워지고 역참조만 4곳에 남아있었다 — task_manager.py·states.py·
-ComputeGrasp.srv 의 같은 문구도 참고용일 뿐, 실제 최신 내용은 여기).
+설계 출처: 이 절 자체가 단일 출처다. 옛 설계 문서는 2026-08-08 ws-cleanup 때 지워졌고,
+task_manager.py·states.py·ComputeGrasp.srv 의 역참조 4곳은 2026-08-10 이 절 참조로 갱신했다.
 
 > **발표용 정리본**: 아래 mermaid는 GitHub/에디터에서 그대로 렌더링되는 원본이다. 색·범례·
 > "push vs pull" 비교도·검증 상태표까지 곁들인 프레젠테이션용 정리본은
@@ -1166,7 +1165,10 @@ stateDiagram-v2
     end note
 
     note right of ABORT
-        SPEAK_FAIL · ABORT · SAFE_STOP 을 뺀 모든 상태에서 ABORT 로 갈 수 있다.
+        IDLE · SPEAK_FAIL · ABORT · SAFE_STOP 을 뺀 모든 상태에서 ABORT 로 갈 수 있다
+        (IDLE 은 애초에 중단할 작업이 없다. SPEAK_FAIL 은 /pick/abort·_on_robot_state
+        양쪽에서 거부한다 — 2026-08-10 code-audit 지적, states.py TRANSITIONS 에
+        SPEAK_FAIL->ABORT 간선이 없는 것과 맞춘 것).
         트리거 4가지 — /pick/abort · 상태별 제한시간 초과 ·
         로봇 자체 안전정지 감지 · 전이표에 없는 전이 시도(버그).
         MOTION_STATES 에서는 진행 중 goal 을 취소하고,
@@ -1529,6 +1531,19 @@ FSM 은 이 루프를 다시 구현하지 않고, 그것마저 실패했을 때�
   치우려면 `/pick/reset` 후 RViz Scene Objects 에서 지우거나 move_group 을 재기동한다.
   (물고 있는 상태에서 ABORT 했을 때 detach 하면 안 되므로 일부러 자동 정리를 안 한다.)
 
+- **`VERIFY`/`LIFT`/`PLACE`(=`HOLDING_STATES`) 도중 ABORT 한 뒤의 복구 절차엔 물체를
+  attach 해제하는 자동 경로가 없다** (2026-08-10 code-audit 지적). `_cleanup_scene()`
+  (attach 해제 + planning scene 제거)은 `_st_speak_fail` 에서만 불리고, RELEASE 정상
+  경로(`_st_release` → `detach_and_remove_async`)를 빼면 ABORT/SAFE_STOP/HOME/IDLE
+  어느 경로도 `_object_added` 를 안 지운다. 복구 절차:
+  ① 비상정지/상황 확인 → ② `/pick/reset` 으로 HOME 복귀 → ③ **사람이 물체를 물리적으로
+  회수**(또는 안전 자세에서 손으로 그리퍼 개방) → ④ 그 후에야 재실행한다.
+  ⚠️ **여기 auto-detach 를 함부로 넣지 말 것.** reset 시 물체가 아직 그리퍼에 물려
+  있는데 planning scene 만 detach/remove 하면 "씬은 비었는데 실물은 매달린" desync 가
+  생겨, 다음 계획이 그 물체를 피하지 못하고 궤적을 관통시킨다. 코드로 자동화하려면
+  "그리퍼가 실제로 열려 있음이 확인된 시점"(예: 전용 `/pick/clear_payload` 서비스)에서만
+  detach 하도록 별도 트리거를 둬야 한다 — reset 자체에 넣지 않는다.
+
 #### ⛔ 실기 전 블로커
 
 1. **`tool0` 플랜지면 → RG2 손끝 거리 — 2026-08-07 실측·배선 완료, 실기 확인만 남았다.**
@@ -1791,6 +1806,24 @@ ros2 topic pub -1 /vla/pick_command std_msgs/String \
   "data: '{\"cmd\":\"pick\",\"class\":\"apple\",\"request_id\":\"a17-3\"}'"
 ros2 topic echo /vla/pick_result
 ```
+
+`get_keyword`(마이크) 쪽은 launch 파일이 없다 — entry_point 로 직접 띄운다:
+
+```bash
+ros2 run voice_processing get_keyword
+```
+
+`vla_command_node` 와 동시에 띄우지 않는다(둘 다 `/get_keyword` 를 제공 — 위 "노드 2개" 참고).
+서비스만 단독으로 트리거해 뽑힌 키워드를 보려면:
+
+```bash
+ros2 service call /get_keyword std_srvs/srv/Trigger "{}"
+```
+
+응답 `message` 가 추출된 물체명(공백 join, `task_manager` 는 이 중 **첫 단어만** target 으로 쓴다).
+서비스가 오디오 스트림을 열고 웨이크워드("hello_rokey")가 뜰 때까지 블로킹하므로, 마이크 앞에서
+말을 해야 응답이 온다. 노드를 띄운 터미널에 `Detected tools: [...]` 로그(`get_keyword.py:205`)가
+같이 찍힌다 — 실기로 마이크 경로 자체는 아직 검증 안 됨(위 "⚠️ 미검증" 참고).
 
 ### `/vla/pick_command` 스키마 (`std_msgs/String`, JSON)
 

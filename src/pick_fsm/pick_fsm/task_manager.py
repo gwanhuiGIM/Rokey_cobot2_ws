@@ -5,7 +5,8 @@
     ros2 service call /pick/start   std_srvs/srv/Trigger {}
     ros2 service call /pick/approve std_srvs/srv/Trigger {}     # ✋ 실행 승인
 
-설계 출처: md/voice-pick-statemachine.md (§1 노드 그래프 · §2 계약 · §3 상태머신)
+설계 출처: src/PACKAGES.md#pick_fsm (노드 그래프 · 인터페이스 계약 · §1 상태머신)
+(옛 설계 문서는 2026-08-08 ws-cleanup 으로 삭제됐다 — PACKAGES.md#pick_fsm 이 단일 출처.)
 
 이 노드가 존재하는 이유는 하나다: **로봇 명령 경로가 두 개 살아 있기 때문이다.**
 `dsr_controller2`(서비스 movej/movel)와 `dsr_moveit_controller`(JTC)에 동시에 명령하면
@@ -96,6 +97,9 @@ def str_param(name: str, value: str) -> Parameter:
 
 #: 파라미터 기본값 = 타입의 정본. `config/pick_fsm.yaml` 의 값은 여기 적힌 타입과
 #: 같아야 한다 (float 는 `0` 이 아니라 `0.0`). test_pick_fsm.py 가 이 대조를 자동화한다.
+#: ⚠️ 런타임 값의 정본은 `config/pick_fsm.yaml` 이다. 아래 기본값은 yaml 없이 뜰 때만
+#:    쓰이며, 일부(home/place 관절각·max_reach 등)는 yaml 의 실기 실측/재-teach 값과
+#:    **의도적으로 다르다** — 값을 여기서 yaml 에 맞추려 하지 말 것(2026-08-10 code-audit).
 PARAM_DEFAULTS = {
     # 안전
     # `dry_run`(plan_only) 은 없다 — 2026-08-09 제거. 모듈 docstring 참고.
@@ -442,7 +446,11 @@ class TaskManager(Node):
         return res
 
     def _srv_abort(self, _req, res):
-        if self.state in (State.IDLE, State.ABORT, State.SAFE_STOP):
+        # SPEAK_FAIL 도 거부한다 — states.py TRANSITIONS 에 SPEAK_FAIL->ABORT 간선이 없어서,
+        # 여기서 받아주면 _tick()이 _abort()를 부르고 _to()가 "허용되지 않은 전이"로 잡아
+        # 스스로 만든 걸 스스로 에러 로그로 찍는다(2026-08-10 code-audit 지적, _on_robot_state
+        # 의 거부 목록과도 맞춘다).
+        if self.state in (State.IDLE, State.SPEAK_FAIL, State.ABORT, State.SAFE_STOP):
             res.success, res.message = False, f'중단할 게 없다 (현재 {self.state.name})'
             return res
         with self._abort_lock:
@@ -556,6 +564,13 @@ class TaskManager(Node):
     def _st_idle(self):
         if not self._start_req:
             return
+        if self._object_added:
+            # desync 를 여기서 자동으로 고치지 않는다(=detach 하지 않는다) — 물체가
+            # 아직 실제로 그리퍼에 물려 있을 수 있는데 씬만 지우면 다음 계획이 그
+            # 물체를 피하지 못한다. PACKAGES.md#pick_fsm "알려진 자잘한 것" 참고.
+            self.get_logger().warn(
+                '이전 사이클의 attach 물체(pick_target)가 아직 planning scene 에 '
+                '남아 있다 — 재사용/충돌 여부를 확인하라 (2026-08-10 code-audit 지적)')
         self._start_req = False
         self._retry_grip = 0
         self._fail_streak = 0
