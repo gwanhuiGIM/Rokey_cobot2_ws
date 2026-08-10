@@ -40,6 +40,9 @@ setup(
             'get_keyword = voice_processing.get_keyword:main',
             # VLA(외부 PC) JSON 지시. 표준 ROS 2 만 쓴다 — 추가 의존성도 .env 도 없다
             'vla_command_node = voice_processing.vla_command_node:main',
+            # WAIT_APPROVAL 동안만 "승인" 등을 들으면 /pick/approve 를 부른다.
+            # get_keyword 와 같은 마이크/웨이크워드/STT 의존성 (openai/pyaudio/openwakeword)
+            'approve_listener_node = voice_processing.approve_listener_node:main',
         ],
     },
 )

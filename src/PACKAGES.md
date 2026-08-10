@@ -1739,8 +1739,9 @@ Qt 위젯을 직접 건드리면 크래시할 수 있어서다.
 설계 출처: [`md/plans/2026-08-08-vla-integration.md`](../md/plans/2026-08-08-vla-integration.md)
 (§0 역할 경계 · §2 지시 채널 · §0-B 승인 · §5 물체 선정)
 
-- 최종 갱신: 2026-08-09 (`vla_command_node` 신설, `COLCON_IGNORE` 해제, rqt 패널 시작·중단·리셋
-  버튼을 같은 채널로 연 것)
+- 최종 갱신: 2026-08-10 (`vla_command_node` 가 `place`(basket/table/discard) 를 받게 됨,
+  `approve_listener_node` 신설 — 아래. 2026-08-09: `vla_command_node` 신설, `COLCON_IGNORE`
+  해제, rqt 패널 시작·중단·리셋 버튼을 같은 채널로 연 것)
 
 ### 왜 FSM 을 안 고쳤나
 
@@ -1764,15 +1765,30 @@ VLA PC ──/vla/pick_command(JSON)──▶ vla_command_node ──/get_keywor
 갱신되면 **타입 해시가 어긋나 조용히 매칭이 끊긴다**(에러가 아니라 "토픽은 보이는데 데이터가
 안 옴"). 이 ws 엔 같은 패턴의 선례가 있다 — `/yolo_seg/classes` 도 `String` JSON 이다.
 
-### 노드 2개 — ⚠️ 동시에 띄우지 않는다
+### 노드 3개
 
 | 노드 | 지시 출처 | 추가 의존성 |
 |---|---|---|
 | **`vla_command_node`** | `/vla/pick_command` (외부 PC 의 VLA) | **없음.** 표준 ROS 2 만 쓴다 |
 | `get_keyword` | 마이크 → wakeword(`openwakeword`) → Whisper STT → LLM | `openai` `langchain-openai` `python-dotenv` `pyaudio` `openwakeword` `sounddevice` + `resource/.env` |
+| `approve_listener_node` | 마이크 → wakeword → Whisper STT → 문구매칭 → `/pick/approve` | `openai` `pyaudio` `openwakeword` + `resource/.env` (`get_keyword` 와 동일) |
 
-**둘 다 `/get_keyword` 를 제공한다.** 같이 띄우면 어느 쪽이 응답할지 알 수 없다.
-섞어 쓰려면 한쪽의 `keyword_service` 를 다른 이름으로 바꾼다.
+⚠️ **`vla_command_node`·`get_keyword` 는 둘 다 `/get_keyword` 를 제공한다.** 같이 띄우면
+어느 쪽이 응답할지 알 수 없다. 섞어 쓰려면 한쪽의 `keyword_service` 를 다른 이름으로 바꾼다.
+
+`approve_listener_node`는 이 충돌과 무관하다 — 서비스가 아니라 `/pick/state` 를 구독해
+**`WAIT_APPROVAL` 상태에만** 마이크를 열고, `get_keyword`·`vla_command_node`와 다른
+서비스(`/pick/approve`)를 부른다. `get_keyword`(LISTENING)와 마이크·웨이크워드 모델을
+공유하지만 상태가 겹치지 않아 정상 경로에선 동시 사용이 안 된다 — 상세·알려진 위험
+(`get_keyword.py`가 스트림을 안 닫는 기존 버그와의 상호작용)은 노드 docstring 참고.
+
+**VLA 의 `cmd:"approve"` 차단(`BLOCKED_CMDS`)과는 무관하다.** `approve_listener_node`가
+듣는 마이크는 로봇 앞의 **사람**이다 — graspgenx 판단 화면을 사람이 직접 보고 "승인"이라고
+말하는 것은 rqt 버튼을 누르는 것과 같은 사람의 결정이며, `/vla/pick_command`를 구독하지도
+않는다. 승인 경로는 이제 둘: **rqt 패널 '승인' 버튼**(기존) / **음성**(`approve_listener_node`,
+2026-08-10 신설) — 정확히 같은 `/pick/approve` 서비스를 부른다. 기본 승인 문구
+(`승인,그립해,그립,진행해,진행,컨펌`)는 일상 대화에 흔한 "네"/"응"류를 일부러 뺐다(실기
+오작동 방지, `~/.claude/CLAUDE.md` 실기 안전 원칙).
 
 ### `get_keyword` 의 LLM 프롬프트 어휘 — `config/objects.yaml` 이 정본이다 (2026-08-09 수정)
 
@@ -1792,9 +1808,12 @@ spoon, banana, apple, orange, mouse`)와 애초에 안 맞았다: 음성으로 �
 ⚠️ **`detect` 를 고친 뒤에는 `get_keyword` 노드를 다시 띄워야 한다** — `yolo_seg_node` 와
 같은 함정이다(어휘를 모듈 로드 시 한 번만 읽는다).
 
-⚠️ **미검증**: `langchain-openai`/`pyaudio` 등은 rosdep 키가 없어 이 계정에 설치돼 있지
-않을 수 있다 — 마이크 경로 자체(wakeword→STT→LLM)는 이번 수정에서 실기로 안 돌려봤다.
-`colcon build --symlink-install --packages-select voice_processing` 은 PASS(2026-08-09).
+⚠️ **미검증**: `langchain-openai`/`pyaudio`/`openwakeword` 등은 rosdep 키가 없어 이 계정에
+설치돼 있지 않을 수 있다 — 실측: 이 머신(`rokey`)에서 `import pyaudio`/`import openwakeword`
+가 **둘 다 `ModuleNotFoundError`**(2026-08-10). 마이크 경로 자체(wakeword→STT→LLM)는
+`get_keyword`·`approve_listener_node` 둘 다 이번 수정에서 실기로 안 돌려봤다 — `colcon
+build --symlink-install --packages-select voice_processing`(ament_python이라 import 를
+안 하므로 이 결핍과 무관하게) 는 PASS(2026-08-10).
 
 ### 실행
 

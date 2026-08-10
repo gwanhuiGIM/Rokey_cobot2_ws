@@ -1,15 +1,33 @@
 <!-- meta
-updated: 2026-08-10 (5차 개정 — `2026-08-10-integ-plan.md`(§0-D)와
-         `2026-08-10-fsm-merge.md`(§9) 를 여기로 병합 후 원본 삭제.
-         "원본 = M0609_VLA_system" 보류 해제, place 3종 지원 추가, ~/.local 오염 정리)
-status:  live (§2 지시 채널 구현됨 2026-08-09 — §0-C. place 는 2026-08-10 — §0-D.
-         §5 선정 로직은 여전히 미착수)
+updated: 2026-08-10 (7차 개정 — §0-F: `M0609_VLA_system`이 같은 remote 의 다른 clone(별도
+         repo 아님)임을 `git remote -v`로 확인. 그 clone 브랜치 작업으로 이 세션의 커밋 안 된
+         변경(venv 설치 절·env.sh·PYTHON_ENV_CONVENTION.md)이 소실된 사고 기록 + 재발 방지
+         (커밋까지 하기, 사본 금지). 브리지 계약 문서를 `md/vla-bridge-contract.md` 하나로
+         통일(사본 삭제).
+         6차: §0-E 음성 승인(`approve_listener_node`) 신설, 브리지 위치 재확인.
+         5차: `2026-08-10-integ-plan.md`(§0-D)와 `2026-08-10-fsm-merge.md`(§9) 를 여기로
+         병합 후 원본 삭제. "원본 = M0609_VLA_system" 보류 해제, place 3종 지원 추가,
+         ~/.local 오염 정리)
+status:  live (§2 지시 채널 구현됨 2026-08-09 — §0-C. place 는 2026-08-10 — §0-D. 음성 승인은
+         2026-08-10 — §0-E. **남은 유일한 착수 전 작업은 M0609 쪽 `vla_pick_bridge`**(§9-5-2).
+         §5 선정 로직은 여전히 미착수. §0-F: 그쪽 clone 작업은 매번 커밋까지 할 것)
 owns:    M0609_VLA_system ↔ cobot2_ws 통합 · 역할 경계 · 지시 채널 계약 · 물체 선정(target selection) 설계.
          이 ws 의 VLA 통합 관련 md 는 **이 문서 하나**로 통일한다 — 새 통합 관련 파일을
-         또 만들지 말고 여기 개정 절(0-A/0-B/0-C/0-D...)을 추가한다.
+         또 만들지 말고 여기 개정 절(0-A/0-B/0-C/0-D/0-E...)을 추가한다.
 -->
 
 # VLA 통합 — 필요 부분 정리 (2026-08-08, 2026-08-10 실측 갱신)
+
+> ⚠️ **이 문서는 히스토리 로그다 — 계속 불어나는 게 정상이다.** `vla_pick_bridge`를 짤 때
+> 필요한 건 "왜 이렇게 됐는지"가 아니라 "지금 뭘 받아들이고 뭘 거부하는지"뿐이다. 그건
+> 여기서 매번 찾게 하지 않고 **[`md/vla-bridge-contract.md`](vla-bridge-contract.md)**
+> (계약만 담은 요약, 히스토리 없음, 덮어쓰기 갱신)로 따로 뽑아뒀다(2026-08-10).
+> **`M0609_VLA_system`(같은 remote 의 다른 clone, 브랜치 `vla_integ`) 쪽에 사본을 두지
+> 않는다** — 절대경로 `~/cobot2_ws/md/vla-bridge-contract.md` 로 직접 읽게 한다. 처음엔
+> 그쪽에 사본(`COBOT2_BRIDGE_CONTRACT.md`)을 뒀었는데, 그 clone이 초기화되면서 함께
+> 날아갔다(§0-F) — 사본을 만드는 순간 "어느 쪽이 최신이냐" 문제가 생기고, 안 지워지리란
+> 보장도 없다는 게 실증됐다. **`vla_command_node.py`의 스키마를 고치면 이 문서(§0-x 절
+> 추가)뿐 아니라 `vla-bridge-contract.md`도 같이 갱신할 것.**
 
 > **상대 저장소**: `~/M0609_VLA_system` (별도 repo)
 > ⚠️ **2026-08-09 시점엔 이 머신(`rokey`)에 `~/M0609_VLA_system` 이 없었다** (당시엔 개인PC
@@ -167,6 +185,89 @@ VLA 는 아무 때나 쏘고(push), FSM 은 `LISTENING` 에 들어와야 물어�
 "pip install을 ~/.local에 안 한다" 실패 패턴이 그대로 재현됨). 정리 완료, 재발 방지 규약은
 그쪽 repo에 `PYTHON_ENV_CONVENTION.md`로 작성해 전달함(venv `--system-site-packages`).
 이쪽에서 할 일 없음 — 다음에 `colcon build`가 이유 없이 깨지면 이 패턴부터 의심할 것.
+
+---
+
+## 0-E. 🟢 2026-08-10 — 그립 승인에 음성 경로 추가 + 브리지 위치 재확인
+
+### 음성 승인 (`approve_listener_node`, 신설)
+
+graspgenx 판단 화면을 **사람이 직접 보고** 판단한다는 전제 위에서, 승인 입력 방법을
+rqt 버튼 하나에서 **버튼 + 음성 두 가지**로 늘렸다. `pick_fsm`·`vla_command_node` 코드는
+**0줄 변경** — `/pick/approve`(`std_srvs/Trigger`)를 그대로 호출하는 새 노드 하나만
+추가했다(`voice_processing/approve_listener_node.py`).
+
+- **동작**: `/pick/state`를 구독해 `WAIT_APPROVAL`일 때만 마이크를 연다 → `get_keyword`와
+  같은 웨이크워드("hello 로키") → Whisper STT → 승인 문구(기본
+  `승인,그립해,그립,진행해,진행,컨펌` — "네"/"응"류는 오작동 방지로 일부러 뺐다) 매칭 →
+  `/pick/approve` 호출. 그 외 시간에는 마이크를 열지 않는다(이중 방어).
+- **🔴 §0-B의 VLA 승인 차단과는 무관 — 오히려 그 차단을 전제로 성립한다.** 이 노드는
+  `/vla/pick_command`를 구독하지 않고 `vla_command_node`와 아무것도 주고받지 않는다.
+  듣는 마이크는 로봇 앞의 **사람**이므로, "승인"이라 말하는 것은 버튼을 누르는 것과 같은
+  사람의 결정이다 — `_srv_approve`는 호출자가 사람인지 VLA인지 구분하지 못하지만, 이
+  노드가 VLA 쪽 채널에 접근하지 않으므로 §0-B의 차단은 전혀 약해지지 않는다.
+- **알려진 위험**: `get_keyword.py`가 마이크 스트림을 연 뒤 안 닫는 기존 버그가 있다
+  (`close_stream()` 미호출). 이 노드는 `WAIT_APPROVAL`을 벗어날 때마다 자기 스트림은
+  닫지만, `get_keyword`가 직전에 스트림을 안 닫고 남겨뒀다면 장치 점유가 겹칠 수 있다 —
+  실측 안 됨. 재발하면 `get_keyword.py`의 스트림 종료가 근본 수정(이 노드 책임 밖).
+- **미검증**: `pyaudio`/`openwakeword` 둘 다 이 머신(`rokey`)에 `ModuleNotFoundError` —
+  `get_keyword`와 같은 조건(§0-C 시점부터 있던 한계, 새로 생긴 게 아니다). `colcon build`는
+  PASS(ament_python이라 import 시점이 아니라 무관).
+- 문서: `src/voice_processing/README.md`, `src/PACKAGES.md#voice_processing`.
+
+### `vla_pick_bridge`는 어느 repo에 두나 — 이미 §9-2가 답했다, 재확인만 함
+
+이 질문 자체가 새로 나온 게 아니라 §9(구 `fsm-merge.md`) §2 "판단: B를 유지하고, 이 ws에는
+발행자만 만든다"가 2026-08-10에 이미 내린 결론이다. 오늘 다시 근거를 짚었을 뿐 뒤집지
+않았다:
+
+1. **메시지 타입 의존 방향이 사실상 강제한다.** 브리지는 `RobotAction`/`RobotState`
+   (`vla_interfaces`, M0609 전용)와 `/vla/pick_command`(JSON) 사이를 잇는다.
+   `vla_interfaces`는 cobot2_ws에 **의도적으로 안 들여놨다**(§1-2, §9-1-2 — 커스텀 msg를
+   경계로 쓰면 두 repo가 빌드 버전으로 묶인다). 브리지를 이쪽에 두면 그 결합을 다시
+   끌어들이는 것과 같다.
+2. cobot2_ws 쪽(`vla_command_node`)은 이미 완성됐다(33 테스트, 빌드·설치·launch 전부).
+   여기 더 만들 게 없다 — M0609 쪽에서 `object_id→class` 변환 + JSON 직렬화만 하면 된다.
+3. `/pick/approve` 차단(§0-B)이 안전장치다. 브리지를 M0609 쪽에 두면 그 서비스 자체가
+   안 보여서 "여기서 열어버릴까"라는 유혹이 코드 근처에 생기지 않는다.
+4. JSON 경계 하나뿐이라 한쪽이 재시작·재배포돼도 다른 쪽이 안 흔들린다.
+
+**결론 — 남은 일은 M0609_VLA_system 쪽 `vla_pick_bridge` 신설 하나뿐이다.** cobot2_ws는
+수신자 몫을 다 했다. 이 문서(cobot2_ws)에서는 착수하지 않기로 함(2026-08-10 사용자
+결정, "x") — 착수 여부·주체는 다음에 다시 확인.
+
+---
+
+## 0-F. 🔴 2026-08-10 — `M0609_VLA_system`은 별도 repo 가 아니라 **같은 remote 의 다른 clone**
+
+`git remote -v`로 처음 확인했다: `~/M0609_VLA_system`과 `~/cobot2_ws`는 **같은 GitHub
+remote**(`https://github.com/gwanhuiGIM/0730_cobo2_personal.git`)를 가리키는 **서로 다른
+로컬 clone**이다 — `~/cobot2_ws`는 브랜치 `semi_Final`, `~/M0609_VLA_system`은 브랜치
+`vla_integ`(`origin/vla_integ` 추적). `git worktree list`로 서로 linked worktree가 아니라
+**완전히 독립된 두 clone**(각자 자기 `.git` object DB)이라는 것도 확인했다 — 그래서 한쪽
+커밋이 다른 쪽에 자동으로 안 보인다. 이 문서 0-A~0-D가 "별도 repo"라고 써온 표현은 실행
+경계(다른 워킹디렉토리, 다른 세션이 다룸)로는 맞지만 **git 계보로는 남남이 아니다** — `git
+log`에 `a2c154b`(2026-07-30 "workspace init: CLAUDE.md, hooks, docs skeleton")처럼 겹치는
+과거 커밋이 있는 이유가 이거다.
+
+**이번에 실제로 벌어진 사고**: `~/M0609_VLA_system` 쪽에서 브랜치 재작업(`91da777 prune
+legacy rokey coursework, restore vla_system/vla_interfaces`, 2026-08-10 20:05)이 있었고,
+그 결과 이 세션이 그 clone의 워킹트리에 만들어뒀던 **커밋 안 된 변경 3개가 사라졌다**:
+`README.md`의 venv 기반 설치 절, `scripts/env.sh`의 venv 자동 활성화, `PYTHON_ENV_
+CONVENTION.md` 파일 자체. `CLAUDE.md`도 그 clone에선 여전히 `a2c154b` 시점 내용(제목이
+"CLAUDE.md — cobot2_ws"인, 이 ws 초창기 빈 워크스페이스 안내문 — 그쪽 내용이 아니다)
+그대로였다 — 애초에 그쪽에 맞게 고쳐진 적이 없었다는 뜻.
+
+**교훈 — 두 가지**:
+1. **다른 clone(`M0609_VLA_system`)에 파일을 쓸 땐 커밋까지 해야 살아남는다.** 워킹트리
+   변경만 만들고 세션이 끝나면, 그 clone에서 브랜치 작업이 한 번만 일어나도(체크아웃·리셋·
+   되돌리기 등) 통째로 사라진다 — 이번에 실제로 그랬다. 이후로는 그쪽 파일을 고치면 그
+   자리에서 바로 `git add && git commit`(그 clone 안에서, push는 별개 — 사용자가 원하지
+   않으면 안 한다)까지 한다.
+2. **사본을 두 곳에 두지 않는다.** `vla-bridge-contract.md`(구 `COBOT2_BRIDGE_CONTRACT.md`)
+   를 처음엔 두 clone에 각각 뒀었는데, 정확히 이 사고로 한쪽이 날아가는 걸로 "왜 두 곳에
+   두면 안 되는지"가 실증됐다. 지금은 cobot2_ws 한 곳에만 두고(§ 상단 안내), 저쪽은
+   절대경로로 읽는다 — 사본이 없으니 지워질 자산 자체가 없다.
 
 ---
 
