@@ -153,6 +153,14 @@ class ReactiveReplan(Node):
         self.stat_swaps = 0
         self.stat_skips = 0
 
+        # 2026-08-11: max_start_jump 폐기 진단 결과 — plan() 실제 소요시간(OMPL 실측
+        # 평균 0.07s)이 고정 lookahead_s(0.35s, cuMotion 계획시간 ~0.2s 기준 튜닝값) 보다
+        # 훨씬 짧아, 시드가 "0.35초 뒤" 위치를 예측했는데 검증 시점엔 0.07초밖에 안 지나
+        # 있어 항상 크게 어긋났다(폐기 시 plan_dt 평균 0.073s vs 성공 시 0.071s — 통계적
+        # 차이 없음, plan() 지연이 원인이 아니라는 뜻). 고정값 대신 실측 plan() 소요시간의
+        # 이동평균(EMA)으로 예측 창을 스스로 맞춘다. 최초 1회는 self.lookahead_s로 시작.
+        self._plan_dt_ema: Optional[float] = None
+
     # ── 스핀 (action future 를 폴링으로 기다리기 위해 백그라운드 executor 필요) ──
     def start_spin(self) -> None:
         from rclpy.executors import MultiThreadedExecutor
@@ -379,17 +387,23 @@ class ReactiveReplan(Node):
                 return [p0[k] + a * (p1[k] - p0[k]) for k in range(len(p0))]
         return list(pts[-1].positions)
 
-    def _same_path(self, cur_traj: JointTrajectory, cur_t0: float,
-                   new_traj: JointTrajectory, handover_s: float) -> bool:
+    def _same_path(self, cur_traj: JointTrajectory, new_traj: JointTrajectory,
+                   base: float) -> bool:
         """새 궤적이 지금 달리는 궤적의 남은 부분과 사실상 같은가.
 
         cuMotion 은 매번 v=0 에서 출발하는 완결 궤적을 준다(근거1). 장애물이 안 변했으면
         그건 같은 경로를 처음부터 다시 시작하는 것뿐이라, 무조건 교체하면 로봇이 매번
         가속 램프에만 머물러 목표에 못 간다. 그래서 실제로 다를 때만 교체한다.
+
+        `base` 는 cur_traj 위에서 new_traj 의 시작점(t=0)에 대응하는 시각이다. **호출자가
+        시드를 채취할 때(run_to_goal 의 `seed_base`) 쓴 값을 그대로 넘겨야 한다** — 여기서
+        `time.time()` 을 다시 읽지 않는다. 2026-08-11: 예전엔 이 함수 안에서 새로
+        `time.time()` 을 읽었는데, `plan()` 왕복(블로킹, ~lookahead_s 자릿수)만큼 시드
+        채취 시점보다 늦은 시각이 섞여 들어가 정렬이 부분적으로만 맞았다(cross-review 지적,
+        ⭐-4 1번 버그의 잔여분). 시드와 정확히 같은 시각을 쓰는 것으로 근본 수정한다.
         """
         cur_traj = self._reorder(cur_traj)
         new_traj = self._reorder(new_traj)
-        base = (time.time() + handover_s) - cur_t0
         span = min(self._duration(new_traj), self._duration(cur_traj) - base)
         if span <= 0.0:
             return False
@@ -463,15 +477,40 @@ class ReactiveReplan(Node):
                     continue
                 next_plan = now + period
 
-                t_on_traj = (now - exec_t0) + self.lookahead_s
+                # 2026-08-11 2차 시도: 1차(EMA 그대로 대입)는 seed_base = effective_lookahead
+                # - handover_s 가 거의 0이 되어 매번 v=0 재출발 → 제자리로 되돌렸다(위 주석
+                # 이력 참고, git blame). 이번엔 seed_base 자체가 "plan_dt_ema 뒤 위치"가
+                # 되도록 handover_s 를 미리 더해 상쇄시킨다:
+                #   seed_base = t_on_traj - handover_s
+                #             = (now-exec_t0) + (plan_dt_ema + handover_s) - handover_s
+                #             = (now-exec_t0) + plan_dt_ema
+                # 즉 "새 궤적이 준비될 즈음(plan_dt_ema 초 후) 로봇이 있을 위치"를 그대로
+                # 예측한다 — 고정 lookahead_s(0.35s, 실측보다 5배 큼)보다 정확한 예측이면서,
+                # 1차 시도처럼 handover_s 를 이중으로 빼지 않는다. 하한(floor)은 0.02s로
+                # 두어 plan_dt_ema 가 아주 작게 튄 경우에도 예측이 완전히 0이 되진 않게 한다.
+                predicted_plan_dt = (self._plan_dt_ema if self._plan_dt_ema is not None
+                                     else self.lookahead_s - self.handover_s)
+                effective_lookahead = max(predicted_plan_dt, 0.02) + self.handover_s
+                t_on_traj = (now - exec_t0) + effective_lookahead
+                # seed_base: 시드를 cur_traj(=traj) 위에서 실제로 뽑았을 때만 값이 있다.
+                # 이 경우에만 "새 계획이 cur_traj 의 그 지점과 같은가"라는 _same_path 비교가
+                # 의미가 있다 — 아래(traj_finished/추월) 쪽은 애초에 cur_traj 연속이 아니라
+                # 현재 실측 위치에서 새로 시작하는 것이라 비교 대상이 없다.
                 if traj_finished or t_on_traj >= traj_dur:
                     s_pos, _ = self.current_state()
                     s_vel = [0.0] * len(s_pos)
+                    seed_base = None
                 else:
-                    s_pos = self._sample(traj, max(0.0, t_on_traj - self.handover_s))
+                    seed_base = max(0.0, t_on_traj - self.handover_s)
+                    s_pos = self._sample(traj, seed_base)
                     s_vel = [0.0] * len(s_pos)   # 근거1: 어차피 버려진다
 
+                plan_t0 = time.time()
                 new_traj = self.plan(goal, s_pos, s_vel)
+                plan_dt = time.time() - plan_t0
+                # EMA 갱신 — 다음 반복의 effective_lookahead 가 이 실측값을 따라간다.
+                self._plan_dt_ema = (plan_dt if self._plan_dt_ema is None
+                                     else 0.7 * self._plan_dt_ema + 0.3 * plan_dt)
                 if new_traj is None:
                     fails += 1
                     if fails >= self.max_consecutive_failures:
@@ -486,10 +525,11 @@ class ReactiveReplan(Node):
                 jump = max(abs(first[i] - cur[i]) for i in range(len(cur)))
                 if jump > self.max_start_jump:
                     self.get_logger().warn(
-                        f'새 궤적 시작점이 실측과 {jump:.3f} rad 어긋남 — 폐기')
+                        f'새 궤적 시작점이 실측과 {jump:.3f} rad 어긋남 — 폐기 '
+                        f'(plan_dt={plan_dt:.3f}s, effective_lookahead={effective_lookahead:.3f}s)')
                     continue
 
-                if not traj_finished and self._same_path(traj, exec_t0, new_traj, self.handover_s):
+                if seed_base is not None and self._same_path(traj, new_traj, seed_base):
                     self.stat_skips += 1
                     continue
 
@@ -498,6 +538,7 @@ class ReactiveReplan(Node):
                     exec_t0 = time.time()
                     traj_dur = self._duration(new_traj) + self.handover_s
                     self.stat_swaps += 1
+                    self.get_logger().info(f'교체 성공 plan_dt={plan_dt:.3f}s')  # 2026-08-11 진단
                     self.get_logger().info(f'교체 #{self.stat_swaps}')
 
         except KeyboardInterrupt:
