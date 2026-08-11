@@ -13,7 +13,12 @@ task_manager:
     approval_timeout_sec: 300.0
     # place 미지정 pick 이 WAIT_PLACE_TARGET 에서 set_place 를 기다리는 시간. 초과 시
     # 기본 위치(place_location=basket)에 자동으로 내려놓는다 (2026-08-11, constraints 참고).
-    wait_place_timeout_sec: 60.0
+    wait_place_timeout_sec: 100.0
+    # eye-in-hand 재파지 (스캐폴드, 2026-08-11). true 면 pre-grasp 도착 후 REGRASP 를 거쳐
+    # 손목 카메라로 재-graspgenx + 사람 승인. 🔴 카메라·hand-eye 캘리브 미장착이라 실제
+    # 재계산은 미구현(_st_regrasp HOOK). 기본 false = 지금 흐름 그대로.
+    regrasp_enabled: false
+    regrasp_timeout_sec: 300.0
 
     # ── MoveIt ───────────────────────────────────────────
     planning_group: manipulator
@@ -27,8 +32,8 @@ task_manager:
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
     vel_scale: 0.05              # 실기 첫 시도는 느리게. 익숙해지면 올린다
     acc_scale: 0.05
-    planning_time: 5.0
-    planning_attempts: 10
+    planning_time: 10.0
+    planning_attempts: 20
     joint_tolerance: 0.001
     ik_timeout_sec: 0.2
     ik_avoid_collisions: true   # false 로 두면 도달성만 따로 볼 수 있다(디버깅용)

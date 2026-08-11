@@ -53,7 +53,7 @@ except ImportError:                     # pragma: no cover
 
 #: 상태별 제한시간 [s]. 넘으면 ABORT. 사람 입력을 기다리는 상태는 여기 없다.
 DEFAULT_TIMEOUTS = {
-    State.LISTENING: 60.0,
+    State.LISTENING: 110.0,     # voice_processing.wait_timeout_sec(100s) + margin(5s) 여유
     State.PERCEIVE: 120.0,      # GPU 추론 + 모델 로딩(첫 호출 수십 초)
     State.SCENE_PREP: 10.0,
     State.PLAN: 30.0,
@@ -121,6 +121,11 @@ PARAM_DEFAULTS = {
     # 를 안 보내면 파라미터 기본 위치(place_location, 보통 basket)에 자동으로 내려놓는다
     # (2026-08-11 사용자 결정 — 물체를 든 채 무한 대기는 안전하지 않다. constraints 참고).
     'wait_place_timeout_sec': 60.0,
+    # eye-in-hand 재파지 (스캐폴드, 2026-08-11). true 면 pre-grasp 도착 후 REGRASP 를 거친다
+    # — 손목 카메라로 재-graspgenx 하고 사람이 승인. 🔴 카메라·hand-eye 캘리브가 아직 없어
+    # 실제 재계산은 미구현(_st_regrasp 의 HOOK 참고). 기본 false = 지금 흐름 그대로.
+    'regrasp_enabled': False,
+    'regrasp_timeout_sec': 300.0,    # REGRASP 승인 대기 제한(초). 넘으면 ABORT
 
     # MoveIt
     'planning_group': 'manipulator',
@@ -541,7 +546,9 @@ class TaskManager(Node):
         return res
 
     def _srv_approve(self, _req, res):
-        if self.state is not State.WAIT_APPROVAL:
+        # WAIT_APPROVAL(계획 승인)과 REGRASP(재파지 승인, 스캐폴드) 둘 다 같은 승인 버튼/음성을
+        # 쓴다 — rqt '승인'·approve_listener_node 가 이 서비스 하나만 부른다.
+        if self.state not in (State.WAIT_APPROVAL, State.REGRASP):
             res.success, res.message = False, f'승인 대기 중이 아니다 (현재 {self.state.name})'
             return res
         self._approved = True
@@ -1122,7 +1129,34 @@ class TaskManager(Node):
         self._to(State.APPROACH)
 
     def _st_approach(self):
-        self._move('pre_grasp', State.OPEN_GRIPPER, State.NEXT_CANDIDATE)
+        # regrasp_enabled 면 pre-grasp 도착 후 eye-in-hand 재파지 인식(+승인)을 거친다.
+        nxt = State.REGRASP if bool(self.p('regrasp_enabled')) else State.OPEN_GRIPPER
+        self._move('pre_grasp', nxt, State.NEXT_CANDIDATE)
+
+    def _st_regrasp(self):
+        """(스캐폴드) pre-grasp 도착 후 eye-in-hand 로 재-graspgenx 하고 사람이 승인하는 자리.
+
+        🔴 2026-08-11 스캐폴드다 — 손목 eye-in-hand RealSense 는 아직 없다(constraints.md,
+        CLAUDE.md 2절). 지금은 **실제 재촬영·재계산을 하지 않는다**: 상태 플럼빙과 승인
+        재사용(`/pick/approve`, rqt '승인')만 실물이고, 카메라/graspgenx 호출부는 아래
+        HOOK 자리에 비워 둔다. 카메라가 붙고 flange->camera extrinsic(TF)이 생기면 HOOK 에서
+        (1) eye-in-hand 프레임 촬영 (2) graspgenx 재호출 (3) 결과를 base_frame 으로 변환해
+        `self.grasp` 갱신 (4) grasp/lift 재-IK(`_accept_grasp`->PLAN 경로 재사용)를 채운다.
+        `regrasp_enabled=false` 면 이 상태에 아예 안 들어온다(`_st_approach`).
+        """
+        # ── HOOK: eye-in-hand 재-graspgenx (미구현 — 카메라/캘리브 대기) ──
+        #    여기서 self.grasp 를 갱신하고 재-IK 후 PLAN 으로 되돌리는 로직이 들어갈 자리.
+        if self._nag == 0:
+            self._nag = 1
+            self.get_logger().warn(
+                'REGRASP(스캐폴드) — eye-in-hand 재파지 인식은 미구현(카메라 미장착). '
+                "pre-grasp 에서 정지해 승인을 기다린다. rqt '승인'(/pick/approve) 을 누르면 하강한다")
+        if self._approved:
+            self._approved = False
+            self._to(State.OPEN_GRIPPER, '재파지 승인 — 하강 진행')
+            return
+        if self._elapsed() > float(self.p('regrasp_timeout_sec')):
+            self._abort('재파지 승인 대기 시간 초과')
 
     def _st_open_gripper(self):
         """pre-grasp 도착 후, 하강 전에 그리퍼를 연다."""

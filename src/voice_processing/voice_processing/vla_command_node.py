@@ -29,7 +29,7 @@ VLA 는 아무 때나 쏘고(push), FSM 은 `LISTENING` 에 들어와야 물어�
   1. `_srv_keyword` 는 FSM 이 `LISTENING` 을 떠나면 **지시를 소비하지 않고 물러난다.**
      `task_manager._to()` 는 전이할 때 진행 중 future 를 버리므로(`_fut = None`), 버려진
      호출이 다음 지시를 가로채면 그 지시는 영영 결과가 안 나온다.
-  2. 대기 마감은 `wait_timeout_sec` 과 **FSM 의 `LISTENING` 제한시간**(60 s) 중 이른 쪽이다.
+  2. 대기 마감은 `wait_timeout_sec` 과 **FSM 의 `LISTENING` 제한시간**(110 s) 중 이른 쪽이다.
      `/pick/state` 로 LISTENING 진입 시각을 알고 있으므로 남은 예산을 계산할 수 있다.
   3. `PERCEIVE` 인데 우리 지시가 안 팔렸으면 **FSM 이 다른 타겟으로 도는 중**이다
      (`pick_fsm` 을 `voice:=false` 로 띄운 경우). 조용히 두면 엉뚱한 물체를 집는다.
@@ -370,10 +370,10 @@ class VlaCommandNode(Node):
         # 🔴 승인 서비스는 파라미터로도 두지 않는다 — 있으면 언젠가 켜진다 (§0-B).
         self.declare_parameter('auto_start', False)
         self.declare_parameter('ttl_sec', 10.0)
-        self.declare_parameter('wait_timeout_sec', 50.0)
+        self.declare_parameter('wait_timeout_sec', 100.0)
         # `task_manager.DEFAULT_TIMEOUTS[State.LISTENING]` 의 사본이다. 저쪽이 정본이므로
         # 값을 바꿨다면 여기도 맞춰야 한다 — 파라미터로 뺀 이유가 그것이다.
-        self.declare_parameter('fsm_listening_timeout_sec', 60.0)
+        self.declare_parameter('fsm_listening_timeout_sec', 110.0)
         # 서비스 탐색·왕복에 쓰이는 여유. FSM 의 LISTENING 시계는 우리 서버가 뜨기 전부터
         # 돌기 시작한다(`task_manager._service()` 는 서버가 없으면 기다린다).
         self.declare_parameter('listening_margin_sec', 5.0)

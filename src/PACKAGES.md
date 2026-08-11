@@ -1131,7 +1131,9 @@ stateDiagram-v2
     WAIT_APPROVAL --> STOW : /pick/approve ✋
     STOW --> APPROACH : 그리퍼 닫기 + settle
 
-    APPROACH --> OPEN_GRIPPER : pre_grasp 도달
+    APPROACH --> OPEN_GRIPPER : pre_grasp 도달 (regrasp_enabled=false)
+    APPROACH --> REGRASP : pre_grasp 도달 (regrasp_enabled=true, 2026-08-11 스캐폴드)
+    REGRASP --> OPEN_GRIPPER : /pick/approve (eye-in-hand 재파지는 미구현)
     OPEN_GRIPPER --> DESCEND : 그리퍼 열기 + settle
     DESCEND --> CLOSE : grasp 도달
     CLOSE --> VERIFY : 그리퍼 닫기 + settle
