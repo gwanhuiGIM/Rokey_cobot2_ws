@@ -308,6 +308,15 @@ class TaskManager(Node):
         self.place_pub = self.create_publisher(String, '/pick/place_location_active', TARGET_QOS)
         self.create_subscription(String, '/pick/place_location', self._on_place_location,
                                  TARGET_QOS, callback_group=cb)
+        # 개체 선정(select_by_point, 2026-08-11) — target/place 와 다른 성격이다: "현재
+        # 설정값"이 아니라 **이번 한 사이클용 데이터**(그 순간 프레임의 픽셀)라 place 처럼
+        # 계속 남아 있으면 다음 pick 이 다른 프레임의 좌표를 재사용해 엉뚱한 물체를
+        # 가리킨다. 그래서 `_place_override`와 달리 **_push_bridge()가 브리지에 실어
+        # 보낸 뒤 바로 지운다**(단발성 소비, 아래 `_pixel_override` 주석 참고).
+        # payload: {"x":px,"y":py,"w":기준폭,"h":기준높이} — vla_command_node 가 채운다
+        # (설계 출처: md/plans/2026-08-08-vla-integration.md §5, vla-bridge-contract.md §2).
+        self.create_subscription(String, '/pick/target_pixel', self._on_target_pixel,
+                                 TARGET_QOS, callback_group=cb)
         self.create_service(Trigger, '/pick/start', self._srv_start, callback_group=cb)
         self.create_service(Trigger, '/pick/approve', self._srv_approve, callback_group=cb)
         self.create_service(Trigger, '/pick/abort', self._srv_abort, callback_group=cb)
