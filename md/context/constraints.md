@@ -1638,3 +1638,22 @@ live_viz 포인트클라우드가 필터 적용 후 오히려 구멍·스파클 
 (스크린샷 확인, 정량 비교는 안 함) `camera.launch.py`를 원래대로 되돌렸다. 원인
 미조사 — 필터 파라미터 값이 부적절했는지, threshold 범위가 실제 작업 거리와 안 맞았는지,
 아니면 다른 원인인지 다음에 다시 시도할 때는 **원인부터 확인하고** 값을 바꾼다.
+
+## require_approval 기본값 OFF — 사용자 결정, 2026-08-11
+
+**승인 게이트(`require_approval`)를 껐다.** launch 인자 기본값(`pick_fsm.launch.py`)과
+`config/pick_fsm.yaml` 둘 다 `false`로 바꿨다 (launch 가 yaml 을 덮으므로 둘 다 false 여야
+실제로 꺼진다 — `pick_fsm.launch.py:122` "yaml 을 먼저 깔고 런치 인자를 그 위에 덮는다").
+
+- **결정 근거(사용자)**: "위험하면 모션플래닝 단계에서 차단된다."
+- **내가 남긴 반론(기록용)**: MoveIt/OMPL 은 **모델에 있는 충돌만** 막는다 — planning scene
+  등록 물체·octomap·자기충돌. **못 막는 것**: 인식오류로 엉뚱한 물체 파지, octomap 에 안 잡힌
+  미모델링 장애물, **사람 손**(scene 에 없음), 모델상 충돌 없지만 실제로 틀린 grasp 포즈.
+  승인 게이트는 이 "플래너가 못 보는 것"을 사람이 보라고 있던 장치였다.
+- **결과**: 승인 게이트가 꺼진 지금 **실기 안전장치는 물리 비상정지 버튼 하나뿐이다.**
+  `WAIT_APPROVAL` 상태는 관측용으로 남고, `_st_wait_approval` 이 `require_approval=false` 면
+  한 tick 만에 STOW 로 넘어간다.
+- **VLA 영향**: `/vla/pick_status` 의 `waiting_approval` 이 이제 사실상 항상 false
+  (vla-bridge-contract.md §4 갱신). VLA 는 여전히 승인을 못 보내고, 보낼 필요도 없어졌다.
+- **되돌리려면**: `require_approval:=true` (launch·yaml 둘 다, 또는 런타임
+  `ros2 param set /task_manager require_approval true` — 매 tick live 로 읽힌다).

@@ -371,10 +371,12 @@ def select_by_point(seg, label_map, X, Y, tx, ty, radius, margin):
     `obj_N` 대신 base XY 를 선택 키로 쓰는 이유: 라벨 번호는 프레임마다 바뀌어
     VLA(다른 프로세스·다른 프레임 촬영 시점)와 대조가 안 되지만 좌표는 프레임 독립이다.
 
-    각 후보의 위치는 마스크 픽셀의 base X/Y **중앙값**(centroid 근사)이다. `radius` 안에
-    후보가 없으면 실패(거부) — 틀린 물체를 자신 있게 집는 것보다 안전하다. 2등과의 거리차가
-    `margin` 미만이면 모호로 보고 **역시 거부한다**(`refuse_ambiguous_match`) — 호출자가
-    이 검사를 끄려면 `margin=float('-inf')`를 넘긴다.
+    각 후보의 위치는 마스크 픽셀의 base X/Y **중앙값**(centroid 근사)이다. 후보가 2개 이상일
+    때만 거리·모호성으로 가린다: `radius` 안에 1등이 없으면 거부, 2등과의 거리차가 `margin`
+    미만이면 모호로 보고 **역시 거부한다**(`refuse_ambiguous_match`, 끄려면 `margin=-inf`).
+    **후보가 1개뿐이면 radius/margin 검사를 건너뛰고 그 하나를 쓴다** — 픽셀은 같은 class
+    여럿을 구분하려고 받는 값이라 후보가 하나면 애매함 자체가 없다(설계 §9). 유일 후보를
+    좌표가 좀 어긋났다고(구멍/물체 이동) 버리는 것보다 그 하나를 쓰는 게 낫다. (후보 0개는 거부.)
 
     `label_map` 의 `obj_` 로 시작하지 않는 항목(`ground`/`table` 등)은 지우지 않는다 —
     GraspGenX 점군에는 라벨과 무관하게 유효 depth 가 전부 들어가므로, 선택 안 된 물체의
@@ -390,11 +392,17 @@ def select_by_point(seg, label_map, X, Y, tx, ty, radius, margin):
         cx, cy = float(np.median(X[m])), float(np.median(Y[m]))
         cand.append((float(np.hypot(cx - tx, cy - ty)), name, v))
     cand.sort(key=lambda t: t[0])
-    if not cand or cand[0][0] > radius:
-        return None, None, f'({tx:+.3f},{ty:+.3f}) 반경 {radius:.3f}m 안에 물체 없음'
-    if len(cand) > 1 and cand[1][0] - cand[0][0] < margin:
-        return None, None, (f'모호: {cand[0][1]}({cand[0][0]:.3f}m) vs '
-                            f'{cand[1][1]}({cand[1][0]:.3f}m) — 안 집는 게 낫다')
+    if not cand:
+        return None, None, f'({tx:+.3f},{ty:+.3f}) 근처에 후보(obj_) 자체가 없음'
+    # 후보가 여럿일 때만 거리·모호성으로 가린다. 1개뿐이면 애매함이 없어(픽셀은 같은 class
+    # 여럿을 구분하려는 값) radius/margin 검사를 건너뛴다 — 설계 §9. 유일 후보를 radius 밖
+    # 이라고 버리는 것보다, class 가 맞은 그 하나를 쓰는 게 낫다.
+    if len(cand) > 1:
+        if cand[0][0] > radius:
+            return None, None, f'({tx:+.3f},{ty:+.3f}) 반경 {radius:.3f}m 안에 물체 없음'
+        if cand[1][0] - cand[0][0] < margin:
+            return None, None, (f'모호: {cand[0][1]}({cand[0][0]:.3f}m) vs '
+                                f'{cand[1][1]}({cand[1][0]:.3f}m) — 안 집는 게 낫다')
     out = seg.copy()
     for _, _, v in cand[1:]:
         out[out == v] = 0

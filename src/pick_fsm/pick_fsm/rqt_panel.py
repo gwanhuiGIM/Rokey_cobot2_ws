@@ -52,11 +52,12 @@ CONFIRM = {
                         '상태라면 누르기 전에 내려놓으세요.'),
 }
 
-#: task_manager.PLACE_LOCATIONS 중 아직 teach 안 된 것들. yaml 의 place_table/discard_joints_deg
-#: 가 home_joints_deg 를 그대로 복사한 placeholder 인 동안은 콤보에서 원클릭으로 못 나가게 막는다
-#: (cross-review 2026-08-10: 확인창 없이 고르면 홈 자세에서 그리퍼가 열려 물체가 떨어진다).
-#: 실기 teach 를 마치면 여기서 빼면 된다.
-UNVERIFIED_PLACE_LOCATIONS = {'table', 'discard'}
+#: task_manager.PLACE_LOCATIONS 중 아직 teach 안 된 것들 — 고를 때 확인창을 띄운다.
+#: (placeholder 가 home_joints_deg 복사이던 시절엔 확인창 없이 고르면 홈 자세에서 그리퍼가
+#:  열려 물체가 떨어졌다 — cross-review 2026-08-10.)
+#: 2026-08-11: 'table'/'discard' 실기 teach 완료(pick_fsm.yaml)로 비웠다 — 남은 위치 없음.
+#: 앞으로 teach 안 된 위치를 추가하면 그 이름을 여기 넣으면 확인창이 되살아난다.
+UNVERIFIED_PLACE_LOCATIONS = set()
 
 #: 서비스가 이 시간 안에 응답 안 하면 결과 표시에서 "시간초과"로 걷어낸다.
 #: (버튼 자체가 fire-and-forget 라 로봇 명령이 취소되는 건 아니다 — UI 표시만 정리한다)
@@ -224,8 +225,9 @@ class PickFsmPanel(Plugin):
 
         task_box = QGroupBox('작업')
         task_row = QHBoxLayout(task_box)
+        # '홈'은 IDLE 에서만 먹는다(/pick/home) — '리셋'(SAFE_STOP 전용)과 상태가 다르다.
         for text, srv in (('시작', '/pick/start'), ('승인', '/pick/approve'),
-                          ('리셋', '/pick/reset')):
+                          ('리셋', '/pick/reset'), ('홈', '/pick/home')):
             task_row.addWidget(self._make_button(node, text, Trigger, srv))
         outer.addWidget(task_box)
 

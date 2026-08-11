@@ -32,6 +32,7 @@ class State(Enum):
     VERIFY = auto()          # 잡혔는지 확인
     RELEASE_RETRY = auto()   # 놓치면 열고 재시도
     LIFT = auto()            # 들어올리기 (물체 attach 된 상태)
+    WAIT_PLACE_TARGET = auto()  # 들어올린 뒤 place 미지정 — 물체 문 채 set_place 대기
     PLACE = auto()           # 놓을 자세로 이동
     PLACE_RETRY = auto()     # 놓기 계획/이동 실패 — 물체 문 채 정지, 사람이 위치 바꿔 재시도
     RELEASE = auto()         # 그리퍼 열기 + detach
@@ -43,7 +44,9 @@ class State(Enum):
 
 #: 허용 전이. {현재 상태: {갈 수 있는 상태들}}
 TRANSITIONS: dict[State, set[State]] = {
-    State.IDLE:           {State.LISTENING, State.PERCEIVE},
+    # HOME: /pick/home(음성/VLA·rqt)이 IDLE 에서 홈 관절자세로 보낸다. 도착 후 _home_next
+    # (=IDLE)로 돌아온다 — SAFE_STOP 복구의 HOME 경유와 같은 뼈대다(_srv_home 참고).
+    State.IDLE:           {State.LISTENING, State.PERCEIVE, State.HOME},
     State.LISTENING:      {State.IDLE, State.PERCEIVE, State.SPEAK_FAIL, State.ABORT},
     State.PERCEIVE:       {State.SCENE_PREP, State.SPEAK_FAIL, State.ABORT},
     State.SCENE_PREP:     {State.PLAN, State.ABORT},
@@ -65,7 +68,12 @@ TRANSITIONS: dict[State, set[State]] = {
     # XY 로 못 빼고 높이로만 구분한다). HOME 도착 후 어디로 갈지는
     # task_manager._home_next 가 정한다.
     State.RELEASE_RETRY:  {State.HOME, State.ABORT},
-    State.LIFT:           {State.PLACE, State.ABORT},
+    # LIFT -> WAIT_PLACE_TARGET: 이번 pick 이 place 를 지정 안 했으면(cmd:pick place 생략,
+    # vla_command_node 가 /pick/place_pending=true 로 알림) 자동으로 basket 에 놓지 않고
+    # 물체를 문 채 set_place 를 기다린다. place 를 지정했으면 지금처럼 곧장 PLACE(하위호환).
+    State.LIFT:           {State.PLACE, State.WAIT_PLACE_TARGET, State.ABORT},
+    # set_place(/pick/place_location)가 오면 PLACE, 안 오면 타임아웃 후 기본 위치로 PLACE.
+    State.WAIT_PLACE_TARGET: {State.PLACE, State.ABORT},
     # PLACE 가 motion_retries 까지 소진하면 곧장 ABORT 가 아니라 PLACE_RETRY 로 간다 —
     # 물체를 이미 들고 있어서(HOLDING_STATES) 재인식부터 다시 하는 SAFE_STOP 복구보다
     # "다른 위치로 다시 계획"이 훨씬 싸고 안전하다(재촬영 없음). 사람이 /pick/retry_place
@@ -84,7 +92,8 @@ MOTION_STATES = frozenset({State.APPROACH, State.DESCEND, State.LIFT, State.PLAC
 
 #: 물체를 물고 있을 수 있는 상태. 여기서 ABORT 가 나도 **그리퍼를 열지 않는다** —
 #: 들고 있던 걸 떨어뜨리는 게 멈춰 있는 것보다 위험하다.
-HOLDING_STATES = frozenset({State.VERIFY, State.LIFT, State.PLACE, State.PLACE_RETRY})
+HOLDING_STATES = frozenset({State.VERIFY, State.LIFT, State.WAIT_PLACE_TARGET,
+                            State.PLACE, State.PLACE_RETRY})
 
 
 def is_allowed(src: State, dst: State) -> bool:

@@ -16,7 +16,11 @@
 ⚠️ **이 노드는 항상 실행한다.** `dry_run`(plan_only) 파라미터는 2026-08-09 제거했다 —
    실기 모션 데이터 수집 단계로 넘어갔고, 팔이 안 움직이는데 그리퍼만 실제로 개폐되는
    반쪽 안전(`_move()`만 게이트되고 `rg2.*`는 안 됨)이 오히려 오해를 낳았다.
-   남은 안전장치는 `require_approval:=true`(기본값)와 **물리 비상정지 버튼**이다.
+   🔴 `require_approval` 기본값은 2026-08-11 사용자 결정으로 **false 로 뒤집혔다**
+   (launch·yaml 둘 다). 승인 게이트가 꺼진 지금 남은 실기 안전장치는 **물리 비상정지
+   버튼 하나뿐**이다. WAIT_APPROVAL 은 여전히 상태로 남아 있고(관측용), require_approval
+   이 false 면 `_st_wait_approval` 이 한 tick 만에 STOW 로 넘어간다. 다시 켜려면
+   `require_approval:=true`.
 """
 
 import json
@@ -31,7 +35,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Int8, String
+from std_msgs.msg import Bool, Int8, String
 from std_srvs.srv import Trigger
 
 from pick_fsm import geometry as geo
@@ -113,6 +117,10 @@ PARAM_DEFAULTS = {
     # `dry_run`(plan_only) 은 없다 — 2026-08-09 제거. 모듈 docstring 참고.
     'require_approval': True,        # false 로 두면 사람 승인 없이 실행한다
     'approval_timeout_sec': 300.0,
+    # WAIT_PLACE_TARGET(들어올린 뒤 place 미지정 대기)의 타임아웃. 사람이 이 안에 set_place
+    # 를 안 보내면 파라미터 기본 위치(place_location, 보통 basket)에 자동으로 내려놓는다
+    # (2026-08-11 사용자 결정 — 물체를 든 채 무한 대기는 안전하지 않다. constraints 참고).
+    'wait_place_timeout_sec': 60.0,
 
     # MoveIt
     'planning_group': 'manipulator',
@@ -153,10 +161,11 @@ PARAM_DEFAULTS = {
     'max_reach_m': 0.900,            # M0609 URDF 실측 (shoulder 기준)
     'home_joints_deg': [0.0, 0.0, 90.0, 0.0, 90.0, 0.0],     # robot_control JReady
     'place_joints_deg': [4.0, 38.0, 64.0, -0.1, 78.0, 4.0],  # robot_control BUCKET_POS ('basket')
-    # UNVERIFIED: 아래 둘은 teach 된 적 없다 — home_joints_deg 를 임시로 복사해 둔 것뿐이다.
-    # 실기에서 안전한 자세로 다시 잡기 전에는 'table'/'discard' 를 쓰지 말 것.
-    'place_table_joints_deg': [-131.32, -6.53, 119.71, -0.08, 67.19, -12.96],
-    'place_discard_joints_deg': [-185.57, 39.37, 107.75, -0.25, 33.09, -67.15],
+    # 2026-08-11 실기 teach 완료 — 값은 pick_fsm.yaml(정본)의 교시값과 맞춰 둔다. yaml 이
+    # 런타임엔 이 기본값을 이기지만, yaml 없이 떴을 때의 fallback 도 안전한 자세라야 한다.
+    # 🔴 관절값은 교시됐으나 pick_fsm 통합 사이클은 아직 미검증(yaml 주석 참고).
+    'place_table_joints_deg': [-130.07, -1.77, 119.41, 0.0, 62.36, 68.8],
+    'place_discard_joints_deg': [37.0, 42.0, 47.0, 180.0, -92.0, 40.0],
     # PLACE_LOCATIONS 의 키 중 하나('basket'|'table'|'discard'). 런타임엔 /pick/place_location
     # (rqt 패널)이 이 값을 이긴다 — /pick/target 과 같은 패턴.
     'place_location': 'basket',
@@ -315,6 +324,11 @@ class TaskManager(Node):
         self.place_pub = self.create_publisher(String, '/pick/place_location_active', TARGET_QOS)
         self.create_subscription(String, '/pick/place_location', self._on_place_location,
                                  TARGET_QOS, callback_group=cb)
+        # 이번 pick 이 place 를 지정 안 했는지(True=미지정). vla_command_node 가 pick 마다
+        # 쏜다 — place_location(영구 설정)과 달리 "이 요청에 place 가 없었다"는 요청별
+        # 사실이라 별도 채널이다. rqt/수동 경로는 이 토픽을 안 써서 항상 기존 동작(자동 place).
+        self.create_subscription(Bool, '/pick/place_pending', self._on_place_pending,
+                                 TARGET_QOS, callback_group=cb)
         # 개체 선정(select_by_point, 2026-08-11) — target/place 와 다른 성격이다: "현재
         # 설정값"이 아니라 **이번 한 사이클용 데이터**(그 순간 프레임의 픽셀)라 place 처럼
         # 계속 남아 있으면 다음 pick 이 다른 프레임의 좌표를 재사용해 엉뚱한 물체를
@@ -328,6 +342,7 @@ class TaskManager(Node):
         self.create_service(Trigger, '/pick/approve', self._srv_approve, callback_group=cb)
         self.create_service(Trigger, '/pick/abort', self._srv_abort, callback_group=cb)
         self.create_service(Trigger, '/pick/reset', self._srv_reset, callback_group=cb)
+        self.create_service(Trigger, '/pick/home', self._srv_home, callback_group=cb)
         self.create_service(Trigger, '/pick/retry_place', self._srv_retry_place,
                             callback_group=cb)
 
@@ -351,6 +366,10 @@ class TaskManager(Node):
         self._target_override = None   # `/pick/target` 로 들어온 값. None = 파라미터를 쓴다
         self.place_location = ''
         self._place_override = None    # `/pick/place_location` 로 들어온 값. None = 파라미터를 쓴다
+        # `/pick/place_pending` 로 들어온 "이번 요청은 place 미지정" 신호. `_st_idle` 이
+        # 사이클 시작 때 `_wait_place` 로 latch(단발성)한다. True 면 LIFT 후 WAIT_PLACE_TARGET.
+        self._place_pending_req = False
+        self._wait_place = False       # 이번 사이클이 place 대기 경로인지 (idle 에서 확정)
         # `/pick/target_pixel` 로 들어온 (x,y,w,h). None = 지정 없음(점수 최고, 기존 동작).
         # place 와 달리 **단발성**이다 — `_push_bridge()`가 다음 PERCEIVE 에 실어 보내는
         # 순간 None 으로 되돌린다. 그대로 남겨두면 클래스만 지시한 다음 pick 이 이전
@@ -466,6 +485,12 @@ class TaskManager(Node):
         elif self.state is State.PLACE_RETRY:
             self.place_location = value
             self.get_logger().info(f'놓기 재시도 목적지 변경: {value} — [재시도]를 누르면 이 위치로 간다')
+        elif self.state is State.WAIT_PLACE_TARGET:
+            # 물체를 든 채 놓을 위치를 기다리던 상태 — 값이 오면 곧장 내려놓기로 진행한다
+            # (PLACE_RETRY 와 같은 즉시반영. set_place 명령이 이 경로로 들어온다).
+            self.place_location = value
+            self.get_logger().info(f"놓을 위치 지정: {value} — 내려놓기로 진행한다")
+            self._to(State.PLACE, f"놓을 위치 '{value}' 지정됨")
         else:
             self.get_logger().warn(
                 f'내려놓을 위치 지정 {value} — 진행 중인 {self.state.name} 에는 적용하지 않는다. '
@@ -474,6 +499,15 @@ class TaskManager(Node):
 
     def _publish_place(self, value: str):
         self.place_pub.publish(String(data=str(value)))
+
+    def _on_place_pending(self, msg):
+        """이번 pick 이 place 를 지정 안 했는지(True). `_st_idle` 이 사이클 시작 때 latch 한다.
+
+        단발성이라 여기서는 값만 붙잡는다 — place_location 처럼 진행 중 상태를 즉시 바꾸지
+        않는다(요청별 사실이라 다음 사이클 경계에서만 의미가 있다). 놓치면 False(기존 동작)로
+        떨어지므로 실패 방향이 안전하다(자동 basket place).
+        """
+        self._place_pending_req = bool(msg.data)
 
     def _on_target_pixel(self, msg):
         """개체 선정 좌표(픽셀). `{"x":..,"y":..,"w":..,"h":..}` 가 아니면 조용히 버린다.
@@ -536,6 +570,23 @@ class TaskManager(Node):
         # 오인식한다. HOME 을 거쳐야 한다.
         self._home_next = State.IDLE
         self._to(State.HOME, 'SAFE_STOP 복구 — 홈으로 복귀 후 재개')
+        res.success, res.message = True, 'HOME 복귀 후 IDLE'
+        return res
+
+    def _srv_home(self, _req, res):
+        """홈 관절자세로 복귀시킨다. IDLE 에서만 먹는다 (음성/VLA `cmd:"home"` · rqt '홈').
+
+        SAFE_STOP 복구(`_srv_reset`)와 달리 "정상 대기 중 홈으로 보내달라"는 요청이다 —
+        진행 중인 pick 사이클 도중에는 받지 않는다(도중 홈 이동은 물체를 문 채일 수 있어
+        위험하다. 그럴 땐 `/pick/abort` 뒤 `/pick/reset` 경로를 쓴다). 도착 후 `_home_next`
+        (=IDLE)로 돌아온다. 승인 게이트는 없다 — SAFE_STOP 리셋의 HOME 경유와 같은 성격의
+        고정 관절이동이라 `require_approval` 을 태우지 않는다(계약 §10 리셋과 동일).
+        """
+        if self.state is not State.IDLE:
+            res.success, res.message = False, f'IDLE 이 아니다 (현재 {self.state.name})'
+            return res
+        self._home_next = State.IDLE
+        self._to(State.HOME, '홈 복귀 요청')
         res.success, res.message = True, 'HOME 복귀 후 IDLE'
         return res
 
@@ -672,9 +723,17 @@ class TaskManager(Node):
         self.alternatives = []
         self.solutions.clear()
         self.poses.clear()
-        # `/pick/place_location` 로 들어온 값이 파라미터를 이긴다 (target 과 같은 패턴).
-        self.place_location = (self._place_override if self._place_override is not None
-                               else self.p('place_location'))
+        # 이번 사이클이 place 대기 경로인지 확정한다(단발성 신호를 여기서 latch·소비).
+        self._wait_place = self._place_pending_req
+        self._place_pending_req = False
+        if self._wait_place:
+            # place 미지정 pick — LIFT 후 set_place 를 기다린다. 타임아웃 시 내려놓을
+            # fallback 은 파라미터 기본 위치(override 가 아니라 — 이 요청은 위치를 안 정했다).
+            self.place_location = self.p('place_location')
+        else:
+            # `/pick/place_location` 로 들어온 값이 파라미터를 이긴다 (target 과 같은 패턴).
+            self.place_location = (self._place_override if self._place_override is not None
+                                   else self.p('place_location'))
         self._publish_place(self.place_location)
         if self.p('voice_enabled'):
             self._to(State.LISTENING)
@@ -1156,7 +1215,31 @@ class TaskManager(Node):
         self._to(State.HOME, f'재인식 전 홈 복귀 ({self._retry_grip}회차)')
 
     def _st_lift(self):
-        self._move('lift', State.PLACE, State.ABORT)
+        # place 미지정 pick 이면 자동으로 놓지 않고 set_place 를 기다린다(WAIT_PLACE_TARGET).
+        nxt = State.WAIT_PLACE_TARGET if self._wait_place else State.PLACE
+        self._move('lift', nxt, State.ABORT)
+
+    def _st_wait_place_target(self):
+        """들어올린 뒤 place 미지정 — 물체를 문 채 set_place(/pick/place_location)를 기다린다.
+
+        놓을 위치가 오면 `_on_place_location`(WAIT_PLACE_TARGET 분기)이 즉시 PLACE 로 보낸다.
+        사람이 답을 안 하면 무한정 팔을 든 채 기다리는 게 위험하므로, wait_place_timeout_sec
+        후 파라미터 기본 위치(place_location, 보통 basket)에 자동으로 내려놓는다
+        (2026-08-11 사용자 결정 — constraints.md). SAFE_STOP/WAIT_APPROVAL 처럼 사람을
+        기다리는 상태라 DEFAULT_TIMEOUTS 에는 안 넣고 여기서 직접 잰다.
+        """
+        timeout = float(self.p('wait_place_timeout_sec'))
+        if self._elapsed() > timeout:
+            self.place_location = self.p('place_location')
+            self._publish_place(self.place_location)
+            self._to(State.PLACE,
+                     f"place 대기 {timeout:.0f}s 초과 — 기본 위치 '{self.place_location}' 에 내려놓는다")
+            return
+        if self._elapsed() > self._nag * 10.0:
+            self._nag += 1
+            self.get_logger().info(
+                "놓을 위치 대기 중 — set_place(/vla) 또는 rqt '내려놓을 위치' 로 지정. "
+                f"{timeout:.0f}s 후 기본 '{self.p('place_location')}' 에 내려놓는다")
 
     def _st_place(self):
         # _st_idle 이 잠근 self.place_location 을 쓴다. 정상 경로로는 여기 도달할 때 항상

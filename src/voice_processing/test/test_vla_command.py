@@ -221,7 +221,7 @@ def test_base_xy_is_ignored_not_used():
 
 # ── cmd 라우팅 (rqt 패널 버튼 대응) ──────────────────────────
 def test_classify_control_cmds():
-    for word in ('start', 'abort', 'reset'):
+    for word in ('start', 'abort', 'reset', 'home'):
         assert classify_cmd(word) == 'control'
 
 

@@ -38,11 +38,30 @@ VLA 는 아무 때나 쏘고(push), FSM 은 `LISTENING` 에 들어와야 물어�
 
 rqt 패널(`pick_fsm.rqt_panel`)의 시작/중단/리셋 버튼은 `/pick/start`·`/pick/abort`·
 `/pick/reset`(전부 `std_srvs/Trigger`)을 그대로 부른다. 이 노드도 `cmd` 값으로 같은
-서비스를 부르므로 음성/VLA 로 그 세 버튼을 대신할 수 있다:
+서비스를 부르므로 음성/VLA 로 그 버튼들을 대신할 수 있다:
 
     {"cmd": "start"}
     {"cmd": "abort", "reason": "취소"}
     {"cmd": "reset"}
+    {"cmd": "home"}
+
+⚠️ `reset` 과 `home` 은 먹히는 상태가 다르다: `reset`(`/pick/reset`)은 **SAFE_STOP 에서만**
+(안전정지 복구), `home`(`/pick/home`)은 **IDLE 에서만**(정상 대기 중 홈 복귀). 둘 다 성공하면
+승인 없이 HOME 관절자세까지 실제로 움직인다 — 진행 중 사이클 도중에는 둘 다 거부한다.
+
+## `place` 를 나중에 정하기 — `pick`(place 생략) → `WAIT_PLACE_TARGET` → `set_place`
+
+`cmd:"pick"` 에 `place` 를 안 넣으면(그리고 `wait_place_when_omitted=true`, 기본), FSM 은
+물체를 든 뒤 **자동으로 basket 에 놓지 않고** `WAIT_PLACE_TARGET` 에서 멈춰 목적지를
+기다린다. 그때 목적지를 정해 보낸다:
+
+    {"cmd": "pick", "class": "orange"}              # place 없음 → 들고 대기
+    {"cmd": "set_place", "place": "table"}          # 대기 중 목적지 지정 → 내려놓기 진행
+
+`set_place` 는 **`WAIT_PLACE_TARGET` 에서만** 먹는다(아니면 거부). 사람이 목적지를 안 정하면
+`task_manager` 가 `wait_place_timeout_sec`(기본 60s) 후 기본 위치(basket)에 내려놓는다 —
+그 안전 정책은 cobot2_ws 몫이다(계약 §13). `wait_place_when_omitted=false` 로 두면 이 경로가
+꺼지고 예전처럼 place 생략 = basket 즉시 놓기가 된다.
 
 ## 🔴 `/pick/approve`(승인 버튼)는 절대 부르지 않는다
 
@@ -82,9 +101,10 @@ rqt 패널(`pick_fsm.rqt_panel`)의 시작/중단/리셋 버튼은 `/pick/start`
 세 고정 관절자세)을 갖게 되면서 **여기서도 받는다.** 좌표가 아니라 그 세 이름 중 하나만
 받는다 — 이 값은 그대로 `/pick/place_location` 토픽으로 넘어간다(`_publish_place`,
 `task_manager._on_place_location` 과 같은 계약). `basket`/`table`/`discard` 가 아닌 값은
-거부한다. `table`/`discard` 관절값은 **아직 teach 되지 않은 자리표시자**다 —
-`pick_fsm/config/pick_fsm.yaml` 의 `place_table_joints_deg`/`place_discard_joints_deg`
-UNVERIFIED 주석 참고. 안전한 자세로 잡히기 전까지는 VLA 쪽에서도 `basket` 만 쓸 것.
+거부한다. `table`/`discard` 관절값은 2026-08-11 실기 teach 완료됐다
+(`pick_fsm/config/pick_fsm.yaml` 참고) — 셋 다 그대로 쓸 수 있다. 🔴 단 관절값만
+교시됐고 pick_fsm 통합 사이클은 아직 미검증이다. VLA 쪽 `allow_unverified_place`
+게이트는 그쪽 세션에서 풀어야 한다(cobot2_ws 는 세 값 다 이미 받는다).
 
 **미구현 필드를 조용히 무시하지 않는다.** `pixel_policy` 가 그 처리를 정한다:
 `warn` 이면 클래스만으로 진행하되 `/vla/pick_result` 의 `ignored` 로 되돌려주고, `reject` 면
@@ -107,7 +127,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Int8, String
+from std_msgs.msg import Bool, Int8, String
 from std_srvs.srv import Trigger
 
 #: 지시 JSON 과 결과 JSON 은 유실되면 안 된다 — 영상과 달리 초당 한 건도 안 되는 트래픽이다.
@@ -148,6 +168,10 @@ BYPASS_STATE = 'PERCEIVE'
 #: 몫이라 자동화 경로는 만들지 않는다(§0-B) — 이건 표시용 신호일 뿐이다.
 WAIT_APPROVAL_STATE = 'WAIT_APPROVAL'
 
+#: FSM 이 들어올린 뒤 place 를 기다리는 상태. `cmd:"set_place"` 는 이 상태에서만 먹는다 —
+#: `task_manager.State.WAIT_PLACE_TARGET` 과 이름이 같아야 한다(패키지 경계라 값만 복제).
+WAIT_PLACE_STATE = 'WAIT_PLACE_TARGET'
+
 #: 로봇이 안전정지류라 명령을 못 받는 상태 코드. `pick_fsm.robot_safety_node.UNSAFE_STATES`
 #: 가 정본 — 패키지 경계를 넘는 import 는 안 하므로(`PLACE_VALUES` 와 같은 이유) 값만 복제한다.
 #: 저쪽이 바뀌면 손으로 맞춘다.
@@ -160,7 +184,8 @@ PICK_CMDS = ('pick', 'pick_and_place')
 #: rqt 패널 버튼 중 **안전한 것들**. `Trigger` 서비스를 그대로 호출한다 — LISTENING 래치를
 #: 거치지 않고 즉시 나간다(사람이 아무 때나 rqt 버튼을 누르는 것과 같은 성격이라 pick 지시의
 #: TTL·대기 로직이 안 맞는다). 파라미터 이름은 `<cmd>_service` 로 통일했다.
-CONTROL_CMDS = ('start', 'abort', 'reset')
+#: `home` 은 IDLE 에서만 먹는다(`task_manager._srv_home`) — reset(SAFE_STOP 전용)과 다르다.
+CONTROL_CMDS = ('start', 'abort', 'reset', 'home')
 
 #: rqt 패널의 '승인' 버튼에 해당한다. **의도적으로 어떤 파라미터로도 못 연다** — 계획 §0-B.
 #: cmd 로 오면 무조건 거부하고, 그 사유를 그대로 알려준다.
@@ -331,9 +356,15 @@ class VlaCommandNode(Node):
         self.declare_parameter('start_service', '/pick/start')
         self.declare_parameter('abort_service', '/pick/abort')
         self.declare_parameter('reset_service', '/pick/reset')
+        self.declare_parameter('home_service', '/pick/home')
         # `task_manager._on_place_location` 이 듣는 그 토픽이다 — 이름을 바꾸면 저쪽 launch
         # 인자도 같이 바꿔야 매칭된다.
         self.declare_parameter('place_location_topic', '/pick/place_location')
+        # `task_manager._on_place_pending` 이 듣는 토픽 — pick 마다 "place 미지정?"을 알린다.
+        self.declare_parameter('place_pending_topic', '/pick/place_pending')
+        # true 면 place 없는 pick 을 FSM 이 WAIT_PLACE_TARGET 로 붙잡게 한다(place_pending=true).
+        # false 면 예전처럼 곧장 파라미터 기본 위치(basket)에 놓는다 — 전환기 롤백 스위치.
+        self.declare_parameter('wait_place_when_omitted', True)
         # `task_manager._on_target_pixel` 이 듣는 토픽 — pixel_policy=select 일 때만 쓴다.
         self.declare_parameter('target_pixel_topic', '/pick/target_pixel')
         # 🔴 승인 서비스는 파라미터로도 두지 않는다 — 있으면 언젠가 켜진다 (§0-B).
@@ -361,6 +392,8 @@ class VlaCommandNode(Node):
         self._listen_budget = float(self.get_parameter('fsm_listening_timeout_sec').value)
         self._margin = float(self.get_parameter('listening_margin_sec').value)
         self._auto_start = bool(self.get_parameter('auto_start').value)
+        self._wait_place_when_omitted = bool(
+            self.get_parameter('wait_place_when_omitted').value)
 
         # 여기서 죽는 것이 맞다. 예산을 넘기면 **매 사이클** FSM 이 먼저 ABORT 하고
         # SAFE_STOP 에 들어가 `/pick/reset` 없이는 못 나온다 — 기동 때 한 번 막는 게 싸다.
@@ -392,6 +425,10 @@ class VlaCommandNode(Node):
         # QoS 는 `PLACE_QOS`(TRANSIENT_LOCAL) — task_manager 구독이 이걸 요구한다(위 정의부 참고).
         self.place_pub = self.create_publisher(
             String, str(self.get_parameter('place_location_topic').value), PLACE_QOS)
+        # place 미지정 여부를 pick 마다 알린다. place 와 같은 TRANSIENT_LOCAL — 늦게 붙어도
+        # 마지막 값을 받아야 `_st_idle` 이 사이클 시작 때 latch 할 수 있다.
+        self.place_pending_pub = self.create_publisher(
+            Bool, str(self.get_parameter('place_pending_topic').value), PLACE_QOS)
         # place 와 같은 QoS다 — `task_manager._on_target_pixel` 구독도 TARGET_QOS
         # (= PLACE_QOS 와 값이 같다)다.
         self.pixel_pub = self.create_publisher(
@@ -436,10 +473,13 @@ class VlaCommandNode(Node):
             Trigger, str(self.get_parameter('abort_service').value), callback_group=cb)
         self.reset_cli = self.create_client(
             Trigger, str(self.get_parameter('reset_service').value), callback_group=cb)
+        self.home_cli = self.create_client(
+            Trigger, str(self.get_parameter('home_service').value), callback_group=cb)
         #: `cmd` -> 클라이언트. `_handle_control()` 이 여기서 찾는다 — 서비스 이름은
-        #: 위 세 파라미터로 바뀔 수 있어도 `cmd` 값(start/abort/reset)은 고정이다.
+        #: 위 파라미터로 바뀔 수 있어도 `cmd` 값(start/abort/reset/home)은 고정이다.
         self._control_clients = {
             'start': self.start_cli, 'abort': self.abort_cli, 'reset': self.reset_cli,
+            'home': self.home_cli,
         }
 
         self.get_logger().info(
@@ -504,6 +544,12 @@ class VlaCommandNode(Node):
         except (ValueError, TypeError):
             doc, cmd_word, rid = None, '', ''
 
+        # set_place 는 새 pick 을 시작하지 않는다 — 이미 물체를 든 채 대기 중인 FSM 에
+        # 놓을 위치만 뒤늦게 건넨다. pick/control 어느 갈래도 아니라 여기서 먼저 가로챈다.
+        if doc is not None and cmd_word == 'set_place':
+            self._handle_set_place(doc, rid)
+            return
+
         kind = classify_cmd(cmd_word) if doc is not None else 'pick'
 
         if kind == 'blocked':
@@ -543,6 +589,29 @@ class VlaCommandNode(Node):
                 self._publish_result(rid, False, res.message or f'{cmd} 거절됨', 'rejected')
         fut.add_done_callback(_done)
 
+    def _handle_set_place(self, doc: dict, rid: str):
+        """`WAIT_PLACE_TARGET` 에서 놓을 위치를 뒤늦게 채운다 — `/pick/place_location` 로 publish.
+
+        pick 지시와 달리 래치를 안 거친다(새 사이클을 시작하지 않는다). FSM 이 지금 place 를
+        기다리는 중일 때만 먹는다 — 아니면 거부한다(엉뚱한 시점에 목적지만 바뀌는 걸 막는다).
+        상태 판정은 이 노드가 이미 받고 있는 `/pick/state`(`self._state`)로 한다.
+        """
+        place = doc.get('place')
+        if not isinstance(place, str) or place.strip() not in PLACE_VALUES:
+            why = f'place 는 {sorted(PLACE_VALUES)} 중 하나여야 한다 (받은 값: {place!r})'
+            self.get_logger().warn(f"[{rid or '-'}] set_place 거부: {why}")
+            self._publish_result(rid, False, why, 'rejected')
+            return
+        if self._state != WAIT_PLACE_STATE:
+            why = (f'set_place 는 {WAIT_PLACE_STATE} 에서만 먹는다 '
+                   f'(현재 {self._state or "?"})')
+            self.get_logger().warn(f"[{rid or '-'}] set_place 거부: {why}")
+            self._publish_result(rid, False, why, 'rejected')
+            return
+        self.place_pub.publish(String(data=place.strip()))
+        self.get_logger().info(f"[{rid or '-'}] set_place: {place.strip()} — 내려놓기로 진행")
+        self._publish_result(rid, True, f"놓을 위치 '{place.strip()}' 전달", 'accepted')
+
     def _on_pick_command(self, raw: str):
         """`cmd: pick|pick_and_place` 를 검증해 래치에 넣는다. 거부는 즉시 회신한다."""
         cmd, why = parse_command(raw, allowed_classes=self._allowed(),
@@ -559,6 +628,15 @@ class VlaCommandNode(Node):
             return
         if why:
             self.get_logger().warn(f"[{cmd['request_id'] or '-'}] {why}")
+
+        # place 미지정 → FSM 이 LIFT 후 set_place 를 기다리게 한다(place_pending=true).
+        # 지정됐거나 롤백 스위치(wait_place_when_omitted=false)면 false 를 쏴 기존처럼 곧장
+        # 파라미터 기본 위치(basket)에 놓는다. place 발행보다 **먼저** 쏜다(같은 순서 이유).
+        pending = cmd['place'] is None and self._wait_place_when_omitted
+        self.place_pending_pub.publish(Bool(data=pending))
+        if pending:
+            self.get_logger().info(
+                f"[{cmd['request_id'] or '-'}] place 미지정 — LIFT 후 set_place 를 기다린다")
 
         if cmd['place'] is not None:
             # `task_manager._on_place_location` 이 이 값을 상태와 무관하게 즉시

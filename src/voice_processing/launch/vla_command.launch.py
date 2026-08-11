@@ -16,15 +16,16 @@
     # 같은 클래스 물체가 여럿일 때 VLA 가 pixel 로 어느 개체인지 지목한다(2026-08-11 구현)
     ros2 launch voice_processing vla_command.launch.py pixel_policy:=select
 
-이 노드는 rqt 패널(`pick_fsm.rqt_panel`)의 **시작·중단·리셋** 버튼도 같은 채널로 연다 —
-`{"cmd":"start"}` / `{"cmd":"abort"}` / `{"cmd":"reset"}` 을 `/vla/pick_command` 로 보내면
-그대로 `/pick/start`·`/pick/abort`·`/pick/reset` 을 부른다. **`승인` 버튼(`/pick/approve`)은
+이 노드는 rqt 패널(`pick_fsm.rqt_panel`)의 **시작·중단·리셋·홈** 버튼도 같은 채널로 연다 —
+`{"cmd":"start"}` / `{"cmd":"abort"}` / `{"cmd":"reset"}` / `{"cmd":"home"}` 을
+`/vla/pick_command` 로 보내면 그대로 `/pick/start`·`/pick/abort`·`/pick/reset`·`/pick/home`
+을 부른다(`reset`은 SAFE_STOP, `home`은 IDLE 에서만 먹는다). **`승인` 버튼(`/pick/approve`)은
 빠졌다** — `cmd:"approve"` 는 무조건 거부한다(계획 §0-B, 실기가 실제로 움직이기 전 마지막
 소프트 게이트).
 
 ⚠️ `pick_fsm` 은 `voice:=true`(기본) 로 띄워야 한다. `voice:=false` 면 `LISTENING` 을
-   건너뛰므로 이 노드의 `/get_keyword` 를 아무도 부르지 않는다 — 단, `start`/`abort`/`reset`
-   제어 명령은 `voice` 값과 무관하게 항상 동작한다(별도 서비스라 `/get_keyword` 를 안 거친다).
+   건너뛰므로 이 노드의 `/get_keyword` 를 아무도 부르지 않는다 — 단, `start`/`abort`/`reset`/
+   `home` 제어 명령은 `voice` 값과 무관하게 항상 동작한다(별도 서비스라 `/get_keyword` 를 안 거친다).
 
 ⚠️ 마이크 노드(`get_keyword`)와 **동시에 띄우지 않는다.** 둘 다 `/get_keyword` 를
    제공해서 어느 쪽이 답할지 알 수 없다.

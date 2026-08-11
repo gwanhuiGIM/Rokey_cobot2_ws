@@ -13,8 +13,9 @@
     ros2 launch pick_fsm pick_fsm.launch.py rqt:=false
 
 ⚠️ `dry_run`(계획만) 인자는 2026-08-09 제거했다. **이 런치는 항상 실기를 움직인다.**
-남은 소프트 안전장치는 `require_approval:=true`(기본값) 하나이고, 최종 안전장치는
-비상정지 버튼이다.
+🔴 `require_approval` 기본값은 2026-08-11 사용자 결정으로 **false 로 뒤집혔다** — 승인 없이
+   곧장 실행한다. **지금 실기 안전장치는 물리 비상정지 버튼 하나뿐이다.** 승인을 다시
+   켜려면 `require_approval:=true`.
 
 🔴 **여기 선언되지 않은 인자는 에러도 경고도 없이 조용히 무시된다** (2026-08-09 실측).
    두 번 밟은 자리라 이름을 적어둔다:
@@ -89,8 +90,14 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument('params_file', default_value=default_params,
                               description='파라미터 yaml. 값의 정본은 이 파일이다'),
-        DeclareLaunchArgument('require_approval', default_value='true',
-                              description='false 로 두면 사람 승인 없이 실행한다'),
+        # 🔴 2026-08-11 사용자 결정으로 기본값을 false 로 뒤집었다 — WAIT_APPROVAL 에서
+        #    /pick/approve 를 기다리지 않고 곧장 실행한다. 근거: "위험하면 모션플래닝이
+        #    막는다"(단 플래너는 모델에 있는 충돌만 막는다 — 인식오류·미모델링 장애물·사람은
+        #    못 막는다). 승인 게이트가 없어진 지금 **유일한 실기 안전장치는 물리 비상정지
+        #    버튼뿐**이다. 승인을 다시 켜려면: require_approval:=true.
+        DeclareLaunchArgument('require_approval', default_value='false',
+                              description='true 로 두면 /pick/approve 없이는 APPROACH 로 못 넘어간다. '
+                                          '기본 false = 승인 없이 실행 (2026-08-11 사용자 결정)'),
         DeclareLaunchArgument('voice', default_value='true',
                               description='false 면 get_keyword 를 건너뛰고 target 인자를 쓴다'),
         DeclareLaunchArgument('target', default_value=default_target(),

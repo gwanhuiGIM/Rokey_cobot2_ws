@@ -1,8 +1,17 @@
 <!-- meta
-updated: 2026-08-11 (§12 신설 — `/vla/pick_status` 상태 미러링 채널. cobot2_ws 쪽
-         publisher(`vla_command_node`) 구현 완료, 빌드·단위테스트 34건 PASS. 🔴 실기 미검증.
-         VLA 쪽 subscriber/UI 는 그쪽 세션이 구현. 이전: §9 select_by_point() 구현,
-         §10 rqt↔VLA cmd 대응표, §11 /pick/retry_place 신설)
+updated: 2026-08-11 (§13 WAIT_PLACE_TARGET 신설 — place 없는 pick 은 들고 대기 후 set_place,
+         타임아웃 시 기본 basket. §2 cmd/place 행·§10 표 갱신. states/task_manager/
+         vla_command_node/yaml/PACKAGES 손댐, 빌드·테스트 PASS, 🔴 실기 미검증.
+         + §4 require_approval 기본값 false 로 flip 반영 — 승인 게이트 꺼짐,
+         waiting_approval 사실상 항상 false. + §2/§10 `cmd:"home"` 신설 — /pick/home Trigger, IDLE 에서만, 승인 없이
+         홈 관절이동 후 IDLE. task_manager._srv_home + states IDLE->HOME + vla_command_node
+         라우팅 + rqt '홈' 버튼. 빌드/테스트 PASS, 🔴 실기 미검증.
+         이전: `table`/`discard` 실기 teach 완료 반영 — §5/§7/§10 UNVERIFIED 해제,
+         cobot2_ws 쪽 가드(rqt 확인창·node 기본값·docstring) 전부 걷어냄. 남은 게이트는
+         VLA 쪽 `allow_unverified_place` 뿐. + §12 `/vla/pick_status` 상태 미러링 채널
+         (publisher 구현·빌드·테스트 PASS, 🔴 실기 미검증, subscriber/UI 는 VLA 세션 몫).
+         + §8 단일 후보 short-circuit 구현(후보 1개면 radius/margin 건너뜀, test 9건 PASS).
+         이전: §9 select_by_point(), §10 rqt↔VLA cmd 대응표, §11 /pick/retry_place)
 status:  live — 값이 바뀌면 이 문서를 덮어쓴다 (append 하지 않는다, 히스토리는 안 남긴다)
 owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_processing/vla_command_node.py`
          (`parse_command()`) 코드다 — 이 문서는 그 요약이라 어긋나면 코드가 이긴다.
@@ -45,9 +54,9 @@ owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_proc
 
 | 필드 | 규칙 |
 |---|---|
-| `cmd` | `pick` \| `pick_and_place`(같은 뜻으로 처리) \| `start` \| `abort` \| `reset`. 그 외 값은 거부 |
+| `cmd` | `pick` \| `pick_and_place`(같은 뜻으로 처리) \| `start` \| `abort` \| `reset` \| `home` \| `set_place`. 그 외 값은 거부. `reset`은 **SAFE_STOP 에서만**, `home`은 **IDLE 에서만** 먹는다(그 외 상태면 거부 회신) — 둘 다 성공하면 승인 없이 HOME 관절자세까지 실제로 움직인다. `set_place`는 **WAIT_PLACE_TARGET 에서만**(§13) |
 | `class` | **필수.** 공백 불가 — 있으면 거부(FSM이 응답을 공백으로 쪼개 첫 단어만 쓰기 때문). 여러 개는 콤마(`apple,orange`). `class_name`으로 보내도 받는다(SceneObject 필드명) |
-| `place` | **선택.** `basket` \| `table` \| `discard` 중 하나만 허용, 그 외 값은 거부. 안 보내면 cobot2_ws 파라미터 기본값(`basket`)이 그대로 쓰인다 — §5 참고 |
+| `place` | **선택.** `basket` \| `table` \| `discard` 중 하나만 허용, 그 외 값은 거부. **안 보내면 이제 FSM 이 들어올린 뒤 `WAIT_PLACE_TARGET` 에서 멈춰 `set_place` 를 기다린다**(§13, 2026-08-11 변경 — 예전엔 basket 즉시 놓기였다). 곧장 놓으려면 `place` 를 채워 보낸다. `wait_place_when_omitted=false`(cobot2_ws 파라미터)면 예전 동작(basket) — §5 참고 |
 | `request_id` | 그대로 echo. **결과 판정은 반드시 이걸로 대조** — 핫스팟류 연결 끊김 시 결과를 놓칠 수 있다(QoS VOLATILE) |
 | `stamp_ns` | 에코만 됨. TTL은 cobot2_ws가 **수신 시각 기준**으로 계산하므로 두 PC 시계 동기화 불필요 |
 | `pixel` + `pixel_wh` | **`pixel_policy=select`(신설, 2026-08-11)이면 실제로 개체 선정에 쓰인다** — `select_by_point()`가 cobot2_ws 쪽에 구현됐다(§8/§9, `pixel_x/pixel_y/pixel_w/pixel_h`가 `vla_command_node` → `/pick/target_pixel` → `task_manager` → `grasp_bridge_node` 파라미터로 흐른다). `pixel_policy=warn`(기본)이면 여전히 클래스만으로 진행 + `ignored:["pixel"]`, `reject`면 거부. `pixel`만 보내고 `pixel_wh` 안 보내면 무조건 거부. `pixel_wh`가 지금 depth 프레임 해상도와 다르면(스케일링 추측 안 함) `select`에서 거부. VLA 쪽은 2026-08-11부터 실제로 보낸다 — `SceneObject` bbox 중심 픽셀 + 그 프레임의 `image_width/height`. 두 카메라가 같은 물리 D435i라 재투영 없이 그대로 의미가 있다(§9). 🔴 **cobot2_ws 쪽은 코드·빌드·순수함수 단위테스트까지만 됐다 — 실기 미검증.** `pixel_policy`를 `select`로 올리는 시점(파라미터/launch)은 VLA 쪽 결정 사항 |
@@ -67,6 +76,14 @@ owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_proc
 
 ## 4. 🔴 승인은 이 브리지가 절대 손대지 않는다 — cobot2_ws가 로컬로 처리한다 (2026-08-10)
 
+> ⚠️ **2026-08-11 갱신**: cobot2_ws 쪽 `require_approval` **기본값이 false 로 바뀌었다**
+> (사용자 결정 — launch·yaml 둘 다). 즉 지금은 cobot2_ws 가 **승인을 아예 안 기다리고**
+> 곧장 실행한다. VLA 관점에서 달라지는 것: §12 의 `waiting_approval` 이 이제 사실상 항상
+> false 다(WAIT_APPROVAL 을 한 tick 만에 통과). VLA 는 여전히 승인을 **못 보내고**(아래
+> 원칙 불변), 보낼 필요도 없어졌다. 승인을 다시 켜면(`require_approval:=true`) 아래 원칙이
+> 그대로 복원된다.
+
+
 **그립 승인 UX를 다시 설계할 필요가 없다.** cobot2_ws 쪽에서 graspgenx 판단 화면을 사람이
 직접 보고, **버튼 또는 음성**으로 로컬에서 승인한다(`rqt_panel`의 '승인' 버튼 +
 `approve_listener_node`의 음성 명령 — 둘 다 `/pick/approve`를 호출). 이 브리지는:
@@ -84,8 +101,8 @@ owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_proc
 | 값 | 뜻 | 실기 teach 상태 |
 |---|---|---|
 | `basket` | 장바구니 | ✅ teach 완료 |
-| `table` | 작업테이블 지정 자리 | 🔴 **UNVERIFIED** — home 관절값을 임시로 복사해 둔 자리표시자. 실기에서 안전한 자세로 다시 잡기 전까지 이 값을 실제로 쓰지 말 것 |
-| `discard` | 테이블 밖 폐기 | 🔴 **UNVERIFIED** — 위와 동일 |
+| `table` | 작업테이블 지정 자리 | ✅ **2026-08-11 teach 완료**(펜던트 교시값 입력). 🔴 단 관절값만 검증, pick_fsm 통합 사이클은 미검증 |
+| `discard` | 테이블 밖 폐기 | ✅ **2026-08-11 teach 완료** — 위와 동일 |
 
 ## 6. `class` 허용 목록 불일치 — 지금 그대로 붙이면 일부 거부된다
 
@@ -106,10 +123,11 @@ cobot2_ws는 `allowed_classes`로 들어온 클래스를 검사해서 밖의 이
 ## 7. LLM 툴 스키마 — 지금 상태 (2026-08-11)
 
 - `pick_and_place` 스키마는 `place`(`basket`/`table`/`discard`) 필수 인자를 받는다 —
-  `RobotAction.place` → JSON `place`로 그대로 옮겨간다. `table`/`discard`는 §5의
-  UNVERIFIED 상태라 VLA 쪽 `vla_pick_bridge_node`의 `allow_unverified_place`(기본
-  `false`)가 로컬에서 막는다 — teach 끝나면 VLA 쪽에서 그 파라미터만 뒤집는다, cobot2_ws
-  쪽 조치 불필요.
+  `RobotAction.place` → JSON `place`로 그대로 옮겨간다. `table`/`discard`는 **2026-08-11
+  실기 teach 완료**(§5) — cobot2_ws 는 세 값 다 이미 받는다. 남은 게이트는 VLA 쪽
+  `vla_pick_bridge_node`의 `allow_unverified_place`(기본 `false`)뿐이다 → **VLA 쪽에서 이제
+  `true`로 뒤집으면 실행된다.** cobot2_ws 쪽 조치 불필요(가드 이미 해제). 🔴 관절값만
+  검증이라 통합 사이클 첫 실행은 저속·감시 하에 할 것.
 - `pick_and_hold`/`release` 툴은 스키마에 그대로 남아 있다 — FSM엔 매핑할 데가 없어서
   ("들고만 대기"·"현재 위치에 놓기" 개념이 cobot2_ws 쪽에 없음) 브리지가 로컬에서
   거부하지만, `enable_robot`(VLA 단독 모드, cobot2_ws 없이 도는 경로)에서는 실제로
@@ -141,6 +159,11 @@ cobot2_ws는 `allowed_classes`로 들어온 클래스를 검사해서 밖의 이
     거리차가 `ambiguity_margin_m`(기본 0.02) 미만이면 모호로 보고 **역시 거부**한다
     (`refuse_ambiguous_match`, 기본 true — false면 거리만으로 1등을 쓴다).
     실측 튜닝값 아님(UNVERIFIED) — 실기에서 다시 잡을 값이다.
+  - **단일 후보 short-circuit(2026-08-11 추가, §9 point 3)**: class 필터 뒤 후보가
+    **1개뿐이면 `match_tolerance_m`/`ambiguity_margin_m` 검사를 건너뛰고 그 하나를 쓴다.**
+    → VLA 관점: 픽셀을 보내도 그 class 후보가 씬에 하나면 **픽셀 정확도와 무관하게** 집힌다
+    (구멍·물체 이동으로 좌표가 6cm 어긋나도 유일 후보를 버리지 않는다). radius/모호 거부는
+    같은 class 후보가 2개 이상일 때만 발생한다. 후보 0개면 당연히 거부.
   - 🔴 **실기 미검증.** `colcon build --packages-select graspgenx_perception
     voice_processing pick_fsm` PASS, 순수함수 단위테스트 PASS(`test_select_by_point.py`
     7건 + `test_vla_command.py` pixel_policy=select 케이스 포함 34건 전체) — PERCEIVE
@@ -208,10 +231,12 @@ cobot2_ws 쪽 사람이 로컬 rqt 패널(`rqt --standalone pick_fsm`)에서 누
 | 시작 | `{"cmd":"start"}` | ✅ 노드 단독 실측(왕복) — 🔴 FSM+로봇 연결한 사이클은 미검증 |
 | 중단(ABORT) | `{"cmd":"abort","reason":"..."}` | 〃 |
 | 리셋 | `{"cmd":"reset"}` — SAFE_STOP 에서만 먹히고 성공하면 승인 없이 HOME 까지 실제로 움직인다 | 〃 |
+| 홈 (2026-08-11 신설) | `{"cmd":"home"}` — **IDLE 에서만** 먹히고 성공하면 승인 없이 홈 관절자세로 이동 후 IDLE 복귀. 진행 중 사이클/SAFE_STOP 에서는 거부(그때는 abort→reset 경로) | 〃 |
+| 놓을 위치(대기 중 지정, 2026-08-11 신설) | `{"cmd":"set_place","place":"table"}` — **WAIT_PLACE_TARGET 에서만**(§13). place 없는 pick 이 물체를 든 채 대기할 때 목적지를 뒤늦게 채운다. 그 외 상태면 거부 | ✅ 노드 단독 — 🔴 실기 미검증 |
 | 타겟 선택(콤보 + 적용) | `{"cmd":"pick","class":"..."}` (+ `pixel_policy:=select`면 `pixel`/`pixel_wh`로 개체까지 지정) | ✅ class 만 — 🔴 pixel 개체지정은 PERCEIVE 까지만 관통, 실기 완주 미검증(§8) |
 | **승인** | **없음 — 절대 대체 불가.** `cmd:"approve"`는 코드 경로 자체가 없어 무조건 거부(§4) | ❌ 의도된 설계. 사람이 로컬(rqt 또는 `approve_listener_node` 음성)로 직접 눌러야 한다 |
 | 속도(vel/acc) 조절 | 없음 | ❌ 이 채널 스키마에 없음. `SetParameters`로 `/task_manager`를 직접 불러야 한다(rqt 전용 기능) |
-| 놓을 위치 선택 | `pick_command`의 `place`(§2) | ✅ — 단 `table`/`discard`는 §5 UNVERIFIED |
+| 놓을 위치 선택 | `pick_command`의 `place`(§2) | ✅ — `table`/`discard`도 2026-08-11 teach 완료(§5). VLA 쪽 `allow_unverified_place` 만 풀면 됨(§7) |
 | **놓기 재시도**(2026-08-11 신설, `PLACE_RETRY`) | **없음** | ❌ `/pick/retry_place`(Trigger) 서비스 전용 — 이 브리지 스키마에 없다. VLA 가 이 경로를 쓰려면 스키마에 `cmd:"retry_place"`(+선택 `place`)를 추가 요청해야 한다(cobot2_ws 쪽 미구현, §11 참고) |
 | 그리퍼 파워사이클 · 안전모드(backdrive) · 즉시정지(`/safety/stop`) | 없음 | ❌ 이 채널 스키마에 없음. 하드웨어 안전 조작이라 의도적으로 로컬 전용 |
 
@@ -272,3 +297,36 @@ cobot2_ws(vla_command_node) → /vla/pick_status (std_msgs/String, JSON) → VLA
 --packages-select voice_processing` PASS, 단위테스트 34건 PASS. 🔴 **실기 미검증**(노드
 단독으로 토픽이 나가는지까지는 미확인). **VLA 쪽 subscriber/UI 는 그쪽 세션이 구현** —
 cobot2_ws 조치 불필요.
+
+## 13. `WAIT_PLACE_TARGET` — place 를 나중에 정하는 경로 (2026-08-11 신설)
+
+사용자가 "그거 집어줘"처럼 **목적지 없이 pick 만** 시켰을 때를 위한 상태다. 예전엔 place 를
+생략하면 cobot2_ws 가 파라미터 기본값(basket)으로 곧장 놓기까지 이어갔는데, 이제는:
+
+```
+cmd:"pick" (place 없음) → PERCEIVE…LIFT → [WAIT_PLACE_TARGET] ──set_place──→ PLACE → RELEASE → HOME
+                                              └── wait_place_timeout_sec 후 기본 위치(basket)로 PLACE
+```
+
+- **진입 조건**: `cmd:"pick"` 에 `place` 가 없고 cobot2_ws 파라미터 `wait_place_when_omitted`
+  (기본 true)가 켜져 있을 때. place 를 채워 보내면 예전처럼 곧장 PLACE(하위호환).
+  구현: `vla_command_node` 가 pick 마다 `/pick/place_pending`(Bool, TRANSIENT_LOCAL)을 쏘고,
+  `task_manager._st_idle` 이 사이클 시작 때 latch → LIFT 후 분기.
+- **물체 상태**: `WAIT_PLACE_TARGET` 은 `HOLDING_STATES` 라 **그리퍼가 닫힌 채**(물체를 문 채)
+  대기한다. abort 가 나도 그리퍼를 안 연다.
+- **탈출 (a) 정상**: `{"cmd":"set_place","place":"basket|table|discard"}` → `/pick/place_location`
+  로 전달 → 그 위치로 PLACE. `set_place` 는 이 상태가 아니면 거부한다.
+- **탈출 (b) abort**: 기존 `cmd:"abort"` 경로.
+- **탈출 (c) 타임아웃 = cobot2_ws 안전 정책**: 사람이 `wait_place_timeout_sec`(기본 60s) 안에
+  안 정하면 **기본 위치(basket)에 자동으로 내려놓는다**(→PLACE). 물체를 든 채 무한 대기는
+  안전하지 않다는 판단(2026-08-11 사용자 결정). SAFE_STOP 이 아니라 기본 위치 놓기로 정한 건
+  승인 게이트를 끈 지금 운영 스탠스("일단 완료시키고 비상정지로 잡는다")와 일관된다.
+- **상태 통보**: `/pick/state` 와 `/vla/pick_status.fsm` 에 `WAIT_PLACE_TARGET` 이 그대로 실린다
+  (WAIT_APPROVAL 을 쓰던 것과 같은 패턴) — VLA UI 는 이 값을 보고 "지금 어디 놓을지 물어볼
+  때"로 인식하면 된다. 최초 `accepted` 는 non-terminal 유지(아직 진행 중).
+
+**VLA 쪽 후속 작업(그쪽 세션)**: `agent/tools.py` 에서 `pick_and_place` 의 place 를 optional
+로 하거나 pick/set_place 툴 분리 · `pick_bridge.py` 의 `FSM_HOLDING_STATES`/상태표에
+`WAIT_PLACE_TARGET` 추가 + `set_place` 커맨드 빌더 · `WAIT_PLACE_TARGET` 일 때 "어디에
+놓을까요?"를 묻는 트리거(waiting_approval GUI 패턴 재사용). cobot2_ws 쪽은 이 문서 기준으로
+이미 값을 다 받는다.

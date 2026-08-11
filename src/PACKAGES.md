@@ -1121,6 +1121,7 @@ stateDiagram-v2
 
     IDLE --> LISTENING : /pick/start · voice_enabled=true
     IDLE --> PERCEIVE : /pick/start · 고정 target
+    IDLE --> HOME : /pick/home (음성/VLA cmd:home · rqt '홈')
     LISTENING --> PERCEIVE : 키워드 첫 단어를 target 으로
     LISTENING --> SPEAK_FAIL : 서비스 없음 · 빈 키워드
     PERCEIVE --> SCENE_PREP : grasp 수신 · 폭 클램프
@@ -1135,7 +1136,9 @@ stateDiagram-v2
     DESCEND --> CLOSE : grasp 도달
     CLOSE --> VERIFY : 그리퍼 닫기 + settle
     VERIFY --> LIFT : grip 감지 → 물체 attach
-    LIFT --> PLACE
+    LIFT --> PLACE : place 지정됨
+    LIFT --> WAIT_PLACE_TARGET : place 미지정 (cmd:pick place 생략, 2026-08-11 신설)
+    WAIT_PLACE_TARGET --> PLACE : set_place · 또는 wait_place_timeout_sec 후 기본 위치
     PLACE --> RELEASE : place_joints_deg 도달
     PLACE --> PLACE_RETRY : motion_retries 소진 (2026-08-11 신설)
     PLACE_RETRY --> PLACE : /pick/retry_place — 재인식 없이 곧장 재계획
@@ -1175,7 +1178,7 @@ stateDiagram-v2
         트리거 4가지 — /pick/abort · 상태별 제한시간 초과 ·
         로봇 자체 안전정지 감지 · 전이표에 없는 전이 시도(버그).
         MOTION_STATES 에서는 진행 중 goal 을 취소하고,
-        HOLDING_STATES(VERIFY·LIFT·PLACE·PLACE_RETRY)에서는 그리퍼를 열지 않는다.
+        HOLDING_STATES(VERIFY·LIFT·WAIT_PLACE_TARGET·PLACE·PLACE_RETRY)에서는 그리퍼를 열지 않는다.
     end note
 
     note right of PLACE_RETRY
