@@ -45,9 +45,9 @@ cd ~/cobot2_ws && source /opt/ros/humble/setup.bash && source install/setup.bash
 | 3 | `ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false` | move_group + RViz MotionPlanning, 궤적 실행 — **OMPL로 계획하는 기본 경로** | `octomap`(3D 장애물 감지 on/off), `use_sim_time`(실기는 `false` 고정) | `standalone:=false` 빠뜨리면 TF·관절값이 조용히 중복/덮어써진다(에러 없음). **cuMotion으로 계획할 거면 이 줄을 호스트에서 띄우지 않는다** → [6절](#6-cumotion--동적-장애물-회피-ompl-대체-플래너-실기-검증됨)(컨테이너 안에서 `cumotion:=true`) |
 | 4 | `scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true` | (컨테이너) YOLO-seg로 물체 탐지 | **`config/objects.yaml`의 `detect`** (인자 아님 — 2026-08-09부터) | 고쳤으면 이 줄을 **다시 실행**해야 반영된다(`__init__`에서 1회만 읽는다). `person` 넣지 말 것 — yolo 경로엔 self-filter 없음 |
 | 5 | `ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true` | (호스트 GPU) 마스크 → 3D grasp pose 계산 | 없음 — 집을 물체는 [6]이 실행 중에 밀어 넣는다 | `run_bridge:=true`를 빠뜨리면 **아무 노드도 안 뜬다**(`run_yolo`/`run_bridge` 기본값이 각각 `true`/`false`라 둘 다 꺼진 상태가 된다) — [4]는 컨테이너, [5]는 호스트라 헷갈리기 쉽다. `ROS_DOMAIN_ID=93` 빠뜨리면 [4]가 안 보인다. 🔴 여기 `target_classes:=`를 주지 말 것 — [6]이 덮어쓴다. **`live_viz` 기본 `true`(2026-08-09)** — 뜨는 순간부터 `http://<이 머신>:8080`에 매 캡처가 자동으로 그려진다(실제 포인트클라우드+grasp 후보+1등 콜리전 메시, `demo_scene_pc.py`와 같은 규약) → [7-4절](#7-4-라이브-뷰어-live_viz--매-캡처를-실제-형상으로-보기) |
-| 6 | `ros2 launch pick_fsm pick_fsm.launch.py voice:=false` | 접근→집기 상태머신 — 🚨 **띄우면 실기가 실제로 움직인다** | `target`(집을 물체. 기본값은 `config/objects.yaml`의 `pick_default`), `planning_pipeline`(ompl\|isaac_ros_cumotion) | 🚨 `dry_run`은 **2026-08-09 제거**했다. "계획만" 모드는 없다 — 남은 소프트 안전장치는 `require_approval:=true`(기본)뿐이고 최종 안전장치는 **비상정지 버튼**이다. 🔴 **선언 안 된 인자는 경고 없이 무시된다** — `dry_run:=true`도 `target_classes:=apple`도 안 먹는다(잡을 물체는 `target:=`). 플래너 고르는 법 → [7-1절](#7-1-플래너-파이프라인-ompl--cumotion--어떻게-둘-다-쓰고-어떻게-고르나) |
-| 6a (선택) | `ros2 launch voice_processing vla_command.launch.py` | 외부 VLA(`~/M0609_VLA_system`)의 "이걸 집어라"를 FSM 타겟으로 옮긴다. **rqt 패널의 시작·중단·리셋 버튼도 같은 채널로 대신할 수 있다** | `auto_start`(지시가 오면 `/pick/start`까지 부를지, 기본 `false`), `pixel_policy`(`warn`\|`reject`) | 쓰려면 [6]을 **`voice:=false` 없이**(즉 `voice:=true` 기본) 띄운다 — `voice:=false`면 `LISTENING`을 건너뛰어 pick 지시를 아무도 안 듣는다(start/abort/reset은 voice 값과 무관). 🚨 이 노드는 `/pick/approve`를 **절대 부르지 않는다**(코드 경로 자체가 없다 — 승인은 사람). 🔴 **`pixel`(개체 지정)은 아직 선정에 안 쓰인다** — 같은 클래스 물체가 2개 이상이면 `pixel_policy:=reject`. 실행·테스트 명령 → [7-3절](#7-3-음성vla로-rqt-패널-버튼-대신하기--실행-및-테스트-2026-08-09-구현), 상세 계약 → [`src/PACKAGES.md#voice_processing`](src/PACKAGES.md#voice_processing) |
-| 7 (선택) | `rqt --standalone pick_fsm` | 상태머신 감시 UI + **타겟 선택** | 콤보상자(YOLO가 보고 있는 클래스) + `[적용]`/`[자동]` | 실행 중에 잡을 물체를 바꿀 때 여기를 쓴다 → [7-2절](#7-2-무엇을-잡을지-정하는-법--한-파일--실행-중-변경) |
+| 6 | `ros2 launch pick_fsm pick_fsm.launch.py voice:=false` | 접근→집기 상태머신 — 🚨 **띄우면 실기가 실제로 움직인다**. **감시 UI(rqt)도 기본으로 같이 뜬다** | `target`(집을 물체. 기본값은 `config/objects.yaml`의 `pick_default`), `planning_pipeline`(ompl\|isaac_ros_cumotion), `rqt`(기본 `true` — rqt 패널을 같이 띄울지) | 🚨 `dry_run`은 **2026-08-09 제거**했다. "계획만" 모드는 없다 — 남은 소프트 안전장치는 `require_approval:=true`(기본)뿐이고 최종 안전장치는 **비상정지 버튼**이다. 🔴 **선언 안 된 인자는 경고 없이 무시된다** — `dry_run:=true`도 `target_classes:=apple`도 안 먹는다(잡을 물체는 `target:=`). rqt 패널이 필요 없으면(예: 헤드리스 실행) `rqt:=false`로 끈다 — `robot_safety_node`의 자동중단은 `rqt` 값과 무관하게 항상 동작한다. 플래너 고르는 법 → [7-1절](#7-1-플래너-파이프라인-ompl--cumotion--어떻게-둘-다-쓰고-어떻게-고르나) |
+| 6a (선택) | `ros2 launch voice_processing vla_command.launch.py` | 외부 VLA(`~/M0609_VLA_system`)의 "이걸 집어라"를 FSM 타겟으로 옮긴다. **rqt 패널의 시작·중단·리셋 버튼도 같은 채널로 대신할 수 있다** | `auto_start`(지시가 오면 `/pick/start`까지 부를지, 기본 `false`), `pixel_policy`(`warn`\|`reject`\|`select`) | 쓰려면 [6]을 **`voice:=false` 없이**(즉 `voice:=true` 기본) 띄운다 — `voice:=false`면 `LISTENING`을 건너뛰어 pick 지시를 아무도 안 듣는다(start/abort/reset은 voice 값과 무관). 🚨 이 노드는 `/pick/approve`를 **절대 부르지 않는다**(코드 경로 자체가 없다 — 승인은 사람). 🟢 **`pixel`(개체 지정)이 `pixel_policy:=select`에서 선정에 쓰인다**(2026-08-11 실기 관통, PERCEIVE까지) — 같은 클래스 물체가 2개 이상이고 VLA가 픽셀로 개체를 지목하면 `select`, 지목 없이 오집만 막으려면 `reject`. 실행·테스트 명령 → [7-3절](#7-3-음성vla로-rqt-패널-버튼-대신하기--실행-및-테스트-2026-08-09-구현), 상세 계약 → [`src/PACKAGES.md#voice_processing`](src/PACKAGES.md#voice_processing) |
+| 7 (선택, `rqt:=false`로 껐을 때만 필요) | `rqt --standalone pick_fsm` | 상태머신 감시 UI + **타겟 선택** | 콤보상자(YOLO가 보고 있는 클래스) + `[적용]`/`[자동]` | [6]이 `rqt:=true`(기본)면 이미 떠 있다 — 따로 실행하면 창이 2개 뜬다. 실행 중에 잡을 물체를 바꿀 때 여기를 쓴다 → [7-2절](#7-2-무엇을-잡을지-정하는-법--한-파일--실행-중-변경) |
 
 각 런치의 인자 전체·기본값은 [3절 런치 인자](#런치-인자) 표, 노드별 세부 파라미터는
 [`md/launch-params.md`](md/launch-params.md)가 단일 출처다. **설정 파일이 실제로 어디에 있고
@@ -487,8 +487,8 @@ python3 scripts/bench_planning_time.py --repeat 10
 |---|---|---|---|---|
 | 7 | YOLO 탐지 (`yolo_seg_node`) | **컨테이너** `od_kimkh` | 호스트엔 `ultralytics` 없음(넣지 말 것 — `cv_bridge` 깨짐) | `src/PACKAGES.md#graspgenx_perception` |
 | 8 | grasp 계산 (`grasp_bridge_node`, GPU) | **호스트** | GraspGenX 워커를 `uv`로 띄우는데 컨테이너엔 `uv` 없음 | 〃 |
-| 9 | 상태머신 + 안전감시 | 호스트 | — | `src/PACKAGES.md#pick_fsm` §2 |
-| 10 | (선택) 감시 UI | 호스트 | — | 〃 §9 |
+| 9 | 상태머신 + 안전감시 + 감시 UI(rqt, 기본 같이 뜸) | 호스트 | — | `src/PACKAGES.md#pick_fsm` §2 |
+| 10 | (선택, 터미널 9에서 `rqt:=false`로 껐을 때만) 감시 UI 따로 | 호스트 | — | 〃 §9 |
 
 ```bash
 # [터미널 7] 컨테이너 — 탐지. 무엇을 탐지할지는 config/objects.yaml 의 detect 가 정한다
@@ -506,14 +506,17 @@ ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=tr
 #   dry_run(계획만)은 2026-08-09 제거됐다. 승인 게이트(/pick/approve)만 남아 있다
 #   grasp_source 기본값이 legacy_trigger 라 이제 안 붙여도 된다
 #   target 기본값은 config/objects.yaml 의 pick_default (비어 있으면 자동 = 점수 최고)
+#   감시 UI(rqt --standalone pick_fsm)가 rqt:=true(기본)로 이 줄에서 같이 뜬다
 ros2 launch pick_fsm pick_fsm.launch.py voice:=false
-
+# or ros2 launch pick_fsm pick_fsm.launch.py voice:=true
 #   특정 물체로 못 박으려면 (detect 안에 있는 이름이어야 한다)
 # ros2 launch pick_fsm pick_fsm.launch.py voice:=false target:=apple
 #   cuMotion으로 계획하려면 (전제: move_group을 cumotion:=true로 띄웠을 것 → 7-1절)
 # ros2 launch pick_fsm pick_fsm.launch.py voice:=false planning_pipeline:=isaac_ros_cumotion
+#   rqt 패널이 필요 없으면(헤드리스 실행 등) 꺼서 안 뜨게 한다
+# ros2 launch pick_fsm pick_fsm.launch.py voice:=false rqt:=false
 
-# [터미널 10] (선택) 감시 UI + 타겟 선택 — 실행 중에 잡을 물체를 바꿀 수 있다
+# [터미널 10] (선택, 터미널 9를 rqt:=false로 띄웠을 때만) 감시 UI + 타겟 선택 — 실행 중에 잡을 물체를 바꿀 수 있다
 rqt --standalone pick_fsm
 ```
 

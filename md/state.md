@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-10
+updated: 2026-08-11
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -8,7 +8,7 @@ owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-10
+**최종 갱신:** 2026-08-11
 
 ## 🟢 지금 어디까지 왔나 (2026-08-05) — GraspGenX 실기 파이프라인 관통
 
@@ -106,7 +106,7 @@ cuMotion이 쥔 장애물 복셀 **27,646개**(`/curobo/voxels`) — nvblox 세�
 | YOLO-seg 인식 (컨테이너→호스트) | ✅ 검증됨 | `/yolo_seg/labels` 호스트 수신 25.6 Hz (2026-08-07 21:15). 이전의 "데이터 안 흐름"은 해소됨 |
 | **yolo 경로 테이블 높이 필터링·돌출 계산 + 클래스별 실측 치수** | ✅ 구현·합성테스트 12건 PASS / ⚠️ **실기 미검증** | 2026-08-09. `segment_from_labels()`가 물체마다 국소 테이블 기준(±`obj_radius_m`/`yolo_table_ring_m`)으로 `obj_min_h` 미만 픽셀을 다듬고 돌출높이를 로그에 남긴다 — 전엔 yolo 경로에 이 필터가 아예 없었다. **`class_dims`**(신설): `config/objects.yaml`의 `dimensions`에 형태 고정 물체(병·컵)의 실측 반경·높이를 적으면 전역값 대신 그 값을 쓴다 — 상한도 안전하게 켤 수 있다(전역 12cm 대신 그 클래스 실측 높이). 자연물엔 적용 안 함(개체마다 형태가 다름). depth 결손(반사면 등) 자체는 못 고친다 — 마스크만 다듬는다. → [`src/PACKAGES.md#graspgenx_perception`](../src/PACKAGES.md#graspgenx_perception) "yolo 경로에도 테이블 높이 필터링이 생겼다" / "클래스별 실측 치수" |
 | **물체 종류 선정** (`target_classes`) | ✅ 구현·PASS / ⚠️ 실기 미검증 | 빌드 PASS + 순수함수 24개 PASS + 저장된 실기 씬 이미지로 확인(8검출 → `apple` 1개). 라이브 파이프라인 실행은 안 해봄 (YOLO 주 파이프라인, README 0절·6절) |
-| **물체 개체 선정** (사과 2개 중 하나) | ❌ 미구현 | 설계만 있음 — **정본은 [`md/plans/2026-08-08-vla-integration.md`](plans/2026-08-08-vla-integration.md) §5** (좌표 키 + 클릭/서비스 지정). `graspgenx_perception/README.md` "다음 방향" 절의 옛 2단계 안(`scene_id` 핸들)은 이걸로 대체됐다 |
+| **물체 개체 선정** (사과 2개 중 하나) | ✅ 구현·빌드·단위테스트 PASS(2026-08-11) / 🔴 **실기 미검증** | `select_by_point()` — base XY 최근접 매칭, 워커 호출 전에 후보를 하나로 좁힌다. 정본은 [`md/vla-bridge-contract.md`](vla-bridge-contract.md) §8, 설계 근거는 [`md/plans/2026-08-08-vla-integration.md`](plans/2026-08-08-vla-integration.md) §5. `graspgenx_perception/README.md` "다음 방향" 절의 옛 2단계 안(`scene_id` 핸들)은 이걸로 대체됐다 |
 | **VLA 지시 채널** (`/vla/pick_command`) | ✅ 구현·빌드 PASS / ⚠️ **노드 단독 실측만** | `voice_processing/vla_command_node` → `task_manager` 의 기존 `/get_keyword` 자리. **`pick_fsm` 코드 0줄·새 msg 0개·새 패키지 0개.** 스키마 27건 PASS + 왕복/TTL/거부/결과판정 실측. 같은 채널로 rqt 패널의 **시작·중단·리셋**(`cmd:"start"/"abort"/"reset"`)도 대신한다 — `승인`만은 코드 경로 자체가 없어 `cmd:"approve"`가 항상 거부됨을 실측 확인. 🔴 **FSM·로봇과 연결한 한 사이클은 미검증**, VLA PC 실연결도 미검증. 실행·테스트 명령 → [README 7-3절](../README.md#7-3-음성vla로-rqt-패널-버튼-대신하기--실행-및-테스트-2026-08-09-구현), 상세 계약 → [`src/PACKAGES.md#voice_processing`](../src/PACKAGES.md#voice_processing) |
 | **VLA(`~/M0609_VLA_system`) 나머지 통합** | ❌ 미착수 (범위 확정) | **로봇 행동은 이 ws 가 그대로 유지**하고, VLA 는 "어떤 물체를 집을지"만 **외부 PC**(휴대폰 핫스팟 링크) 에서 전달한다. **D435i 영상은 압축 컬러(`color/image_raw/compressed`)만 넘긴다** — 포인트클라우드 160 Mbps(실측)·raw 컬러 36.8 Mbps 는 핫스팟에서 불가. 남은 것: 핫스팟 대역폭 실측, 두 PC DDS 도달성, `pixel` 개체 선정(§5) |
 
@@ -194,15 +194,19 @@ code .                                          # 이후 VS Code Source Control�
 - `realsense-ros` 클론 **불필요** — apt `ros-humble-realsense2-camera 4.58.2` 설치됨(GPU PC도 동일하다는 사용자 진술, 미검증).
 
 ## 열려 있는 이슈
-- 🟢 **VLA 통합 — 지시 채널(§2)은 2026-08-09 구현·빌드·단독실측 완료. 남은 병목은 §5.**
+- 🟢 **VLA 통합 — 지시 채널(§2)은 2026-08-09 구현·빌드·단독실측 완료.**
   `src/voice_processing/vla_command_node` 가 `/vla/pick_command`(JSON) 를 받아
-  `task_manager` 가 이미 갖고 있던 `/get_keyword` 자리로 넘긴다 — **`pick_fsm` 코드 0줄,
-  새 msg 0개, 새 패키지 0개.** 결과는 `/vla/pick_result` 로 되돌린다(`/pick/state` 만 보고
-  판정). 🚨 **`/pick/approve` 는 부르지 않는다** — `auto_start` 는 `/pick/start` 까지만이다.
-  🔴 **아직 클래스 이름 지시만 끝까지 동작한다.** `pixel`(어느 개체인가)은 검증만 하고
-  못 쓴다 — `grasp_bridge_node` 에 `select_by_point()` 가 없다(계획 §5, 코드 0줄).
-  같은 클래스 물체가 2개 이상 놓이면 `pixel_policy:=reject` 로 띄운다.
-  🔴 **미검증: `task_manager` 와 실제로 연결한 pick 한 사이클, VLA PC 실연결.**
+  `task_manager` 가 이미 갖고 있던 `/get_keyword` 자리로 넘긴다. 결과는 `/vla/pick_result`
+  로 되돌린다(`/pick/state` 만 보고 판정). 🚨 **`/pick/approve` 는 부르지 않는다** —
+  `auto_start` 는 `/pick/start` 까지만이다.
+  🟢 **2026-08-11: `pixel`(어느 개체인가)도 이제 쓴다.** `pixel_policy:=select` 로 띄우면
+  `grasp_bridge_node.select_by_point()`(신설)가 base XY 최근접 매칭으로 개체 하나를
+  고른다 — 이제 `pick_fsm`(`task_manager.py`)·`voice_processing`·`graspgenx_perception`
+  세 패키지 모두 코드가 늘었다("pick_fsm 코드 0줄" 원칙은 이 기능부터 깨졌다, 의도된
+  것 — 개체 선정은 애초에 그 원칙의 범위 밖이다). 같은 클래스 물체가 2개 이상인데
+  `select`를 안 쓰면 여전히 `pixel_policy:=reject` 로 막는 게 유일한 방어다.
+  🔴 **미검증: PERCEIVE 한 사이클(픽셀 지정 → 개체 선정 → grasp) 실기 관통, VLA PC 실연결.**
+  빌드·순수함수 단위테스트만 PASS — 상세는 [[ws/cobot2/vla-bridge-contract]] §8.
   레퍼런스는 [[ws/cobot2/src/PACKAGES]] `#voice_processing`.
 - 🟡 **VLA 통합 — 범위 확정됨(2026-08-08 사용자), §3-3 이하는 미착수.** 정본은
   [[ws/cobot2/plans/2026-08-08-vla-integration]]. 여기엔 값을 베끼지 않는다.

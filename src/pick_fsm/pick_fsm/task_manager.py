@@ -19,6 +19,7 @@
    남은 안전장치는 `require_approval:=true`(기본값)와 **물리 비상정지 버튼**이다.
 """
 
+import json
 import threading
 
 import rclpy
@@ -342,6 +343,11 @@ class TaskManager(Node):
         self._target_override = None   # `/pick/target` 로 들어온 값. None = 파라미터를 쓴다
         self.place_location = ''
         self._place_override = None    # `/pick/place_location` 로 들어온 값. None = 파라미터를 쓴다
+        # `/pick/target_pixel` 로 들어온 (x,y,w,h). None = 지정 없음(점수 최고, 기존 동작).
+        # place 와 달리 **단발성**이다 — `_push_bridge()`가 다음 PERCEIVE 에 실어 보내는
+        # 순간 None 으로 되돌린다. 그대로 남겨두면 클래스만 지시한 다음 pick 이 이전
+        # 프레임의 좌표를 재사용해 엉뚱한 물체를 고른다.
+        self._pixel_override = None
         self._push_fut = None          # 브리지 SetParameters future (_fut 과 겹치면 안 된다)
         self._pushed = False           # 이번 PERCEIVE 에서 푸시를 끝냈는지
         self.grasp = None           # PoseStamped, ee_link 목표 자세
@@ -453,6 +459,29 @@ class TaskManager(Node):
     def _publish_place(self, value: str):
         self.place_pub.publish(String(data=str(value)))
 
+    def _on_target_pixel(self, msg):
+        """개체 선정 좌표(픽셀). `{"x":..,"y":..,"w":..,"h":..}` 가 아니면 조용히 버린다.
+
+        ⚠️ **단발성이다.** target/place_location 과 달리 이번 사이클이 쓰고 나면
+        `_push_bridge()`가 지운다(성공 소비). 소비 전에 실패로 빠지면 `_to()`가 SPEAK_FAIL/
+        ABORT 진입 시 지운다(그 블록 주석 참고) — 둘 다 없으면 다음 사이클로 샌다. 여기서 상태와 무관하게
+        항상 받아들이는 이유도 그것이다: 이건 "설정"이 아니라 "이번 지시에 실린 데이터"라
+        진행 중 작업에 적용하지 않는다는 target 의 규칙이 적용되지 않는다(다음 PERCEIVE가
+        곧 이번 지시의 PERCEIVE 다 — vla_command_node 가 place 와 같은 순서로, pick 지시를
+        래치에 넣기 **전에** 이 토픽을 먼저 쏜다).
+        """
+        try:
+            doc = json.loads(msg.data)
+            x, y, w, h = (float(doc[k]) for k in ('x', 'y', 'w', 'h'))
+        except (ValueError, TypeError, KeyError):
+            self.get_logger().warn(f'/pick/target_pixel 형식이 이상하다: {msg.data!r} — 버림')
+            return
+        if w <= 0 or h <= 0:
+            self.get_logger().warn(f'/pick/target_pixel 의 w/h 가 양수가 아니다: {w}x{h} — 버림')
+            return
+        self._pixel_override = (x, y, w, h)
+        self.get_logger().info(f'개체 선정 좌표 수신: ({x:.0f},{y:.0f}) / 기준 {w:.0f}x{h:.0f}')
+
     def _srv_start(self, _req, res):
         if self.state is not State.IDLE:
             res.success, res.message = False, f'IDLE 이 아니다 (현재 {self.state.name})'
@@ -523,6 +552,16 @@ class TaskManager(Node):
             # 이전 시도의 잔여 카운트를 물려받아 재시도 예산이 조용히 줄어든다(cross-review
             # 2026-08-09 지적).
             self._retry_perceive = 0
+        if nxt in (State.SPEAK_FAIL, State.ABORT):
+            # 단발성 픽셀 override 는 성공 경로(`_push_bridge`, 766)에서만 소비·삭제된다.
+            # 소비 전에 실패로 빠지면(키워드 실패, 브리지 push 실패 등) `_pushed` 는 여기서
+            # 다시 False 가 되므로(540), 지우지 않으면 **다음 pick 사이클의 PERCEIVE 가
+            # 이전 지시의 픽셀을 다시 push** 해 엉뚱한 개체를 고른다(cross-review 2026-08-11).
+            # 실패 수렴 상태(SPEAK_FAIL/ABORT)에서 지운다: 픽셀은 PERCEIVE 진입 전 IDLE/
+            # LISTENING 에서 세팅되고 소비는 PERCEIVE 이므로(`_on_target_pixel` 주석), 이 두
+            # 상태 진입이 **정상 소비 창을 지우지 않는다** — `_st_idle` 시작점에서 지우면
+            # vla 가 "픽셀 publish -> start" 순으로 쏘는 legit 픽셀을 경합적으로 지운다(그래서 안 함).
+            self._pixel_override = None
         self.state_pub.publish(String(data=nxt.name))
 
     def _elapsed(self) -> float:
@@ -703,13 +742,22 @@ class TaskManager(Node):
             seg = self.p('bridge_seg_source')
             if seg:
                 req.parameters.append(str_param('seg_source', seg))
+            # 개체 선정 좌표. 지정이 없으면 nan 4개를 보낸다 — 브리지 쪽 select_by_point
+            # 는 nan 을 "off"로 읽으므로(grasp_bridge_node.py EXTRA_DEFAULTS 주석) 이걸
+            # **항상** 보내야 한다. 안 보내면 이전 호출의 좌표가 브리지 파라미터에 그대로
+            # 남아 클래스만 지시한 이번 pick 이 전 프레임 좌표로 잘못 걸릴 수 있다.
+            px = self._pixel_override
+            for name, val in zip(('pixel_x', 'pixel_y', 'pixel_w', 'pixel_h'),
+                                 px if px is not None else (float('nan'),) * 4):
+                req.parameters.append(float_param(name, val))
             self._push_fut = self.bridge_param_cli.call_async(req)
             return False
         if not self._push_fut.done():
             return False
         res = self._push_fut.result()
         self._push_fut = None
-        names = ['target_classes'] + (['seg_source'] if self.p('bridge_seg_source') else [])
+        names = (['target_classes'] + (['seg_source'] if self.p('bridge_seg_source') else [])
+                + ['pixel_x', 'pixel_y', 'pixel_w', 'pixel_h'])
         if res is None or len(res.results) != len(names):
             self._to(State.SPEAK_FAIL, f"{self._bridge_name} 파라미터 설정 응답이 이상하다")
             return False
@@ -720,9 +768,13 @@ class TaskManager(Node):
             return False
         self._pushed = True
         seg = self.p('bridge_seg_source')
+        pixel_note = f', pixel=({self._pixel_override[0]:.0f},{self._pixel_override[1]:.0f})' \
+            if self._pixel_override is not None else ''
         self.get_logger().info(
             f"브리지 설정: target_classes='{self.target or '(전부)'}'"
-            + (f", seg_source={seg}" if seg else ''))
+            + (f", seg_source={seg}" if seg else '') + pixel_note)
+        # 단발성 소비 — 다음 PERCEIVE 에서 새 지시가 없으면 nan(off)이 나가야 한다.
+        self._pixel_override = None
         return True
 
     def _perceive_failed(self, why: str):

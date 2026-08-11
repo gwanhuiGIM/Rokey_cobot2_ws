@@ -14,8 +14,10 @@ status:  live (2026-08-11)
             전제조건. 그 전엔 연결 작업 자체가 불필요.
          🔴 **그리퍼 SRDF 자기충돌 4쌍 누락**(⭐-2, 미해결) — 계획이 조용히 버려진다.
             판별 절차는 `md/plans/2026-08-10-srdf_self_collision_test.md`
-next:    (연결 보류 상태) SRDF 자기충돌 판별 실험(실기) → GraspGenX 장애물 배치 안정화 여부 확인
-         → 그때 pick_fsm 연결 재검토
+         🔴 **T7 컨트롤러 스포너가 호스트 서비스를 못 부른다(2026-08-11, 신규·미해결)** —
+            아래 ⭐-4 1-3절
+next:    (연결 보류 상태) SRDF 자기충돌 판별 실험(실기) → T7 서비스 디스커버리 문제 원인 조사
+         → GraspGenX 장애물 배치 안정화 여부 확인 → 그때 pick_fsm 연결 재검토
 warn2:   실험 사이에 **T7(move_group) 재시작 필수** — goal 큐가 노드를 죽여도 안 비워진다(⭐-2)
 warn3:   가상환경(virtual) 테스트 후 `ros2_control_node`/`robot_state_publisher`/
          `static_transform_publisher`/`joint_state_publisher`/`gripper_virtual_node.py`를
@@ -722,6 +724,44 @@ v=0 재출발"이 된다. cuMotion/OMPL이 매번 v=0 완결 궤적을 주는 �
 시도처럼 제자리에 머무는 증상 없음). ⚠️ 0%는 아니다 — 잔여 폐기(가설 2, virtual 실행 타이밍이
 `exec_t0` 기준 wall-clock 가정과 다를 가능성)는 미해결로 남아 있지만, 현재로선 pick_fsm 연결을
 막을 정도는 아니라고 판단한다. `plan_dt` 진단 로그는 코드에 남겨뒀다.
+
+### 1-3. 🔴 T7 컨트롤러 스포너가 호스트 `controller_manager` 서비스를 못 부른다 (2026-08-11, 신규·미해결)
+
+cuMotion 파이프라인(T4~T7) 전체로 reactive_replan을 재검증하려다 여기서 막혔다. 시도 경위:
+
+1. T4(robot_segmenter) 기동 실패 — `numpy 2.2.6`이 `cv2`를 깨서(2026-08-07에 이미 한 번 겪은
+   것과 동일 증상) `AttributeError: _ARRAY_API not found`. `scripts/container_setup.sh`(문서화된
+   최초 셋업 절차, 안 돼 있었다)로 해결 — numpy 1.26.4로 재설치.
+2. T4·T5·T6 정상 기동, T6는 `cuMotion is ready for planning queries!`까지 확인.
+3. T7(`moveit.launch.py cumotion:=true`, 컨테이너 안에서 `docker exec -d`로 기동)에서
+   `dsr_moveit_controller` 스포너가 `/dsr01/controller_manager/list_controllers`(호스트,
+   `dsr_controller2`/`joint_state_broadcaster`와 같은 컨트롤러 매니저) 호출에 실패하고
+   10초×3회 재시도 후 죽는다. **2회 재현, 둘 다 동일 실패.**
+
+**격리 결과**:
+- 컨테이너에서 호스트의 `/dsr01/joint_states` 등 **토픽·노드 디스커버리는 정상**(`ros2 node
+  list`/`ros2 topic list`로 확인).
+- **서비스만 안 된다** — 컨테이너 안에서 직접 `ros2 service call
+  /dsr01/controller_manager/list_controllers`를 호출해도 무한 대기(`waiting for service to
+  become available...`에서 멈춤). 같은 서비스를 호스트에서 호출하면 즉시 응답한다.
+- `RMW_IMPLEMENTATION`은 양쪽 다 `rmw_fastrtps_cpp`로 동일 — warn 절이 경고하는
+  "cyclonedds 교차 벤더" 케이스는 아니다.
+
+**미확인 가설(우선순위 미정, 다음에 조사할 것)**:
+1. FastDDS 서비스 디스커버리가 request/response 토픽 쌍 QoS 불일치로 실패 — 토픽 pub/sub은
+   되는데 서비스만 안 되는 비대칭이 이 가설과 맞는다.
+2. `docker exec -d`로 띄운 프로세스가 `run_dev.sh`의 원래 인터랙티브 세션(`-it`, 전체 컨테이너
+   entrypoint)과 네트워크·환경 설정이 미묘하게 다를 가능성 — 이번 세션은 이미 떠 있던 컨테이너에
+   `docker exec -d`로 얹은 것이라 `run_dev.sh`가 설정했을 어떤 조건을 안 물려받았을 수 있다.
+3. `graspx_container.sh`가 다른 컨테이너(`od_kimkh`)에 `FASTRTPS_DEFAULT_PROFILES_FILE`을
+   명시적으로 넘기는 걸 보면, 이 ws에 컨테이너-호스트 DDS 설정 이슈가 이미 알려진 카테고리다 —
+   `isaac_ros_dev-x86_64-container`에도 비슷한 프로파일이 필요할 수 있다.
+
+**영향 범위**: reactive_replan.py 자체 결함이 아니다 — T7(move_group)이 실행 경로
+(`FollowJointTrajectory` 액션)를 열지 못하면 이 노드 말고 **어떤 방식으로 cuMotion 파이프라인을
+실기/에뮬레이터에 실행시키려 해도 똑같이 막힌다.** 2026-08-08 성공 기록(⭐절, goal 경계 회피)은
+`run_dev.sh` 인터랙티브 세션으로 띄웠을 때이므로 — 그 방식과 오늘의 `docker exec -d` 방식의
+차이가 유력한 단서다.
 
 ### 2. IK_FAIL 의 원인이 (a) ESDF 인지 (b) IK 시드인지 안 갈렸다
 

@@ -19,6 +19,7 @@ install(
     scripts/gripper_joint_state_publisher.py
     scripts/gripper_virtual_node.py
     scripts/calib_npy_to_tf.py
+    scripts/depth_downsample_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

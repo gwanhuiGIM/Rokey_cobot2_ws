@@ -10,8 +10,11 @@
     # VLA 가 start 까지 건다 — 승인(/pick/approve)은 여전히 사람 몫이다
     ros2 launch voice_processing vla_command.launch.py auto_start:=true
 
-    # 같은 클래스 물체가 여럿 놓여 있을 때. pixel 지정을 무시하지 말고 거부시킨다
+    # 같은 클래스 물체가 여럿 놓여 있을 때, 개체 지정 없이 오집만 막는다
     ros2 launch voice_processing vla_command.launch.py pixel_policy:=reject
+
+    # 같은 클래스 물체가 여럿일 때 VLA 가 pixel 로 어느 개체인지 지목한다(2026-08-11 구현)
+    ros2 launch voice_processing vla_command.launch.py pixel_policy:=select
 
 이 노드는 rqt 패널(`pick_fsm.rqt_panel`)의 **시작·중단·리셋** 버튼도 같은 채널로 연다 —
 `{"cmd":"start"}` / `{"cmd":"abort"}` / `{"cmd":"reset"}` 을 `/vla/pick_command` 로 보내면
@@ -78,8 +81,9 @@ def generate_launch_description():
                               description='지시가 오면 /pick/start 까지 부른다. '
                                           '/pick/approve 는 어떤 값에서도 부르지 않는다'),
         DeclareLaunchArgument('pixel_policy', default_value='warn',
-                              description="warn | reject. pixel 개체 지정은 미구현 — "
-                                          "warn 은 클래스만으로 진행, reject 는 거부"),
+                              description="warn | reject | select. warn 은 클래스만으로 진행, "
+                                          "reject 는 pixel 오면 거부, select 는 pixel 로 개체를 "
+                                          "고른다(2026-08-11 구현, select_by_point)"),
         DeclareLaunchArgument('ttl_sec', default_value='10.0',
                               description='지시 유효시간[s]. 받은 시각 기준(송신 stamp 아님)'),
         DeclareLaunchArgument('wait_timeout_sec', default_value='50.0',

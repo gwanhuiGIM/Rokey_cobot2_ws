@@ -185,8 +185,9 @@ def test_pixel_wh_must_be_positive():
     assert out is None and 'pixel_wh' in why
 
 
-# ── 미구현 필드의 처리 ──────────────────────────────────────
+# ── pixel_policy 세 값 ──────────────────────────────────────
 def test_pixel_warn_passes_with_warning():
+    """기본값(warn): pixel 은 검증만 통과하고 실제로는 쓰이지 않는다(ignored)."""
     out, warn = parse_command(cmd(pixel=[312, 188], pixel_wh=[424, 240]))
     assert out is not None
     assert out['ignored'] == ['pixel']
@@ -197,7 +198,18 @@ def test_pixel_warn_passes_with_warning():
 def test_pixel_reject_policy():
     out, why = parse_command(cmd(pixel=[312, 188], pixel_wh=[424, 240]),
                              pixel_policy='reject')
-    assert out is None and 'select_by_point' in why
+    assert out is None and 'pixel_policy=reject' in why
+
+
+def test_pixel_select_policy_not_ignored():
+    """select: pixel 이 검증만 되는 게 아니라 실제로 쓰인다 — ignored 에 없어야 한다."""
+    out, warn = parse_command(cmd(pixel=[312, 188], pixel_wh=[424, 240]),
+                              pixel_policy='select')
+    assert out is not None
+    assert out['ignored'] == []
+    assert out['pixel'] == (312.0, 188.0)
+    assert out['pixel_wh'] == (424.0, 240.0)
+    assert warn == ''
 
 
 def test_base_xy_is_ignored_not_used():

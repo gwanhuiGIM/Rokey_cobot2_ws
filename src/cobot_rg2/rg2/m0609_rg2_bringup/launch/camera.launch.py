@@ -64,6 +64,19 @@ def _args():
     #
     # [튜닝] GPU PC나 여유 있는 머신에서는 인자로 올린다:
     #   ros2 launch ... camera.launch.py depth_profile:=848x480x30 color_profile:=848x480x30
+    #
+    # 🔴 2026-08-11: graspgenx(1280x720 요구) vs octomap/nvblox(반응속도 우선, 424x240 요구)를
+    #   동시에 만족할 수 없다 — RealSense 드라이버는 depth를 **한 해상도로만** 낸다.
+    #   해결: 카메라는 그래스핑이 요구하는 해상도로 한 번만 열고, T4(robot_segmenter) 직전에
+    #   depth_downsample_node.py(같은 패키지 scripts/)로 저해상도 사본을 만들어 nvblox
+    #   체인에는 그쪽을 먹인다. octomap 쪽은 sensors_3d.yaml의 point_subsample을 해상도
+    #   배율만큼 올려서 대응한다(배율의 정확한 지수는 그 파일 UNVERIFIED 각주 참고 — 실측 필요).
+    #   🔴 depth_profile:=1280x720x15/x30은 실기에서 "Frames didn't arrived within 5 seconds"로
+    #   죽는다(USB 대역폭 초과로 추정, 2026-08-11 확인) — **depth_profile은 그대로 두고
+    #   color_profile만 1280x720으로 올린다.** align_depth가 depth를 color 해상도로 리샘플하므로
+    #   aligned_depth_to_color는 1280x720이 나온다(실측: ~19~29 Hz 안정). 단 이건 depth_profile
+    #   해상도(예: 848x480)를 업샘플한 것이라 실제 공간 분해능의 상한은 depth_profile 쪽이다.
+    #   자세한 실행 순서·실측치는 config/testcommand.md "T1.5" 절.
     return [
         DeclareLaunchArgument('dxyz', default_value='0 0 0',
                               description='캘리브 평행이동 보정 "x y z" (m, base_link 축)'),

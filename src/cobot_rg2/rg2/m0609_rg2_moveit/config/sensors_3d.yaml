@@ -70,11 +70,16 @@ realsense_pointcloud:
   #      지도는 거의 그대로인데 레이캐스트만 3~9배가 된다.
   #      (2026-08-06 당시 octomap_resolution 0.02 기준으로 쓰인 논증. 지금은 0.05라 더 강해진다)
   #   "장애물 반영이 느리다"의 손잡이는 아래 max_update_rate 하나다. 여기가 아니다.
-  point_subsample: 3
+  point_subsample: 4
+  # 🔴 2026-08-11: 이 값은 camera.launch.py 기본 424x240 기준이다. 카메라를 그래스핑용으로
+  #   1280x720까지 올리면(같은 파일 주석 참고) 픽셀 수가 약 9배 늘어난다 — point_subsample도
+  #   같이 올리지 않으면 octomap 부하가 그대로 9배(또는 위 UNVERIFIED 각주대로면 81배)가 된다.
+  #   `ros2 topic echo /moveit/filtered_cloud --field width --once`로 재서 424x240 기준
+  #   width(101,760/subsample)와 같은 비율이 나오도록 맞출 것 — 추정치로 박아넣지 않는다.
 
   # [튜닝] 로봇 자기 몸을 클라우드에서 지울 때 링크를 얼마나 부풀릴지.
   # 자기 팔이 장애물로 잡혀 계획이 실패하면 padding_offset을 키운다(단위 m).
-  padding_offset: 0.15
+  padding_offset: 0.1
   padding_scale: 1.5
 
   # [튜닝] octomap 갱신 주파수(Hz). **RViz에서 체감하는 "장애물 반영 지연"의 상한이 여기다** —

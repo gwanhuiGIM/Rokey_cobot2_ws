@@ -15,6 +15,9 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>xacro</exec_depend>
+  <!-- depth_downsample_node.py (graspgenx 고해상도 / T4 세그멘터 저해상도 분리용) -->
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
   <!-- reference package -->
   <exec_depend>dsr_description2</exec_depend>

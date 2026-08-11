@@ -25,6 +25,14 @@ owns:    실행 명령어(호스트/컨테이너 구분) · 노드 지도 · 단
 
 **공통 T1~T3** (모든 터미널에서 `rdm` = `export ROS_DOMAIN_ID=93` 먼저)
 
+🔴 **호스트↔컨테이너(T3~T7) 터미널을 쓰는 날은 아래도 모든 호스트 터미널에 같이 건다.**
+`graspx_container.sh`(od_kimkh 컨테이너)는 `docker exec -e`로 이미 2026-08-06부터 이걸 박아서
+쓰고 있었다 — `isaac_ros_dev-x86_64-container`(T3~T7) 쪽만 반영이 안 돼 있었다(2026-08-11 확인).
+안 걸면 `ros2 topic list`엔 컨테이너 쪽 토픽이 다 보이는데 **데이터가 0건**으로 온다(§4 T4 각주 참고).
+```bash
+export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml
+```
+
 ```bash
 # T1 카메라 — 이미 떠 있으면 띄우지 않는다 (ros2 node list | grep camera)
 #   🔴 alias(`reals`)를 쓰지 말고 아래처럼 인자를 직접 친다. **alias 정의가 머신마다 다르다**
@@ -186,6 +194,52 @@ ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw    # 실측 9.65 H
 ros2 run tf2_ros tf2_echo base_link camera_link                  # [1.237, -0.223, 0.784]
 ```
 
+## 1.5 호스트 — graspgenx 고해상도 vs T4/T5 저해상도 분리 (2026-08-11 도입, 미검증)
+
+**전제가 다를 때만 필요하다**: graspgenx가 1280x720 depth를 요구하고, 동시에 T4
+(robot_segmenter)/nvblox 반응속도를 지금(424x240 기준 세그멘터 3.7 Hz, `config/testcommand.md:257`
+구 번호)보다 떨어뜨리고 싶지 않을 때. RealSense 드라이버는 depth를 한 해상도로만 내므로
+카메라를 고해상도로 한 번 열고, T4 직전에서 다운샘플해 나눠 먹인다.
+
+```bash
+# T1 — 🔴 depth_profile을 1280x720으로 직접 올리지 말 것(2026-08-11 실기 확인).
+#   depth_profile:=1280x720x15/x30 둘 다 "Frames didn't arrived within 5 seconds"로 죽는다
+#   (USB 대역폭 초과로 추정 — depth+IR×2+color+motion을 전부 1280x720/848x480로 동시 요청하면 못 견딤).
+#   해결: depth_module은 네이티브 848x480(가벼움)에 두고, color_profile만 1280x720으로 올린다.
+#   align_depth.enable=true라 aligned_depth_to_color는 **color 해상도를 따라간다**
+#   (camera.launch.py:62 주석) — 실측: aligned_depth_to_color가 실제로 1280x720, ~19~29 Hz로 안정.
+#   ⚠️ 단 이건 848x480 원본을 1280x720 격자로 리샘플한 것이다 — 색/마스크와의 픽셀 대응은
+#   1280x720이 맞지만, depth 자체의 공간 분해능은 848x480 수준이 상한이다(업샘플이 디테일을
+#   만들어내지 않는다). graspgenx가 원하는 게 "YOLO 마스크와 픽셀 단위로 맞는 depth"라면 이걸로
+#   충분하고, "센서가 실제로 848x480보다 세밀하게 찍는 것"을 기대한 거라면 기대와 다르다.
+ros2 launch m0609_rg2_bringup camera.launch.py depth_profile:=848x480x30 color_profile:=1280x720x30
+
+# T1.5 depth 다운샘플 — 호스트, GPU 불필요. INTER_NEAREST + K 스케일
+ros2 run m0609_rg2_bringup depth_downsample_node.py --ros-args \
+  -p target_width:=424 -p target_height:=240
+```
+
+**검증** (2026-08-11 실기로 아래 값 확인됨)
+
+```bash
+ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw   # 실측 19~29 Hz (color 1280x720)
+ros2 topic hz /cumotion/depth_1/image                            # 실측 15~26 Hz — 다운샘플이 병목 안 만든다
+ros2 topic echo /cumotion/depth_1/image --field width --once     # 424
+ros2 topic echo /cumotion/depth_1/camera_info --field k --once   # fx,fy,cx,cy가 원본의 424/1280, 240/720배 — 실측 일치
+```
+
+- graspgenx는 그대로 `/camera/camera/aligned_depth_to_color/image_raw`(1280x720)를 구독한다 — 수정 불필요.
+- 아래 T4 명령의 `depth_image_topics`/`depth_camera_infos`를 `/cumotion/depth_1/image`,
+  `/cumotion/depth_1/camera_info`로 바꿔야 한다(§4에 반영됨).
+- 이 경로를 안 쓰면(카메라를 계속 424x240 하나로만 굴리면) 이 절은 건너뛰고 기존 §4 원본
+  토픽을 그대로 쓴다.
+- octomap(OMPL 경로) 쪽은 다운샘플 노드가 안 건드린다 — `/camera/camera/depth/color/points`가
+  1280x720 기준으로 커지므로 `m0609_rg2_moveit/config/sensors_3d.yaml`의 `point_subsample`을
+  올려야 한다(그 파일 주석 참고, 배율은 실측 필요).
+- **미검증**: T4(robot_segmenter) 3.7 Hz가 다운샘플된 입력으로 실제로 유지/개선되는지, 이 조합에서
+  graspgenx/yolo가 실제로 잘 동작하는지는 컨테이너·grasp 파이프라인까지 붙여서 재야 한다
+  (이번 검증은 호스트 T1~T1.5까지만; T4~T7은 컨테이너라 사용자 터미널에서 확인 필요).
+
 ## 2. 호스트 — T2: 실기 로봇
 
 ```bash
@@ -232,7 +286,11 @@ source /opt/ros/humble/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 source /workspaces/cobot2_ws/install_container/setup.bash
 export ROS_DOMAIN_ID=93
+export FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/cobot2_ws/fastdds_udp_only.xml
 ```
+
+🔴 **컨테이너 쪽에도 반드시 건다 — 호스트에만 걸면 여전히 안 온다** (양쪽 다 필요, `fastdds_udp_only.xml`
+파일 안 주석 그대로). `graspx_container.sh`가 `docker exec -e`로 이미 하던 것과 같은 조치다.
 
 ⚠️ **`RMW_IMPLEMENTATION`은 설정하지 않는다.** cyclonedds로 바꾸면 T7의 컨트롤러 spawner가
 호스트 `controller_manager` **서비스**를 못 불러 멈춘다(교차 벤더는 토픽만 된다).
@@ -245,14 +303,68 @@ ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \
   -p robot:=m0609_rg2.xrdf \
   -p urdf_path:=/workspaces/isaac_ros-dev/m0609/m0609_kinematics.urdf \
   -p distance_threshold:=0.15 \
+  -p depth_qos:=SENSOR_DATA \
+  -p depth_info_qos:=SENSOR_DATA \
   -p depth_image_topics:="[/camera/camera/aligned_depth_to_color/image_raw]" \
   -p depth_camera_infos:="[/camera/camera/aligned_depth_to_color/camera_info]" \
   -p robot_mask_publish_topics:="[/cumotion/camera_1/robot_mask]" \
   -p world_depth_publish_topics:="[/cumotion/camera_1/world_depth]"
 ```
 
+> §1.5(고해상도 카메라 + 다운샘플 분리)를 쓰는 중이면 `depth_image_topics`/`depth_camera_infos`를
+> `/cumotion/depth_1/image` / `/cumotion/depth_1/camera_info`로 바꿔서 띄운다 — 원본 그대로 물리면
+> T4가 다시 1280x720을 받아 반응속도 이득이 없어진다.
+
 🔴 **이걸 빼면 cuMotion이 로봇 자기 몸을 장애물로 보고 계획이 전부 실패한다**
 (`INVALID_START_STATE_WORLD_COLLISION`). nvblox는 MoveIt의 self-filter를 안 거친다.
+
+🔴 **`depth_qos`/`depth_info_qos`를 안 주면 world_depth가 아예 발행되지 않는다 (2026-08-11 실측).**
+`isaac_ros_common/qos.py`의 `add_qos_parameter(self, 'DEFAULT', 'depth_qos')` 기본값은
+`QoSProfile(depth=10)` = **RELIABLE**인데, realsense 드라이버(및 depth_downsample_node.py)는
+`BEST_EFFORT`(sensor_data QoS)로 발행한다. 안 맞추면 로그에
+`New publisher discovered... offering incompatible QoS. No messages will be received from it.`가
+뜨고 depth 구독 자체가 죽는다 — 에러 없이 조용히 아무것도 안 들어온다. 위 명령에 이미 반영함.
+
+🔴 **realsense depth 프레임의 `header.stamp`가 로봇(`/joint_states`)의 시스템 클록보다
+일관되게 약 1.0~1.06초 뒤처진다 (2026-08-11 실측, `depth_qos` 수정 후에도 재현).**
+`robot_segmenter_node`는 depth와 `/joint_states`를 `ApproximateTimeSynchronizer(slop=0.1)`로
+동기화하는데, 이 오프셋은 slop의 10배가 넘어 **동기화 콜백이 영원히 안 불린다** —
+`/cumotion/camera_1/world_depth`, `/cumotion/camera_1/robot_mask`,
+`/cumotion/robot_segmenter/robot_spheres` 셋 다 발행 자체가 없다(에러 로그도 없음, 조용히 멈춤).
+  - **§1.5(다운샘플) 문제가 아니다** — 원본 `/camera/camera/aligned_depth_to_color/image_raw`도
+    같은 ~1.0s 오프셋을 보인다(직접 대조 확인). 즉 원본 해상도로 T4를 띄워도 이 상태면 똑같이 막힌다.
+  - 원인 후보(미확인): realsense2_camera_node가 하드웨어 타임스탬프를 쓰고 있어서 시스템 클록과
+    안 맞을 가능성 (`use_ros_time_first_pkt` 등 관련 파라미터 확인 필요) — **UNVERIFIED, 다음에 확인**
+  - 문서에 있던 "world_depth 3.7 Hz" 실측치가 어떤 조건에서 나온 값인지도 같이 재확인이 필요하다
+    (이 오프셋이 그때도 있었다면 애초에 그 3.7 Hz는 안 나왔어야 한다).
+  - 재현 확인법: `ros2 topic echo <depth_topic> --field header.stamp --once` vs
+    `ros2 topic echo /joint_states --field header.stamp --once`를 거의 동시에 찍어 sec.nanosec 차를 본다.
+
+🔴 **2026-08-11 근본 원인 확정 — 위 "클록 오프셋"은 가짜였다.** `ros2 topic echo --once`를
+순차 호출(subprocess 기동마다 ~1s)해서 잰 게 원인이었다 — 한 프로세스가 depth+joint_states를
+동시에 구독하는 `message_filters` 프로브로 다시 재니 실제 diff는 ±0.03~0.09s로 slop=0.1
+안에 들어온다(정상). **진짜 원인은 컨테이너가 호스트 토픽을 아예 못 받는 것이었다**:
+  - `ros2 topic list`/`ros2 topic info -v`는 컨테이너에서 정상 — 퍼블리셔·QoS까지 다 보인다.
+  - 그런데 `ros2 topic hz <아무 호스트 토픽>`을 컨테이너 안에서 돌리면 **0건**이다
+    (`/joint_states`, `/camera/.../image_raw`, `/camera/.../camera_info` 전부 재현).
+  - 원인: **`FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/cobot2_ws/fastdds_udp_only.xml`을
+    호스트·컨테이너 양쪽 셸에 안 걸었다.** 이 파일은 2026-08-06에 이미 같은 증상으로
+    만들어져 있었는데(파일 안 주석에 "토픽은 보이는데 안 열린다" 그대로 적혀 있다) T4 실행
+    커맨드에 반영이 안 돼 있었다. 걸고 나면 `/joint_states`는 즉시 10Hz로 안정 수신됨(재확인).
+  - ⚠️ **이걸 걸어도 카메라 스트림(image/camera_info)은 아직 간헐적으로 0건이 난다** —
+    같은 명령을 반복하면 어떤 때는 14-15Hz로 멀쩡히 들어오고 어떤 때는 통째로 안 온다.
+    `/joint_states`(작은 메시지, 10Hz)는 매번 안정적이었다 — **크기 큰 메시지에서만 재현**되는
+    경향으로 봐서 `fastdds_udp_only.xml` 자체 주석에 있는 `net.core.rmem_max`(커널 소켓
+    버퍼 상한, 이 랩탑 기본 212992) 부족 쪽이 유력하지만 **미검증**. sysctl은 랩탑 전역 설정이라
+    팀 합의 없이 안 건드렸다.
+  - **T4/T5를 다시 테스트할 때는 반드시 아래를 호스트·컨테이너 양쪽 셸에 다 걸고 시작한다**:
+    ```bash
+    export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml   # 호스트
+    export FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/cobot2_ws/fastdds_udp_only.xml   # 컨테이너
+    ```
+    이번 세션에서는 위 카메라 스트림 간헐 유실 때문에 `world_depth` 실제 발행까지는
+    확인 못 했다(`is_subscribed()` 게이트는 통과 확인됨 — `robot_segmenter.py:241` 참고,
+    mask/world_depth 퍼블리셔 중 하나라도 구독자가 있어야 `on_timer`가 진행된다).
 
 **검증**: `ros2 topic hz /cumotion/camera_1/world_depth` → 실측 **3.7 Hz**
 ⚠️ 여기가 파이프라인 병목이다(카메라 9.65 → 3.7 Hz, 최대 공백 3.1초).

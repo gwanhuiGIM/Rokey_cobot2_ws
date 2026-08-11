@@ -1003,7 +1003,7 @@ dimensions:
 | 컨테이너 ↔ 호스트 데이터 전송 (양방향) | ✅ 검증됨(2026-08-07 21:15 재측정) — 이전엔 컨테이너→호스트 방향이 막혔던 적이 있다(원인 미특정, 재발 가능성 있음. 로그 문서 참고) |
 | `/grasp/compute_grasp` 서버 | ✅ 구현됨(2026-08-09) — `ros2 interface show`·`select()` 단위 확인까지. **실기 미검증** |
 | 물체 폭 측정 (`grasp_widths`) | ⚠️ 합성 점군으로만 검증 — 4×8 cm 상자에서 38.4/76.8 mm(2/98 퍼센타일이라 4% 작다). **실물 미검증** |
-| 물체 개체 선정(같은 클래스 2개 중 하나) | ❌ 미구현 — 설계만 있음(로그 문서 "다음 방향" 절) |
+| 물체 개체 선정(같은 클래스 2개 중 하나) | ✅ **구현 + 실기 관통 확인**(2026-08-11) — `select_by_point()`/`pixel_to_base()`. 실카메라 씬(물체 6~9개)에서 지정 픽셀의 개체를 정확히 골라 GraspGenX 까지 통과. 단위테스트 7건(`test_select_by_point.py`). 계획 §5 |
 
 가중치 파일(`yolo11n-seg.pt`)은 `.gitignore`의 `*.pt`로 커밋되지 않는다 — 새 PC에서는
 컨테이너 안에서 `ultralytics`가 자동으로 받게 해야 한다(호스트엔 받을 방법이 없다).
@@ -1868,9 +1868,9 @@ ros2 service call /get_keyword std_srvs/srv/Trigger "{}"
 | `cmd` | 아니오 (기본 `pick`) | `pick` \| `pick_and_place` — 이 FSM 의 pick 사이클은 어차피 `place_joints_deg` 에 놓는 것으로 끝나므로 같은 뜻이다. 그 밖은 **거부** |
 | `class` | **예** | 클래스 이름. VLA 쪽 필드명 `class_name` 도 받는다. 여러 개는 **콤마**(`apple,orange`) — 공백이 섞이면 **거부**(FSM 이 첫 단어만 쓰므로 뒷부분이 조용히 사라진다) |
 | `request_id` | 아니오 | VLA 가 붙이고 우리가 **그대로 echo** 한다. 상관관계 추적용 |
-| `pixel` / `pixel_wh` | 짝으로만 | `pixel` 이 있는데 `pixel_wh` 가 없으면 **거부** — 리사이즈된 프레임 좌표면 기준 해상도 없이는 조용히 어긋난다. 🔴 **아직 선정에 쓰이지 않는다**(아래) |
+| `pixel` / `pixel_wh` | 짝으로만 | `pixel` 이 있는데 `pixel_wh` 가 없으면 **거부** — 리사이즈된 프레임 좌표면 기준 해상도 없이는 조용히 어긋난다. 🟢 `pixel_policy:=select` 에서 **개체 선정에 쓰인다**(2026-08-11 구현, 아래) |
 | `base_xy` | 아니오 | 🔴 **아직 안 쓴다.** 게다가 현 캘리브가 `match_tolerance_m`(0.06) 예산 밖이다(계획 §3-2) |
-| `place` | — | 값이 있으면 **거부.** FSM 의 place 는 고정 관절값 하나다 |
+| `place` | 아니오 | `basket`/`table`/`discard` 중 하나면 `/pick/place_location` 로 넘긴다(2026-08-09). 그 밖의 값은 **거부**. `table`/`discard` 관절값은 아직 자리표시자라 실제로는 `basket` 만 안전하다 |
 | `stamp_ns` | 아니오 | 로그·에코용. **TTL 판정에 쓰지 않는다** (아래) |
 
 ### rqt 패널 버튼도 같은 채널로 — `승인`만 뺀다
@@ -1913,16 +1913,17 @@ std_srvs/srv/Trigger {}` 로 직접 눌러야** 한다.
 | 지시 방식 | 상태 |
 |---|---|
 | `class` | ✅ 끝까지 동작 — FSM 타겟 → 브리지 `target_classes` → GraspGenX |
-| `pixel` (개체 지정) | 🔴 **미구현.** `grasp_bridge_node` 에 `select_by_point()` 가 없다 (계획 §5) |
-| `base_xy` | 🔴 **미구현** |
-| `place` | 🔴 범위 밖 |
+| `pixel` (개체 지정) | 🟢 **구현 + 실기 관통**(2026-08-11) — `pixel_policy:=select` 일 때 `grasp_bridge_node.select_by_point()` 가 픽셀→base XY 최근접으로 개체 하나만 남긴다 (계획 §5) |
+| `base_xy` | 🔴 **아직 안 쓴다** — 캘리브가 `match_tolerance_m`(0.06) 예산 밖(계획 §3-2). `pixel` 경로만 선정에 쓴다 |
+| `place` | ⚠️ `basket`/`table`/`discard` 는 받는다(2026-08-09, `/pick/place_location`) — `table`/`discard` 관절값은 아직 자리표시자 |
 
-**미구현 필드를 조용히 무시하지 않는다.** `pixel_policy` 가 그 처리를 정한다:
+**미구현·미사용 필드를 조용히 무시하지 않는다.** `pixel_policy` 가 그 처리를 정한다:
 
 | 값 | 동작 | 언제 |
 |---|---|---|
 | `warn` (기본) | 클래스만으로 진행하고 `/vla/pick_result` 의 `ignored` 에 적어 되돌려준다 | 작업대에 그 클래스 물체가 **하나뿐**일 때 |
-| `reject` | 지시를 거부한다 | **같은 클래스 물체가 2개 이상** 놓일 때. 그러면 `warn` 은 확률적으로 다른 개체를 집는다 — 계획 §5 `refuse_ambiguous_match` 와 같은 판단 |
+| `reject` | 지시를 거부한다 | 같은 클래스 물체가 2개 이상인데 **개체를 지정하지 않을** 때. 그러면 `warn` 은 확률적으로 다른 개체를 집는다 — 계획 §5 `refuse_ambiguous_match` 와 같은 판단 |
+| `select` | `pixel` 로 **개체를 실제로 고른다** → `/pick/target_pixel` 발행 → `task_manager` 가 PERCEIVE 때 `grasp_bridge_node` 에 `pixel_x/y/w/h` 로 밀어 넣는다 → `select_by_point()`. 반경(`match_tolerance_m`) 밖이거나 2등과 `ambiguity_margin_m` 안으로 모호하면 브리지가 그 호출을 실패시킨다(틀린 물체를 집는 것보다 안전) | **같은 클래스 물체가 2개 이상**이고 어느 개체인지 VLA 가 픽셀로 지목할 때(2026-08-11) |
 
 ### TTL 은 **받은 시각** 기준이다 (`stamp_ns` 를 안 쓴다)
 
@@ -1984,7 +1985,7 @@ std_srvs/srv/Trigger {}` 로 직접 눌러야** 한다.
 | `fsm_listening_timeout_sec` | `60.0` | `task_manager.DEFAULT_TIMEOUTS[State.LISTENING]` 의 **사본**. 저쪽이 정본이니 바꿨으면 여기도 맞춘다 |
 | `listening_margin_sec` | `5.0` | 서비스 탐색·왕복 여유 |
 | `allowed_classes` | `config/objects.yaml` 의 `detect` | 콤마 목록. 밖의 클래스는 즉시 거부한다. 비우면 검사 안 함 |
-| `pixel_policy` | `warn` | `warn` \| `reject` (위) |
+| `pixel_policy` | `warn` | `warn` \| `reject` \| `select` (위). `select` 는 픽셀로 개체를 실제로 고른다(2026-08-11 실기 관통). 이상한 값이면 안전하게 `reject` 로 넘어진다 |
 
 > 💡 `wait_timeout_sec` 이 있는 이유: `/get_keyword` 가 즉시 실패로 답하면 FSM 이
 > `SPEAK_FAIL ↔ LISTENING` 을 tick 주기로 왕복하다 `MAX_FAIL_STREAK`(3)로 IDLE 에 떨어진다.
@@ -2032,8 +2033,8 @@ flake8 24건**이 떠서 패키지가 영구 빨강이 된다. 이 ws 가 유지
 | 블로킹 대기 중 SIGINT 응답성 | ✅ **207 ms** | 수정 전에는 최대 `wait_timeout_sec`(50 s) 걸렸다 |
 | `cmd:"start"/"abort"/"reset"` → 서비스 호출·성공/거절 회신 | ✅ 실측 | `/pick/{start,abort,reset}` 를 흉내낸 Trigger 서버로 성공·거절 둘 다 확인 |
 | `cmd:"approve"` 가 항상 거부되는가 | ✅ 실측 | 서비스 클라이언트를 아예 안 만들었으므로 파라미터로도 못 연다 |
-| 🔴 **`task_manager` 와 실제로 연결해 pick 한 사이클** | ❌ **미검증** | 로봇·카메라·GPU 를 다 띄운 상태로 안 돌려봤다 |
-| 🔴 **VLA PC 를 실제로 붙여본 적 없다** | ❌ **미검증** | 핫스팟·도메인·DDS 도달성 전부 미실측 (계획 §3-3(e), §8) |
+| ⚠️ **`task_manager`+`grasp_bridge_node`+실카메라 관통** | ⚠️ **PERCEIVE 까지 검증**(2026-08-11) | `vla_command_node`+`task_manager`(voice:=false)+`grasp_bridge_node`(실 D435i, domain 93) 동시 기동. `/vla/pick_command`(pixel 지정) → `/pick/target_pixel` → `task_manager._on_target_pixel` 수신 → PERCEIVE 에서 `pixel_x/y/w/h` 브리지 push → `select_by_point()` 가 obj 정확히 선정 → GraspGenX grasp 계산까지 관통. **MoveIt 이후(SCENE_PREP~실제 모션)는 아직** — `moveit.launch.py` 를 안 띄워 SCENE_PREP 타임아웃으로 안전하게 ABORT→SAFE_STOP |
+| 🔴 **VLA PC 를 실제로 붙여본 적 없다** | ❌ **미검증** | 위 관통은 `ros2 topic pub` 로 VLA 를 **흉내**낸 것. 실제 원격 PC·핫스팟·도메인·DDS 도달성은 여전히 미실측 (계획 §3-3(e), §8) |
 | `get_keyword`(마이크) 노드 | ❌ **미검증** | 파이썬 의존성이 이 머신에 설치돼 있는지 확인 안 했다 |
 
 > 위 회귀 A~E 는 `/pick/state` 를 손으로 발행해 FSM 을 **흉내낸** 것이다. 진짜 `task_manager`
@@ -2041,8 +2042,8 @@ flake8 24건**이 떠서 패키지가 영구 빨강이 된다. 이 ws 가 유지
 
 ### 다음
 
-1. **`select_by_point()`** — `pixel` 을 실제로 쓰려면 `grasp_bridge_node` 쪽이 필요하다(계획 §5).
-   그게 들어오면 `pixel_policy` 는 사라지고 VLA 는 "사람 대신 클릭하는 클라이언트"가 된다.
+1. ~~**`select_by_point()`**~~ ✅ 2026-08-11 구현 + 실기 관통(PERCEIVE 까지). `pixel_policy:=select` 로 VLA 가
+   개체를 지목한다 — "사람 대신 클릭하는 클라이언트"가 됐다. 남은 것: MoveIt 이후(SCENE_PREP~실제 파지) 실기, 같은 클래스 다중 개체 씬에서의 모호 거부 튜닝(`ambiguity_margin_m`), 실제 VLA PC 연결.
 2. 두 PC DDS 도달성 — 도메인 93 통일, `fastdds_udp_only.xml`, 필요하면 `initialPeersList` 유니캐스트.
 3. D435i 압축 컬러(`…/color/image_raw/compressed`, 실측 5.7 Mbps)를 VLA PC 로 보내는 경로.
 

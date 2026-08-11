@@ -1,6 +1,6 @@
 <!-- meta
-updated: 2026-08-11 (VLA 쪽 세션이 §2/§7/§9 갱신 -- place 완료, pixel 실제 전송 시작,
-         select_by_point() 제안 추가. cobot2_ws 쪽 검토/구현은 아직)
+updated: 2026-08-11 (cobot2_ws 쪽이 §9 제안을 검토·구현함 — select_by_point() 코드 작성
+         완료, 빌드·단위테스트 PASS. §2 pixel_policy 표·§8 을 반영해 갱신. 🔴 실기 미검증)
 status:  live — 값이 바뀌면 이 문서를 덮어쓴다 (append 하지 않는다, 히스토리는 안 남긴다)
 owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_processing/vla_command_node.py`
          (`parse_command()`) 코드다 — 이 문서는 그 요약이라 어긋나면 코드가 이긴다.
@@ -48,7 +48,7 @@ owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_proc
 | `place` | **선택.** `basket` \| `table` \| `discard` 중 하나만 허용, 그 외 값은 거부. 안 보내면 cobot2_ws 파라미터 기본값(`basket`)이 그대로 쓰인다 — §5 참고 |
 | `request_id` | 그대로 echo. **결과 판정은 반드시 이걸로 대조** — 핫스팟류 연결 끊김 시 결과를 놓칠 수 있다(QoS VOLATILE) |
 | `stamp_ns` | 에코만 됨. TTL은 cobot2_ws가 **수신 시각 기준**으로 계산하므로 두 PC 시계 동기화 불필요 |
-| `pixel` + `pixel_wh` | **검증만 되고 선정에 안 쓰인다** (cobot2_ws 쪽 `select_by_point()` 미구현, §8/§9). `pixel_policy=warn`(기본)이면 클래스만으로 진행 + 결과에 `ignored:["pixel"]`, `pixel_policy=reject`면 거부. `pixel`만 보내고 `pixel_wh` 안 보내면 무조건 거부. **VLA 쪽은 2026-08-11부터 실제로 보낸다** — `SceneObject` bbox 중심 픽셀 + 그 프레임의 `image_width/height`. 두 카메라가 같은 물리 D435i라 재투영 없이 그대로 의미가 있다(§9) |
+| `pixel` + `pixel_wh` | **`pixel_policy=select`(신설, 2026-08-11)이면 실제로 개체 선정에 쓰인다** — `select_by_point()`가 cobot2_ws 쪽에 구현됐다(§8/§9, `pixel_x/pixel_y/pixel_w/pixel_h`가 `vla_command_node` → `/pick/target_pixel` → `task_manager` → `grasp_bridge_node` 파라미터로 흐른다). `pixel_policy=warn`(기본)이면 여전히 클래스만으로 진행 + `ignored:["pixel"]`, `reject`면 거부. `pixel`만 보내고 `pixel_wh` 안 보내면 무조건 거부. `pixel_wh`가 지금 depth 프레임 해상도와 다르면(스케일링 추측 안 함) `select`에서 거부. VLA 쪽은 2026-08-11부터 실제로 보낸다 — `SceneObject` bbox 중심 픽셀 + 그 프레임의 `image_width/height`. 두 카메라가 같은 물리 D435i라 재투영 없이 그대로 의미가 있다(§9). 🔴 **cobot2_ws 쪽은 코드·빌드·순수함수 단위테스트까지만 됐다 — 실기 미검증.** `pixel_policy`를 `select`로 올리는 시점(파라미터/launch)은 VLA 쪽 결정 사항 |
 | `base_xy` | 무시됨(`ignored`로 회신), 검증도 없음 |
 | `approve` 관련 필드 | **없다.** `cmd:"approve"`는 코드 경로 자체가 없어 무조건 거부됨 — §4 참고, 이 필드 자체를 스키마에서 빼는 게 맞다 |
 
@@ -113,14 +113,42 @@ cobot2_ws는 `allowed_classes`로 들어온 클래스를 검사해서 밖의 이
   거부하지만, `enable_robot`(VLA 단독 모드, cobot2_ws 없이 도는 경로)에서는 실제로
   쓰는 기능이라 스키마에서 빼지 않기로 함 — cobot2_ws 쪽 조치 불필요.
 
-## 8. cobot2_ws 쪽에 아직 없는 것 (기다리지 않아도 됨)
+## 8. cobot2_ws 쪽 구현 상태 (2026-08-11 갱신)
 
-- `select_by_point()` — `pixel` 좌표로 특정 개체를 찍어 집는 기능. 아직 미구현이라
-  `pixel`을 보내도 선정에 안 쓰인다(§2 표). 되묻기("1번")가 실제로 그 개체를 집어야 하는지
-  여부는 cobot2_ws 쪽 결정 사항 — 필요 없으면(씬에 같은 클래스 1개만 두는 데모로 범위를
-  좁히면) 지금 그대로 접합 가능하다. 구현할 거면 §9 참고.
+- ✅ **`select_by_point()` 구현 완료** — §9 제안(마스크 point-in 대신 base XY 최근접
+  매칭, 아래 참고)을 그대로 코드로 옮겼다. `pixel`을 보내도 선정에 안 쓰이던 상태는
+  해소됐다 — `pixel_policy=select`로 올리면 쓰인다(§2 표).
+  - 새 파일 없음. 손댄 곳 4개: `graspgenx_perception/capture_graspgenx_scene.py`
+    (`pixel_to_base()`·`select_by_point()` 순수함수 신설), `grasp_bridge_node.py`
+    (`compute()`에 배선 — `segment()` 직후·워커 호출 전, class 필터와 같은 자리),
+    `voice_processing/vla_command_node.py`(`pixel_policy` 값에 `select` 추가,
+    `/pick/target_pixel` 발행 신설), `pick_fsm/task_manager.py`(`/pick/target_pixel`
+    구독 + `_push_bridge()`가 `target_classes`와 같이 `pixel_x/y/w/h` 파라미터를 민다).
+  - **채널**: `vla_command_node` → `/pick/target_pixel`(String JSON
+    `{"x":,"y":,"w":,"h":}`, place와 같은 TRANSIENT_LOCAL QoS) → `task_manager`
+    → (다음 PERCEIVE 진입 때 1회, `target_classes`와 같은 SetParameters 호출)
+    → `grasp_bridge_node`의 `pixel_x/pixel_y/pixel_w/pixel_h` 파라미터.
+    ⚠️ **place와 달리 단발성이다** — `task_manager`가 다음 PERCEIVE에 실어 보내는
+    즉시 지운다. 안 그러면 클래스만 지시한 다음 pick이 이전 프레임 좌표를 재사용해
+    엉뚱한 물체를 가리킨다(place_location은 반대로 "다음 값이 올 때까지 유지"가 맞는
+    의미라 계속 남아 있다 — 둘의 성격이 다르다).
+  - **매칭 로직**은 §9 제안과 한 가지 다르다: 마스크 point-in-polygon이 아니라
+    **base XY 최근접 centroid 매칭**이다(`md/plans/2026-08-08-vla-integration.md`
+    §5가 이 문서보다 먼저 있던 정본 설계라 그쪽을 따랐다) — `match_tolerance_m`
+    (기본 0.06, VLA `system.yaml`과 값을 맞춤) 안에 후보가 없으면 거부, 2등과의
+    거리차가 `ambiguity_margin_m`(기본 0.02) 미만이면 모호로 보고 **역시 거부**한다
+    (`refuse_ambiguous_match`, 기본 true — false면 거리만으로 1등을 쓴다).
+    실측 튜닝값 아님(UNVERIFIED) — 실기에서 다시 잡을 값이다.
+  - 🔴 **실기 미검증.** `colcon build --packages-select graspgenx_perception
+    voice_processing pick_fsm` PASS, 순수함수 단위테스트 PASS(`test_select_by_point.py`
+    7건 + `test_vla_command.py` pixel_policy=select 케이스 포함 34건 전체) — PERCEIVE
+    한 사이클을 실기로 관통시켜 본 적은 없다. 특히 미검증인 것: ① `pixel_to_base()`의
+    5×5 median depth-hole 방어가 실제 D435i 노이즈에서 충분한지 ② `match_tolerance_m`/
+    `ambiguity_margin_m` 값 자체(초안값, VLA `system.yaml`의 `match_tolerance_m`만
+    맞췄고 margin은 이 ws가 임의로 정함) ③ `/pick/target_pixel`의 단발성 소비 타이밍이
+    실제 LISTENING→PERCEIVE 전이 사이에서 안전하게 맞물리는지.
 
-## 9. 🟡 제안 — `select_by_point()` 설계 (VLA 쪽 작성, 2026-08-11, cobot2_ws 검토 대기)
+## 9. `select_by_point()` 설계 제안 원문 (VLA 쪽 작성, 2026-08-11 — §8이 실제 구현이다)
 
 **전제가 하나 바뀌었다**: `pixel`을 처음 스키마에 넣을 때는 VLA 쪽 카메라와 cobot2_ws
 쪽 카메라가 다른 물리 장치라고 알려져 있었다(그래서 좌표 재투영 없인 무의미해 미구현

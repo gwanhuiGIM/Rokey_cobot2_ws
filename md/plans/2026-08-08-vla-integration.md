@@ -748,7 +748,10 @@ VLA: C270 → homography → base XY   VLA: 우리 컬러 프레임의 픽셀 (u
 
 ---
 
-## 5. 물체 선정(target selection) — 우리 쪽 구현. **미구현**
+## 5. 물체 선정(target selection) — 우리 쪽 구현. **✅ 코드·빌드·단위테스트 완료(2026-08-11), 🔴 실기 미검증**
+
+> 구현 상세·검증 상태는 [[ws/cobot2/vla-bridge-contract]] §8이 단일 출처다(중복 안 적는다).
+> 아래는 이 절이 원래 갖고 있던 **설계 근거**만 남긴다.
 
 > 📌 **선행 문서**: [[ws/cobot2/plans/2026-08-07-graspgenx-target-matching]] 이 "무슨 **종류**를
 > 잡나"(`target_classes` 배선)까지를 소유한다. **이 절은 그 다음 단계인 "어느 개체를 잡나"만**
@@ -763,7 +766,7 @@ VLA: C270 → homography → base XY   VLA: 우리 컬러 프레임의 픽셀 (u
 |---|---|---|
 | 무엇이 보이나 | `/yolo_seg/classes` (label·class·conf) | ✅ — **좌표가 없다** |
 | 무슨 **종류**를 잡나 | `target_classes` (워커 호출 **전** 필터) | ✅ |
-| **어느 개체**를 잡나 | `target='obj_2'` (워커 호출 **후**) | ❌ `obj_N` 은 프레임마다 바뀜 → 실사용 불가 |
+| **어느 개체**를 잡나 | `select_by_point()`(워커 호출 **전**, base XY 매칭) | ✅ 구현·빌드·단위테스트 PASS(2026-08-11) / 🔴 실기 미검증 — [[ws/cobot2/vla-bridge-contract]] §8 |
 
 ### 선택 키는 id 가 아니라 **base XY 좌표**
 

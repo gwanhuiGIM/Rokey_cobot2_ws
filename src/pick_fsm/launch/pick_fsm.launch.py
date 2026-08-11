@@ -6,8 +6,11 @@
 
 `robot_safety_node`(안전정지·backdrive 서비스, 로봇상태 발행)는 **여기 포함시켰다.** UI(rqt
 패널)는 있으나 없으나 자동중단(충돌 감지 시 task_manager 가 하던 작업을 abort)은 항상 동작해야
-하기 때문이다 — rqt 패널은 이 런치와 별개로 필요할 때만 띄운다(README "UI" 절):
-    rqt --standalone pick_fsm
+하기 때문이다 — safety 노드는 `rqt:=false` 로 꺼도 항상 뜬다.
+
+`rqt`(기본 `true`)는 이 런치가 `rqt --standalone pick_fsm` 을 같이 띄울지를 정한다.
+끄려면:
+    ros2 launch pick_fsm pick_fsm.launch.py rqt:=false
 
 ⚠️ `dry_run`(계획만) 인자는 2026-08-09 제거했다. **이 런치는 항상 실기를 움직인다.**
 남은 소프트 안전장치는 `require_approval:=true`(기본값) 하나이고, 최종 안전장치는
@@ -38,7 +41,8 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -110,6 +114,9 @@ def generate_launch_description():
         DeclareLaunchArgument('log_level', default_value='info'),
         DeclareLaunchArgument('robot_ns', default_value='dsr01',
                               description='robot_safety_node 가 Doosan 서비스를 찾을 네임스페이스'),
+        DeclareLaunchArgument('rqt', default_value='true',
+                              description='감시 UI(rqt --standalone pick_fsm)를 같이 띄울지. '
+                                          'false 로 끄면 task_manager/robot_safety_node 만 뜬다'),
     ]
 
     # yaml 을 먼저 깔고 런치 인자를 그 위에 덮는다 (뒤에 오는 dict 가 이긴다).
@@ -154,4 +161,10 @@ def generate_launch_description():
                                                  value_type=str)}],
     )
 
-    return LaunchDescription(args + [task_manager, safety])
+    rqt = ExecuteProcess(
+        cmd=['rqt', '--standalone', 'pick_fsm'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('rqt')),
+    )
+
+    return LaunchDescription(args + [task_manager, safety, rqt])

@@ -60,8 +60,23 @@ rqt 패널(`pick_fsm.rqt_panel`)의 시작/중단/리셋 버튼은 `/pick/start`
 
 ## 지금 구현된 것 / 안 된 것
 
-`class`(클래스 이름)만 끝까지 동작한다. `pixel`(어느 개체인가)·`base_xy` 는 **검증만 하고
-선정에 못 쓴다** — `grasp_bridge_node` 에 `select_by_point()` 가 없다(계획 §5).
+`class`(클래스 이름)는 끝까지 동작한다. `pixel`(어느 개체인가)도 **2026-08-11부터
+`pixel_policy=select` 에서 선정에 쓰인다** — `grasp_bridge_node.select_by_point()`(계획
+§5)가 받는다. 경로: 이 노드가 `/pick/target_pixel`(JSON)로 publish → `task_manager`가
+받아서 PERCEIVE 진입 때 `grasp_bridge_node`에 `pixel_x/y/w/h` 파라미터로 밀어 넣는다
+(`target_classes`와 같은 자리). `base_xy` 는 여전히 **검증만 하고 선정에 못 쓴다**
+(계획 §5는 base XY 를 폴백 경로로만 남긴다 — VLA가 자기 카메라로 볼 때 쓰는 경로라
+이 ws 카메라 좌표와 바로 안 맞는다).
+
+`pixel_policy` 세 값의 뜻:
+  - `warn`(기본): pixel 이 와도 무시하고 클래스만으로 진행, `ignored:["pixel"]` 로 회신
+  - `reject`: pixel 이 오면 거부(개체가 모호할 위험을 아예 안 지겠다는 선택)
+  - `select`: pixel 을 실제로 써서 개체를 고른다. 같은 class 후보가 씬에 없거나
+    `match_tolerance_m`(브리지 파라미터, 기본 0.06m) 밖이면, 또는 2등 후보와
+    `ambiguity_margin_m`(기본 0.02m) 안으로 붙어 모호하면 **grasp_bridge_node 가 그
+    호출 자체를 실패시킨다** — 틀린 물체를 집는 것보다 안전하다.
+🔴 **실기 미검증** — 코드·빌드·순수함수 테스트까지만 됐다. 실기로 PERCEIVE 한 사이클
+전체(픽셀 지정 → 개체 선정 → grasp)를 관통시켜 본 적은 아직 없다.
 
 `place` 는 2026-08-09 `pick_fsm.task_manager` 가 `PLACE_LOCATIONS`(basket/table/discard
 세 고정 관절자세)을 갖게 되면서 **여기서도 받는다.** 좌표가 아니라 그 세 이름 중 하나만
@@ -143,7 +158,12 @@ BLOCKED_CMDS = ('approve',)
 
 #: `pixel_policy` 가 이상한 값이면 여기로 떨어진다. 안전한 쪽(거부)으로 넘어져야 한다 —
 #: 오타 하나로 "같은 클래스 2개일 때의 유일한 방어"가 조용히 꺼지면 안 된다.
+#: `select`(실제 선정)로 폴백하지 않는 이유가 이것이다 — 애매하면 안 집는 쪽이 낫다.
 FALLBACK_PIXEL_POLICY = 'reject'
+
+#: `pixel_policy` 로 받아들이는 값. `select` 는 2026-08-11 `select_by_point()` 구현과
+#: 함께 추가됐다 — `grasp_bridge_node`가 준비되기 전까지는 `warn`/`reject` 만 뜻이 있었다.
+PIXEL_POLICIES = ('warn', 'reject', 'select')
 
 #: `pick_fsm.task_manager.PLACE_LOCATIONS` 의 키와 **반드시 같아야 한다.** 패키지 경계를
 #: 넘는 import 는 안 하므로(둘 다 토픽/서비스로만 통신 — 헤더 참고) 값을 여기 복제해 둔다.
@@ -231,7 +251,7 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
         place = raw_place.strip()
 
     ignored = []
-    pixel = None
+    pixel = pixel_wh = None
     if 'pixel' in doc:
         pixel, why = _pair(doc['pixel'], 'pixel')
         if why:
@@ -240,15 +260,17 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
         # 계획 §2: 값이 없으면 **거부한다**.
         if 'pixel_wh' not in doc:
             return None, 'pixel 을 보냈으면 pixel_wh(기준 해상도)도 보내야 한다'
-        wh, why = _pair(doc['pixel_wh'], 'pixel_wh')
+        pixel_wh, why = _pair(doc['pixel_wh'], 'pixel_wh')
         if why:
             return None, why
-        if wh[0] <= 0 or wh[1] <= 0:
-            return None, f'pixel_wh 가 양수가 아니다: {wh}'
+        if pixel_wh[0] <= 0 or pixel_wh[1] <= 0:
+            return None, f'pixel_wh 가 양수가 아니다: {pixel_wh}'
         if pixel_policy == 'reject':
-            return None, ('pixel 개체 지정은 아직 구현되지 않았다 '
-                          '(grasp_bridge_node 에 select_by_point 없음)')
-        ignored.append('pixel')
+            return None, 'pixel 개체 지정은 이 노드 설정(pixel_policy=reject)에서 막혀 있다'
+        if pixel_policy == 'select':
+            pass  # 아래 out['pixel'] 에 그대로 실어 _on_pick_command 가 브리지로 넘긴다
+        else:
+            ignored.append('pixel')
     if 'base_xy' in doc:
         ignored.append('base_xy')
 
@@ -256,12 +278,16 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
         'cmd': cmd,
         'class': ','.join(wanted),
         'request_id': str(doc.get('request_id', '')),
-        # `stamp_ns` 는 결과에 에코해 상관관계 추적에 쓴다. `pixel` 은 `select_by_point()`
-        # (계획 §5)가 들어올 자리다 — 그때까지는 검증만 한다. `place` 는 None 이면
+        # `stamp_ns` 는 결과에 에코해 상관관계 추적에 쓴다. `place` 는 None 이면
         # "지정 안 함"(호출부가 `/pick/place_location` 을 건드리지 않는다) — 파라미터
         # 기본값(`basket`)이 그대로 쓰인다(task_manager 쪽 계약, `_on_pick_command` 참고).
+        # `pixel`/`pixel_wh` 는 검증만 통과하면 정책과 무관하게 채워진다(기존 계약 유지 —
+        # `warn`에서도 값 자체는 내보내고 왔었다). **실제로 쓸지는 `ignored`로 판정한다**:
+        # `pixel_policy=select` 일 때만 `ignored`에 'pixel'이 없다 — `_on_pick_command`가
+        # 이 조건으로 브리지에 넘길지를 결정한다.
         'stamp_ns': doc.get('stamp_ns'),
         'pixel': pixel,
+        'pixel_wh': pixel_wh,
         'place': place,
         'ignored': ignored,
     }
@@ -269,7 +295,7 @@ def parse_command(raw: str, *, allowed_classes=(), pixel_policy: str = 'warn'):
     if ignored:
         warn = (f'{ignored} 는 아직 쓰지 않는다 — 클래스 이름만으로 고른다. '
                 '같은 클래스 물체가 여럿이면 다른 개체를 집을 수 있다 '
-                "(막으려면 pixel_policy:='reject')")
+                "(개체까지 지정하려면 pixel_policy:='select', 아예 막으려면 'reject')")
     return out, warn
 
 
@@ -291,6 +317,8 @@ class VlaCommandNode(Node):
         # `task_manager._on_place_location` 이 듣는 그 토픽이다 — 이름을 바꾸면 저쪽 launch
         # 인자도 같이 바꿔야 매칭된다.
         self.declare_parameter('place_location_topic', '/pick/place_location')
+        # `task_manager._on_target_pixel` 이 듣는 토픽 — pixel_policy=select 일 때만 쓴다.
+        self.declare_parameter('target_pixel_topic', '/pick/target_pixel')
         # 🔴 승인 서비스는 파라미터로도 두지 않는다 — 있으면 언젠가 켜진다 (§0-B).
         self.declare_parameter('auto_start', False)
         self.declare_parameter('ttl_sec', 10.0)
@@ -305,11 +333,11 @@ class VlaCommandNode(Node):
         #    나중에 문자열 배열을 못 넣는다(2026-08-09 실측). 이 ws 의 `target_classes`
         #    (grasp_bridge_node)도 콤마 문자열이라 표기가 일치한다.
         self.declare_parameter('allowed_classes', '')
-        self.declare_parameter('pixel_policy', 'warn')       # warn | reject
+        self.declare_parameter('pixel_policy', 'warn')       # warn | reject | select
 
         policy = str(self.get_parameter('pixel_policy').value)
-        if policy not in ('warn', 'reject'):
-            raise ValueError(f'pixel_policy 는 warn|reject 다: {policy!r}')
+        if policy not in PIXEL_POLICIES:
+            raise ValueError(f"pixel_policy 는 {'|'.join(PIXEL_POLICIES)} 다: {policy!r}")
 
         self._ttl = float(self.get_parameter('ttl_sec').value)
         self._wait = float(self.get_parameter('wait_timeout_sec').value)
@@ -341,6 +369,10 @@ class VlaCommandNode(Node):
         # QoS 는 `PLACE_QOS`(TRANSIENT_LOCAL) — task_manager 구독이 이걸 요구한다(위 정의부 참고).
         self.place_pub = self.create_publisher(
             String, str(self.get_parameter('place_location_topic').value), PLACE_QOS)
+        # place 와 같은 QoS다 — `task_manager._on_target_pixel` 구독도 TARGET_QOS
+        # (= PLACE_QOS 와 값이 같다)다.
+        self.pixel_pub = self.create_publisher(
+            String, str(self.get_parameter('target_pixel_topic').value), PLACE_QOS)
         self.create_subscription(
             String, str(self.get_parameter('command_topic').value),
             self._on_command, COMMAND_QOS, callback_group=cb)
@@ -388,7 +420,7 @@ class VlaCommandNode(Node):
         그때 오타 하나가 "같은 클래스 2개일 때의 유일한 방어"를 조용히 끄면 안 된다.
         """
         value = str(self.get_parameter('pixel_policy').value)
-        if value in ('warn', 'reject'):
+        if value in PIXEL_POLICIES:
             return value
         self.get_logger().error(
             f'pixel_policy 가 이상하다: {value!r} — 안전한 쪽으로 '
@@ -489,6 +521,18 @@ class VlaCommandNode(Node):
             self.place_pub.publish(String(data=cmd['place']))
             self.get_logger().info(
                 f"[{cmd['request_id'] or '-'}] 내려놓을 위치 지정: {cmd['place']}")
+
+        if cmd['pixel'] is not None and 'pixel' not in cmd['ignored']:
+            # place 와 같은 순서 이유(위 주석) — `task_manager._on_target_pixel` 은
+            # **단발성**(다음 PERCEIVE 가 소비하면 지운다)이라 place 보다 오히려 타이밍이
+            # 더 중요하다: 늦게 보내면 이 pick 지시가 이전 좌표를 못 받고 지나칠 수 있다.
+            px, py = cmd['pixel']
+            pw, ph = cmd['pixel_wh']
+            self.pixel_pub.publish(String(data=json.dumps(
+                {'x': px, 'y': py, 'w': pw, 'h': ph})))
+            self.get_logger().info(
+                f"[{cmd['request_id'] or '-'}] 개체 선정 좌표 전달: ({px:.0f},{py:.0f}) "
+                f'/ 기준 {pw:.0f}x{ph:.0f}')
 
         with self._cv:
             old = self._pending[0] if self._pending is not None else None
