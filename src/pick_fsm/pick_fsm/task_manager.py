@@ -165,6 +165,12 @@ PARAM_DEFAULTS = {
     'object_id': 'pick_target',
     'object_radius_m': 0.04,
     'clear_octomap_before_descend': False,
+    # 2026-08-11 실기 확인: table/discard place 목표 자세가 PICK 단계에서 찍힌 옥토맵
+    # 포인트(테이블 표면)와 거의 항상 겹친다 — "물체를 표면에 내려놓는 자세"는 정의상
+    # 그 표면의 옥토맵 포인트에 붙어 있을 수밖에 없다. move_group 로그로 확인:
+    # `Found a contact between '<octomap>' and 'rg2_base_link'` → RRTConnect가
+    # goal state를 아예 샘플 못 해 매번 FAILURE(99999). 이 ws에서는 기본 True로 켠다.
+    'clear_octomap_before_place': True,
     'allow_gripper_octomap_collision': False,
     'gripper_links': ['rg2_base_link',
                       'rg2_left_outer_knuckle', 'rg2_left_inner_knuckle',
@@ -322,6 +328,8 @@ class TaskManager(Node):
         self.create_service(Trigger, '/pick/approve', self._srv_approve, callback_group=cb)
         self.create_service(Trigger, '/pick/abort', self._srv_abort, callback_group=cb)
         self.create_service(Trigger, '/pick/reset', self._srv_reset, callback_group=cb)
+        self.create_service(Trigger, '/pick/retry_place', self._srv_retry_place,
+                            callback_group=cb)
 
         # ── FSM 내부 상태 ─────────────────────────────────
         self.state = State.IDLE
@@ -441,6 +449,11 @@ class TaskManager(Node):
 
         ⚠️ target 과 같은 이유로 **진행 중인 작업에는 적용하지 않는다** — PICK 도중에
         바뀌면 로그가 가리키는 목적지와 실제 PLACE 관절이 갈라진다. 다음 `/pick/start`부터.
+
+        **PLACE_RETRY 에서는 예외적으로 즉시 반영한다.** 이 상태는 "PLACE 가 실패해서
+        다른 위치로 다시 시도할지 사람에게 묻는" 자리라, 다음 사이클이 아니라 **이번
+        재시도**가 곧 "다음"이다 — `_srv_retry_place`가 `self.place_location`을 그대로
+        읽어 쓰므로, 여기서 안 바꾸면 재시도 버튼이 실패했던 그 위치로 또 간다.
         """
         value = msg.data.strip()
         if value not in PLACE_LOCATIONS:
@@ -450,6 +463,9 @@ class TaskManager(Node):
         self._place_override = value
         if self.state is State.IDLE:
             self.get_logger().info(f'내려놓을 위치 지정: {value}')
+        elif self.state is State.PLACE_RETRY:
+            self.place_location = value
+            self.get_logger().info(f'놓기 재시도 목적지 변경: {value} — [재시도]를 누르면 이 위치로 간다')
         else:
             self.get_logger().warn(
                 f'내려놓을 위치 지정 {value} — 진행 중인 {self.state.name} 에는 적용하지 않는다. '
@@ -521,6 +537,22 @@ class TaskManager(Node):
         self._home_next = State.IDLE
         self._to(State.HOME, 'SAFE_STOP 복구 — 홈으로 복귀 후 재개')
         res.success, res.message = True, 'HOME 복귀 후 IDLE'
+        return res
+
+    def _srv_retry_place(self, _req, res):
+        """PLACE 실패로 물체를 문 채 정지(PLACE_RETRY)한 상태에서만 먹는다.
+
+        재촬영·재인식 없이 곧장 PLACE 로 되돌아간다 — 물체는 이미 attach 된 채라
+        SCENE_PREP/PLAN 을 다시 돌 필요가 없다. `/pick/place_location`(rqt 패널 '내려놓을
+        위치' 콤보)을 이 상태에서 새로 보내면 `_on_place_location`이 즉시 반영해두므로
+        (target/place 의 "다음 /pick/start 부터" 규칙과 다르다 — 여기선 이번 재시도가
+        곧 그 다음이다), 다른 위치를 골라 여기를 부르면 그 위치로 다시 계획한다.
+        """
+        if self.state is not State.PLACE_RETRY:
+            res.success, res.message = False, f'놓기 재시도 대기 중이 아니다 (현재 {self.state.name})'
+            return res
+        self._to(State.PLACE, f"놓기 재시도 — 목적지 '{self.place_location}'")
+        res.success, res.message = True, f"'{self.place_location}' 로 다시 계획한다"
         return res
 
     # ────────────────────────────────────────────────────────
@@ -1131,8 +1163,31 @@ class TaskManager(Node):
         # PLACE_LOCATIONS 의 키다 — __init__ 이 파라미터 기본값을, _on_place_location 이
         # 토픽 오버라이드를 각각 진입 시점에 검증해서 막는다. .get() 의 기본값은 그 두 검증을
         # 모두 우회하는 경로가 생기더라도 조용히 잘못된 곳으로 움직이지 않기 위한 방어선이다.
+        if bool(self.p('clear_octomap_before_place')) and not self._octomap_cleared:
+            self._octomap_cleared = True
+            self.moveit.clear_octomap_async()
+            self.get_logger().warn('octomap 을 비웠다 — place 구간은 미모델링 장애물이 안 보인다')
         param_name = PLACE_LOCATIONS.get(self.place_location, PLACE_LOCATIONS['basket'])
-        self._joint_move(param_name, State.RELEASE)
+        # on_fail=PLACE_RETRY: 여기서 motion_retries 를 소진해도 곧장 ABORT(→SAFE_STOP)로
+        # 안 보낸다. 물체를 이미 들고 있어(HOLDING_STATES) 재인식부터 다시 하는 것보다
+        # 사람이 다른 place_location 을 골라 재시도하는 편이 훨씬 싸다 — 아래
+        # `_st_place_retry`/`_srv_retry_place` 참고.
+        self._joint_move(param_name, State.RELEASE, on_fail=State.PLACE_RETRY)
+
+    def _st_place_retry(self):
+        """PLACE 모션이 motion_retries 를 소진한 뒤의 정지 대기.
+
+        SAFE_STOP 과 달리 물체를 문 채다(HOLDING_STATES) — 아무것도 안 하고 사람이
+        `/pick/place_location`으로 다른 위치를 고르고 `/pick/retry_place`를 부르길
+        기다린다. DEFAULT_TIMEOUTS 에 없어 자동으로 안 끊긴다(SAFE_STOP/WAIT_APPROVAL과
+        같은 패턴 — 사람 판단을 기다리는 상태는 시간제한을 안 건다).
+        """
+        if self._nag == 0:
+            self._nag = 1
+            self.get_logger().error(
+                f"PLACE_RETRY — '{self.place_location}' 놓기 실패, 물체를 문 채 정지. "
+                "다른 위치로 바꾸려면 /pick/place_location 후 "
+                "ros2 service call /pick/retry_place std_srvs/srv/Trigger {}")
 
     def _st_release(self):
         if not self._extra:
@@ -1153,7 +1208,7 @@ class TaskManager(Node):
     def _st_home(self):
         self._joint_move('home_joints_deg', self._home_next)
 
-    def _joint_move(self, param_name: str, nxt: State):
+    def _joint_move(self, param_name: str, nxt: State, on_fail: State = State.ABORT):
         """고정 관절자세로 이동. IK 가 필요 없어 해를 직접 만든다."""
         if param_name not in self.solutions:
             names = list(self.p('joint_names'))
@@ -1166,7 +1221,7 @@ class TaskManager(Node):
             js.name = names
             js.position = positions
             self.solutions[param_name] = js
-        self._move(param_name, nxt, State.ABORT)
+        self._move(param_name, nxt, on_fail)
 
     def _st_speak_fail(self):
         # TTS 는 이 ws 에 아직 없다. 로그 + /pick/state 로 통보한다.

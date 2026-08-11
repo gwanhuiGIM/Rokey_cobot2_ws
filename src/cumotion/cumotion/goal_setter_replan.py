@@ -175,8 +175,13 @@ GOAL_MODE = 'pose'
 
 # 🎯 티치펜던트 화면(또는 get_current_posx())에 뜨는 x,y,z,rx,ry,rz 를 그대로 옮겨 적는다.
 #    mm→m, Euler ZYZ(deg)→쿼터니언 변환은 posx_from_pendant() 가 처리한다.
-GOAL_A_POSE = posx_from_pendant(504, -448,146,129,-165,169)
-GOAL_B_POSE = posx_from_pendant(-47, 612, 174, 91, 158, 176)
+# 🔴 A는 posx_from_pendant()로 안 쓴다 — 펜던트 TCP가 tool0가 아니라 그리퍼 끝으로 설정돼
+#    있어서(2026-08-11 확인), 그 값을 그대로 tool0 pose로 보내면 TCP 오프셋만큼 어긋난
+#    목표가 되어 IK_FAIL이 났다. 아래는 로봇을 move_line으로 그 자세에 둔 채
+#    `ros2 run tf2_ros tf2_echo base_link tool0`로 직접 읽은 tool0 pose다(2026-08-11).
+GOAL_A_POSE = [0.464, -0.400, 0.378, 0.738, -0.288, -0.579, -0.193]
+# B도 같은 이유로 posx_from_pendant() 대신 tf2_echo 실측값(2026-08-11).
+GOAL_B_POSE = [-0.005, 0.373, 0.397, -0.419, 0.371, 0.604, 0.567]
 
 # ═══════════════════════ 목표 설정 끝 ═══════════════════════════════════════
 

@@ -9,6 +9,13 @@
 # 🔴 이 노드가 파이프라인 병목이다 (2026-08-06 실측: 카메라 9.65 Hz → world_depth 3.7 Hz).
 #    "실시간 회피"의 상한을 여기가 정한다. nvblox를 아무리 빨리 돌려도 지도는 3.7 Hz다.
 #
+# ⚠️ 2026-08-11 재검토: 위 3.7 Hz는 재현되지 않았다 — 호스트↔컨테이너
+#    FASTRTPS_DEFAULT_PROFILES_FILE(README 6절/config/testcommand.md 참고)을 걸고 깨끗한
+#    상태에서 다시 재니 world_depth가 원본 1280x720에서도 9.2~10.0 Hz(카메라 속도 그대로)로
+#    나왔다. GPU 연산 자체는 프레임당 15.7ms로 여유가 크다. **3.7 Hz는 이 파일과 무관하게
+#    당시 FASTRTPS 미설정으로 인한 DDS 패킷 유실이었을 가능성이 크다(미확정 — 그때 조건
+#    기록이 없어 100% 단정은 아니다).** 병목이라고 다시 믿기 전에 FASTRTPS부터 확인할 것.
+#
 # 사용 (T4, 컨테이너):
 #   cd /workspaces/isaac_ros-dev
 #   ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \

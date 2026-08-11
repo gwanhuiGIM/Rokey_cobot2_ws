@@ -171,6 +171,20 @@ class PickFsmPanel(Plugin):
         self._lbl_place = QLabel('현재 위치: (수신 대기)')
         self._lbl_place.setWordWrap(True)
         place_col.addWidget(self._lbl_place)
+        # PLACE_RETRY 전용: 놓기 모션이 실패해 물체를 문 채 정지했을 때만 먹는다
+        # (task_manager._srv_retry_place). 위 콤보+[적용]으로 위치를 먼저 바꾸면 이
+        # 상태에서는 즉시 반영되므로(_on_place_location 의 PLACE_RETRY 분기), 다른
+        # 위치를 고르고 이 버튼을 누르면 그 위치로 재시도한다. 다른 상태에서 누르면
+        # task_manager 가 거부 메시지를 준다 — 안전하게 그냥 실패로 표시된다.
+        retry_row = QHBoxLayout()
+        btn_place_retry = self._make_button(node, '놓기 재시도(PLACE_RETRY)', Trigger,
+                                             '/pick/retry_place')
+        btn_place_retry.setToolTip('그립까지 성공했는데 놓을 위치로 계획/이동이 실패해 '
+                                   "물체를 문 채 정지(PLACE_RETRY)했을 때만 동작한다. "
+                                   '위 콤보에서 다른 위치를 고르고 [적용] 한 뒤 눌러도 '
+                                   '되고, 같은 위치로 그냥 재시도해도 된다.')
+        retry_row.addWidget(btn_place_retry)
+        place_col.addLayout(retry_row)
         outer.addWidget(place_box)
 
         # ── 속도 ────────────────────────────────────────────

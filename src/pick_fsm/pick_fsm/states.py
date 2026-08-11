@@ -33,6 +33,7 @@ class State(Enum):
     RELEASE_RETRY = auto()   # 놓치면 열고 재시도
     LIFT = auto()            # 들어올리기 (물체 attach 된 상태)
     PLACE = auto()           # 놓을 자세로 이동
+    PLACE_RETRY = auto()     # 놓기 계획/이동 실패 — 물체 문 채 정지, 사람이 위치 바꿔 재시도
     RELEASE = auto()         # 그리퍼 열기 + detach
     HOME = auto()            # 홈 복귀
     SPEAK_FAIL = auto()      # 실패 통보
@@ -65,7 +66,12 @@ TRANSITIONS: dict[State, set[State]] = {
     # task_manager._home_next 가 정한다.
     State.RELEASE_RETRY:  {State.HOME, State.ABORT},
     State.LIFT:           {State.PLACE, State.ABORT},
-    State.PLACE:          {State.RELEASE, State.ABORT},
+    # PLACE 가 motion_retries 까지 소진하면 곧장 ABORT 가 아니라 PLACE_RETRY 로 간다 —
+    # 물체를 이미 들고 있어서(HOLDING_STATES) 재인식부터 다시 하는 SAFE_STOP 복구보다
+    # "다른 위치로 다시 계획"이 훨씬 싸고 안전하다(재촬영 없음). 사람이 /pick/retry_place
+    # 를 부르기 전까진 SAFE_STOP 처럼 정지 유지.
+    State.PLACE:          {State.RELEASE, State.PLACE_RETRY, State.ABORT},
+    State.PLACE_RETRY:    {State.PLACE, State.ABORT},
     State.RELEASE:        {State.HOME, State.ABORT},
     State.HOME:           {State.IDLE, State.PERCEIVE, State.ABORT},
     State.SPEAK_FAIL:     {State.IDLE, State.LISTENING},
@@ -78,7 +84,7 @@ MOTION_STATES = frozenset({State.APPROACH, State.DESCEND, State.LIFT, State.PLAC
 
 #: 물체를 물고 있을 수 있는 상태. 여기서 ABORT 가 나도 **그리퍼를 열지 않는다** —
 #: 들고 있던 걸 떨어뜨리는 게 멈춰 있는 것보다 위험하다.
-HOLDING_STATES = frozenset({State.VERIFY, State.LIFT, State.PLACE})
+HOLDING_STATES = frozenset({State.VERIFY, State.LIFT, State.PLACE, State.PLACE_RETRY})
 
 
 def is_allowed(src: State, dst: State) -> bool:

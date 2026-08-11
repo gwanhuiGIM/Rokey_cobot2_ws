@@ -363,6 +363,15 @@ GraspGenX/pick_fsm과는 아직 안 엮었다. **필요할 때만 켜는 옵션 
 전제: **[터미널 1(로봇)·터미널 2(카메라)]가 3절 기준으로 떠 있어야 한다.** GPU와 Isaac ROS
 컨테이너도 필요하다.
 
+🔴 **터미널 1·2·3 전부(호스트 쪽 전체)에 아래도 걸어야 한다** — 컨테이너 쪽만 걸면 여전히
+안 된다(`fastdds_udp_only.xml` 자체 주석: "호스트와 컨테이너 양쪽 터미널 모두에 export해야
+한다. 한쪽만 하면 여전히 안 온다"). 안 걸면 `ros2 topic list`엔 서로 다 보이는데 컨테이너가
+`/joint_states`·카메라 토픽을 **0건** 수신한다 — "토픽은 보이는데 안 열린다"로 나타나 원인
+찾기 어렵다(2026-08-11 실측). 아래 [터미널 4~6+3C] 블록에도 컨테이너 쪽을 반영해 뒀다.
+```bash
+export FASTRTPS_DEFAULT_PROFILES_FILE=/home/kimkh/cobot2_ws/fastdds_udp_only.xml
+```
+
 🔴 **터미널 3(호스트 MoveIt)은 먼저 `Ctrl+C`로 끈다.** cuMotion 경로에서는 **같은 런치를
 컨테이너 안에서 `cumotion:=true`로 다시 띄우는 것**이지, 호스트 것에 무언가를 더하는 게 아니다.
 플러그인 `isaac_ros_cumotion_moveit`이 컨테이너에만 있어서 호스트에서는 `cumotion:=true`가
@@ -413,6 +422,11 @@ source /opt/ros/humble/setup.bash
 source /workspaces/isaac_ros-dev/install/setup.bash
 source /workspaces/cobot2_ws/install_container/setup.bash
 export ROS_DOMAIN_ID=93
+export FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/cobot2_ws/fastdds_udp_only.xml
+#   ⚠️ 이것도 **호스트 터미널(터미널 1·2·3)에** 똑같이 걸어야 한다(같은 파일, 호스트 경로는
+#      /home/kimkh/cobot2_ws/fastdds_udp_only.xml). 한쪽만 걸면 `ros2 topic list`엔 컨테이너
+#      쪽 토픽이 다 보이는데 **데이터가 0건**으로 온다 — "토픽은 보이는데 안 열린다"로
+#      나타나 원인 찾기 어렵다(2026-08-11 실측, `config/testcommand.md` §4 각주 참고).
 
 # [터미널 4] robot_segmenter — 로봇 몸을 depth에서 지운다. 빠뜨리면 로봇이 자기 몸을 장애물로 본다
 cd /workspaces/isaac_ros-dev && ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \
@@ -605,6 +619,20 @@ ros2 launch pick_fsm pick_fsm.launch.py
 # [터미널 11] 이 지시 입력 층
 export ROS_DOMAIN_ID=93
 ros2 launch voice_processing vla_command.launch.py
+#   기본값(auto_start:=false, pixel_policy:=warn)은 두 가지를 뜻한다:
+#   VLA 의 지시가 와도 /pick/start 는 사람이 rqt 로 직접 눌러야 하고,
+#   VLA 가 보낸 pixel(개체 지정)은 무시하고 class 로만 target 을 정한다.
+#
+#   외부 VLA(~/M0609_VLA_system, 다른 clone)와 실제로 물려서 "VLA 판단 = 사이클
+#   시작 + 같은 클래스 2개 이상일 때 픽셀로 개체 선정"까지 다 켜려면:
+# ros2 launch voice_processing vla_command.launch.py auto_start:=true pixel_policy:=select
+#   auto_start:=true — 지시 도착 시 이 노드가 /pick/start 를 대신 부른다.
+#     WAIT_APPROVAL(실제 grasp 승인)은 별개 스위치(require_approval)라 여전히
+#     사람이 로컬(rqt/음성)로 눌러야 한다 — 이 값을 켜도 승인 단계는 그대로다.
+#   pixel_policy:=select — VLA 가 보낸 pixel/pixel_wh 로 select_by_point() 개체
+#     선정을 실제로 쓴다(2026-08-11 구현, PERCEIVE 까지 관통 확인). 지목이 없으면
+#     nan 이 그대로 오므로 기존 동작(점수 최고)과 같다 — 켜도 기존 pick 흐름은
+#     안 바뀐다. 오집만 막고 싶으면 select 대신 pixel_policy:=reject.
 ```
 
 ```bash

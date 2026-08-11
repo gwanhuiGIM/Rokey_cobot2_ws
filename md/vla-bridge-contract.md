@@ -1,6 +1,8 @@
 <!-- meta
-updated: 2026-08-11 (cobot2_ws 쪽이 §9 제안을 검토·구현함 — select_by_point() 코드 작성
-         완료, 빌드·단위테스트 PASS. §2 pixel_policy 표·§8 을 반영해 갱신. 🔴 실기 미검증)
+updated: 2026-08-11 (§12 신설 — `/vla/pick_status` 상태 미러링 채널. cobot2_ws 쪽
+         publisher(`vla_command_node`) 구현 완료, 빌드·단위테스트 34건 PASS. 🔴 실기 미검증.
+         VLA 쪽 subscriber/UI 는 그쪽 세션이 구현. 이전: §9 select_by_point() 구현,
+         §10 rqt↔VLA cmd 대응표, §11 /pick/retry_place 신설)
 status:  live — 값이 바뀌면 이 문서를 덮어쓴다 (append 하지 않는다, 히스토리는 안 남긴다)
 owns:    cobot2_ws 가 관리. 정본은 항상 `src/voice_processing/voice_processing/vla_command_node.py`
          (`parse_command()`) 코드다 — 이 문서는 그 요약이라 어긋나면 코드가 이긴다.
@@ -193,3 +195,80 @@ ROS 이미지 토픽을 구독하도록 바뀌었다 — 즉 지금 `pixel`은 *
 띄워서 왕복 확인함(2026-08-11) — `pixel_policy=warn` 상태로 `ignored:["pixel"]`
 경고가 그대로 나오는 것까지 재현됨. `select_by_point()`가 구현되면 VLA 쪽 코드 변경은
 불필요하다 — 이미 필요한 값을 다 보내고 있다.
+
+## 10. rqt 패널 버튼 ↔ VLA `cmd` 대응표 — **VLA 쪽이 명시적으로 확인할 것** (2026-08-11)
+
+cobot2_ws 쪽 사람이 로컬 rqt 패널(`rqt --standalone pick_fsm`)에서 누르는 버튼과, 그
+버튼을 대신할 수 있는 `/vla/pick_command`의 `cmd` 값을 **1:1로** 적는다. 매핑 자체는
+**코드 레벨로 이미 끝났다**(빌드 PASS + 노드 단독 실측, §8과 같은 수준) — VLA 쪽이 이
+표만 보고 자기 쪽 버튼/툴 스키마를 cobot2_ws 채널에 그대로 물릴 수 있다.
+
+| rqt 패널 버튼 | `/vla/pick_command` 대응 | 실기로 대체 가능한가 |
+|---|---|---|
+| 시작 | `{"cmd":"start"}` | ✅ 노드 단독 실측(왕복) — 🔴 FSM+로봇 연결한 사이클은 미검증 |
+| 중단(ABORT) | `{"cmd":"abort","reason":"..."}` | 〃 |
+| 리셋 | `{"cmd":"reset"}` — SAFE_STOP 에서만 먹히고 성공하면 승인 없이 HOME 까지 실제로 움직인다 | 〃 |
+| 타겟 선택(콤보 + 적용) | `{"cmd":"pick","class":"..."}` (+ `pixel_policy:=select`면 `pixel`/`pixel_wh`로 개체까지 지정) | ✅ class 만 — 🔴 pixel 개체지정은 PERCEIVE 까지만 관통, 실기 완주 미검증(§8) |
+| **승인** | **없음 — 절대 대체 불가.** `cmd:"approve"`는 코드 경로 자체가 없어 무조건 거부(§4) | ❌ 의도된 설계. 사람이 로컬(rqt 또는 `approve_listener_node` 음성)로 직접 눌러야 한다 |
+| 속도(vel/acc) 조절 | 없음 | ❌ 이 채널 스키마에 없음. `SetParameters`로 `/task_manager`를 직접 불러야 한다(rqt 전용 기능) |
+| 놓을 위치 선택 | `pick_command`의 `place`(§2) | ✅ — 단 `table`/`discard`는 §5 UNVERIFIED |
+| **놓기 재시도**(2026-08-11 신설, `PLACE_RETRY`) | **없음** | ❌ `/pick/retry_place`(Trigger) 서비스 전용 — 이 브리지 스키마에 없다. VLA 가 이 경로를 쓰려면 스키마에 `cmd:"retry_place"`(+선택 `place`)를 추가 요청해야 한다(cobot2_ws 쪽 미구현, §11 참고) |
+| 그리퍼 파워사이클 · 안전모드(backdrive) · 즉시정지(`/safety/stop`) | 없음 | ❌ 이 채널 스키마에 없음. 하드웨어 안전 조작이라 의도적으로 로컬 전용 |
+
+**결론**: pick 사이클의 "시작→타겟→(승인 제외)→중단→리셋"은 이미 텍스트/음성(JSON)으로
+rqt 없이 완전히 대체 가능하게 짜여 있다. **승인·속도조절·그리퍼복구·안전모드·(신설)
+놓기재시도는 이 채널에 없고, rqt 패널 또는 사람의 직접 서비스콜이 계속 필요하다** — 이
+경계는 의도된 설계(승인=안전장치, 나머지=하드웨어 직접조작)이지 미구현이 아니다.
+
+## 11. `/pick/retry_place` — cobot2_ws 쪽 신설, VLA 스키마엔 아직 없음 (2026-08-11)
+
+그립까지 성공한 뒤 **놓을 위치로의 모션 계획이 실패**하는 경우(장애물·도달범위 등)가
+실기에서 관측됐다. 기존엔 이 실패가 곧장 `ABORT→SAFE_STOP`으로 빠져서 물체를 문 채 정지 —
+복구하려면 `/pick/reset`(→HOME→IDLE) 뒤 처음부터 다시 잡아야 했다(물체를 이미 들고 있는데
+재인식부터 다시 하는 건 위험 — `_st_idle`의 desync 경고 참고).
+
+cobot2_ws 는 `PLACE` 실패 시 `ABORT` 대신 새 상태 `PLACE_RETRY`로 보내도록 고쳤다 —
+물체를 문 채(그리퍼 안 열림) 정지하고, `/pick/place_location`으로 다른 위치를 새로 골라
+`/pick/retry_place`(Trigger)를 부르면 **재인식 없이** 그 위치로 다시 계획·이동을 시도한다.
+상세는 `src/PACKAGES.md#pick_fsm` §1 상태 다이어그램·`rqt_panel.py`.
+
+**VLA 쪽 조치 불필요** — 이 경로는 지금 로컬(rqt 패널)에만 있다. VLA 가 이 재시도까지
+원격으로 하고 싶다면 `/vla/pick_command`에 `cmd:"retry_place"`(+선택 `place`)를 추가하는
+스키마 확장이 필요한데, 이건 cobot2_ws 쪽 판단 사항이 아니라 **VLA 쪽이 필요하다고
+명시적으로 요청해야** 붙인다(§10 표 참고 — 지금은 일부러 안 붙였다: 놓기 실패는 물체를
+문 채인 민감한 순간이라 첫 버전은 로컬 승인 없이 원격에서 못 건드리게 막아둔 것).
+
+## 12. `/vla/pick_status` — rqt 패널 상태 미러링 (2026-08-11 신설)
+
+rqt 패널(`rqt --standalone pick_fsm`)이 보여주는 상태를 VLA UI 에서도 같이 띄우기 위한
+**읽기 전용 상태 스트림**이다. 명령/결과와 별개의 세 번째 채널 — VLA 는 이걸 구독만 하고,
+여기로는 아무것도 안 보낸다(제어는 여전히 §1 의 `/vla/pick_command` 로만).
+
+```
+cobot2_ws(vla_command_node) → /vla/pick_status (std_msgs/String, JSON) → VLA UI
+```
+
+| 필드 | 뜻 |
+|---|---|
+| `fsm` | `/pick/state` 원문(State enum 이름). **정상플로우 진행이 곧 이 값의 전이**다: `PERCEIVE→SCENE_PREP→PLAN→WAIT_APPROVAL→STOW→APPROACH→…→RELEASE→HOME` |
+| `robot` | `/pick/robot_state_text` 원문(예: `STANDBY`/`MOVING`/`SAFE_OFF`). 표시용 이름 |
+| `robot_code` | `/pick/robot_state_code`(Int8) 원본 정수 |
+| `target` | `/pick/target_active` — FSM 이 **실제로 쓰는** 타겟(로컬 rqt 조작과의 desync 까지 반영). 자동이면 빈 문자열 |
+| `place` | `/pick/place_location_active` — 지금 쓰는 놓을 위치 |
+| `request_id` | 지금 latch 된 명령의 id — VLA 가 자기가 보낸 명령과 대조용. 대기 명령 없으면 `""` |
+| `waiting_approval` | `fsm == "WAIT_APPROVAL"`. **사람 승인 대기 표시용**(§4 가 열어둔 신호) — 승인 자체는 여전히 로컬 사람 몫, 이 채널로 승인 못 한다 |
+| `unsafe` | `robot_code ∈ {3,5,6,9,10}`(안전정지류). VLA 가 name 테이블 없이 바로 쓸 수 있게 미리 계산해 보낸다 |
+| `stamp_ns` | 발행 시각(wall-clock ns) — **정보용** |
+
+**QoS**: `COMMAND_QOS`(RELIABLE/VOLATILE/depth 10, result 와 동일). on-change + **1 Hz 하트비트**.
+- 🔴 **staleness 판정은 `stamp_ns` 차이가 아니라 "N 초간 수신 없음"으로 하라** — 두 PC
+  시계 동기화를 가정하지 않는다(TTL 을 수신 시각으로 재는 §2 와 같은 원칙). 하트비트가
+  1 s 마다 오므로, 예를 들어 3 s 이상 끊기면 "cobot2_ws 응답 없음"으로 표시하면 된다.
+- VOLATILE 이라 늦게 붙은 구독자는 직전 값을 못 받지만 1 s 안에 하트비트로 현재 상태를 받는다.
+  (place 처럼 TRANSIENT_LOCAL 로 latch 하지 않는 이유: 핫스팟 링크에서 그 조합의 블로킹
+  위험 — §2 `request_id` 항의 배경과 같다.)
+
+**구현 상태**: cobot2_ws 쪽 publisher(`vla_command_node`) 완료 — `colcon build
+--packages-select voice_processing` PASS, 단위테스트 34건 PASS. 🔴 **실기 미검증**(노드
+단독으로 토픽이 나가는지까지는 미확인). **VLA 쪽 subscriber/UI 는 그쪽 세션이 구현** —
+cobot2_ws 조치 불필요.

@@ -1572,6 +1572,64 @@ nvblox 가 color 옵션이 꺼진 상태라 리매핑만 받고 구독은 안 �
   실기 테스트도 같은 `ROS_DOMAIN_ID=93`을 쓰므로 이 좀비가 실기 세션과도 충돌할 수 있다(미검증,
   가능성만).
 
+## pymodbus 미설치가 "버전 불일치"로 보였다 — OnRobot RG 그리퍼, 2026-08-11
+
+`onrobot_rg_control`(`comModbusTcp.py`)이 그리퍼와 통신을 못 해 bringup에서 실패했다.
+원인은 "버전 불일치"가 아니라 **pymodbus 자체가 이 랩탑에 설치돼 있지 않았다**
+(`python3 -c "import pymodbus"` → `ModuleNotFoundError`).
+
+- **코드가 요구하는 API**: `comModbusTcp.py`는 `from pymodbus.client import ModbusTcpClient` +
+  `slave=` 키워드를 쓰는 **pymodbus 3.x API**다.
+- **apt로는 해결 불가**: apt 후보는 `python3-pymodbus 2.1.0`(2.x)뿐인데, 2.x는 import 경로가
+  `pymodbus.client.sync`이고 키워드도 `unit=`이라 apt로 깔아도 바로 깨진다. 코드가 3.x를
+  전제하므로 apt 다운그레이드 방향으로는 답이 없다.
+- **조치**: `sudo pip3 install "pymodbus>=3,<4"` → `3.14.0` 설치 확인. `~/.local`(비-sudo
+  `--user`)이 아니라 **시스템 dist-packages**에 깔았으므로 이 ws의 "pip install을 `~/.local`에
+  안 한다" 규칙(apt pytest 섀도잉 방지)과 충돌하지 않는다.
+- **재발방지**: OnRobot RG 그리퍼 노드가 `ModuleNotFoundError: pymodbus` 또는 `slave=`/`unit=`
+  관련 `TypeError`로 죽으면 → apt로 깔지 말고 `pip3 show pymodbus`로 설치 여부·버전부터 확인한
+  뒤 `sudo pip3 install "pymodbus>=3,<4"`.
+
+## 노드 재실행마다 인스턴스가 안 죽고 쌓이는 패턴 — `vla_pick_bridge_node`, 2026-08-11
+
+`~/M0609_VLA_system/vla_pick_bridge_node`가 같은 `__node:=vla_pick_bridge` 이름으로
+**6개 동시 실행** 중인 게 발견됐다(실행 시간이 34분~57분으로 제각각 → 재실행할 때마다 이전
+프로세스를 안 죽이고 쌓은 흔적). 부모를 잃은 좀비(`<defunct>`) 자식 프로세스도 하나 같이
+발견됨(부모: 방치된 `ros2 topic echo /vla/pick_result`, 1일 넘게 실행 중).
+
+- **근본 원인 패턴은 위 "가상환경 프로세스 정리"·`graspx_container.sh`(docker exec) 인스턴스
+  누적과 동일**: 터미널을 닫거나 Ctrl-C가 안 먹는 방식으로 재실행하면 이전 프로세스가 고아가
+  된 채 계속 산다.
+- **왜 위험한가**: 같은 노드 이름이 여러 개 떠 있으면 ROS 그래프에서 서비스·토픽 응답이 **어느
+  인스턴스에서 오는지 불확정**이다 — pick 작업 중이면 엉뚱한 인스턴스가 응답할 수 있다.
+- **재발방지 규칙**: 같은 노드를 재실행하기 전에 `ps -eo pid,etime,cmd | grep <node_name>`으로
+  기존 인스턴스 유무를 먼저 확인한다. "매번 새 터미널에서 실행"하는 습관이 있는 노드
+  (docker exec 계열, VLA 브릿지 등)는 특히 의심한다.
+- 이번엔 컴퓨터 재시작으로 정리(2026-08-11). **다음 할 일(🔴 미착수)**: `vla_pick_bridge_node`
+  실행 스크립트(`~/M0609_VLA_system` 쪽)에 "기존 인스턴스 kill 후 시작" 가드 추가.
+
+## `pick_fsm` place 목적지(`table`/`discard`)는 옥토맵 충돌로 항상 걸린다 — 2026-08-11 실기 확인
+
+- 증상: `place_table_joints_deg`/`place_discard_joints_deg`로 정확히 교시(펜던트 지깅, 물리적으로
+  도달 가능 확인됨)한 관절값인데도 PLACE 상태에서 매번 `FAILURE(99999)`로 3회 재시도 모두 실패
+  → ABORT(물체는 쥔 채 놓지 않고 정지 — 안전 로직 정상 동작).
+- move_group 로그로 원인 확정: `Found a contact between '<octomap>' (type 'Object') and
+  'rg2_base_link' (type 'Robot link')` → OMPL RRTConnect가 `Unable to sample any valid states
+  for goal tree`(goal state 자체가 충돌이라 애초에 샘플링이 안 됨. 경로 탐색 실패가 아니다).
+- **관절값 교시 방식(joint jog vs move_line/Cartesian)과 무관하다** — 최종 자세 좌표가 같으면
+  똑같이 걸린다. "물체를 표면에 내려놓는 자세"는 정의상 PICK 단계에서 카메라가 찍은 그 표면의
+  옥토맵 포인트에 붙어 있을 수밖에 없어서, 구조적으로 항상 재현되는 충돌이다.
+- **원인 판별에 `/check_state_validity`(moveit_msgs/srv/GetStateValidity) 서비스콜이 유효했다** —
+  로봇을 안 움직이고 특정 joint 자세가 collision인지, `contacts` 필드로 무엇과 부딪혔는지 바로 확인
+  가능. `/clear_octomap`(std_srvs/Empty) 전후로 비교하면 self-collision과 옥토맵 충돌을 분리할 수 있다.
+- **수정**: `_st_descend`가 쓰던 `clear_octomap_before_descend` 패턴을 `_st_place`에도 추가
+  (`clear_octomap_before_place`, 신규 파라미터, `task_manager.py`). `_octomap_cleared` 플래그는
+  `_to()`가 상태 전이마다 리셋하는 per-state 가드라 그대로 재사용 가능했다. 이 ws의
+  `pick_fsm.yaml`에서는 `true`로 켰다 — trade-off는 `clear_octomap_before_descend`와 동일
+  (그 구간은 미모델링 장애물이 안 보인다).
+- 🔴 **미검증**: 위 수정을 실기로 다시 돌려 `table`/`discard` place가 실제로 성공하는지는 아직
+  확인 못 했다 — 코드·빌드까지만 됨.
+
 ## RealSense depth 필터 (`camera.launch.py`) — 시도 후 롤백, 2026-08-09
 
 `realsense2_camera_node`에 드라이버 단 `spatial_filter`/`hole_filling_filter`/

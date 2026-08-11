@@ -1137,6 +1137,8 @@ stateDiagram-v2
     VERIFY --> LIFT : grip 감지 → 물체 attach
     LIFT --> PLACE
     PLACE --> RELEASE : place_joints_deg 도달
+    PLACE --> PLACE_RETRY : motion_retries 소진 (2026-08-11 신설)
+    PLACE_RETRY --> PLACE : /pick/retry_place — 재인식 없이 곧장 재계획
     RELEASE --> HOME : 그리퍼 열기 + detach
     HOME --> IDLE : home_joints_deg 도달 (사이클 정상 종료)
     HOME --> PERCEIVE : home_joints_deg 도달 (RELEASE_RETRY 경유)
@@ -1173,7 +1175,17 @@ stateDiagram-v2
         트리거 4가지 — /pick/abort · 상태별 제한시간 초과 ·
         로봇 자체 안전정지 감지 · 전이표에 없는 전이 시도(버그).
         MOTION_STATES 에서는 진행 중 goal 을 취소하고,
-        HOLDING_STATES(VERIFY·LIFT·PLACE)에서는 그리퍼를 열지 않는다.
+        HOLDING_STATES(VERIFY·LIFT·PLACE·PLACE_RETRY)에서는 그리퍼를 열지 않는다.
+    end note
+
+    note right of PLACE_RETRY
+        놓을 위치로의 계획/이동이 motion_retries 를 소진했을 때만 온다(ABORT 아님).
+        물체는 이미 attach 된 채라 SAFE_STOP(→HOME→재인식)보다 훨씬 싸다 — 사람이
+        /pick/place_location 으로 다른 위치를 고르고(이 상태에서만 즉시 반영, target/
+        place 의 "다음 /pick/start 부터" 규칙의 예외) /pick/retry_place 를 부르면
+        재인식 없이 PLACE 로 돌아가 다시 계획한다. DEFAULT_TIMEOUTS 에 없어(SAFE_STOP·
+        WAIT_APPROVAL과 같은 패턴) 사람이 부를 때까지 정지 유지. rqt 패널의
+        '놓기 재시도(PLACE_RETRY)' 버튼이 이 서비스를 부른다.
     end note
 ```
 
@@ -1248,6 +1260,9 @@ ros2 service call /pick/start   std_srvs/srv/Trigger {}   # 시작 (IDLE 에서�
 ros2 service call /pick/approve std_srvs/srv/Trigger {}   # ✋ 실행 승인
 ros2 service call /pick/abort   std_srvs/srv/Trigger {}   # 중단 → SAFE_STOP
 ros2 service call /pick/reset   std_srvs/srv/Trigger {}   # SAFE_STOP → HOME → IDLE
+# 놓기 실패(PLACE_RETRY)로 물체를 문 채 정지했을 때만 — 다른 위치로 가려면 place_location 을 먼저
+ros2 topic pub -1 /pick/place_location std_msgs/String "data: table" --qos-durability transient_local
+ros2 service call /pick/retry_place std_srvs/srv/Trigger {}   # PLACE_RETRY → PLACE (재인식 없음)
 ros2 topic echo /pick/state                               # 현재 상태
 ros2 service call /safety/stop            std_srvs/srv/Trigger {}   # 즉시 정지 (§8)
 ros2 service call /safety/enter_backdrive std_srvs/srv/Trigger {}   # 사람이 팔을 손으로 밀 수 있게
@@ -1328,6 +1343,7 @@ python3 -m pytest src/pick_fsm/test/test_pick_fsm.py -q -p no:anyio   # 31개 �
 | `/pick/approve` | `std_srvs/Trigger` | `WAIT_APPROVAL` 에서만 받는다 |
 | `/pick/abort` | `std_srvs/Trigger` | 진행 중 goal 을 취소하고 SAFE_STOP |
 | `/pick/reset` | `std_srvs/Trigger` | SAFE_STOP → HOME → IDLE (팔을 홈으로 복귀시킨 뒤 대기) |
+| `/pick/retry_place` | `std_srvs/Trigger` (2026-08-11 신설) | `PLACE_RETRY`에서만 받는다 — 물체를 문 채 곧장 `PLACE`로 되돌아가 재계획(재인식 없음). 다른 위치로 가려면 이 서비스를 부르기 전에 `/pick/place_location`을 먼저 보낸다(이 상태에서는 즉시 반영) |
 | `/pick/robot_state_code` | `std_msgs/Int8` | **`robot_safety_node`가 발행** — `task_manager`는 이 값이 안전정지류(§8)면 자동으로 abort 한다 |
 | `/pick/target_active` | `std_msgs/String` | 지금 유효한 타겟(빈 문자열 = 자동). QoS **TRANSIENT_LOCAL** — 나중에 뜬 rqt 패널도 마지막 값을 받는다 |
 
@@ -1678,6 +1694,14 @@ rqt --standalone pick_fsm
 - **타겟**: 콤보상자(YOLO가 지금 보고 있는 클래스 — `/yolo_seg/classes`에서 채운다) +
   [적용] + [자동]. 직접 입력도 되고 콤마로 여러 개도 된다(`apple,orange`).
   [자동]은 빈 문자열을 보낸다 = 브리지가 본 물체 전부 중 grasp 점수 최고를 잡는다
+- **내려놓을 위치**: 콤보(`basket`/`table`/`discard`) + [적용] — 다음 `/pick/start`부터
+  적용된다. **[놓기 재시도(PLACE_RETRY)]**(2026-08-11 신설) 버튼도 여기 같이 있다 —
+  그립까지 성공했는데 놓을 위치로의 계획/이동이 실패해 물체를 문 채 정지(`PLACE_RETRY`)
+  했을 때만 동작한다. 이 상태에서는 위 콤보+[적용]이 **즉시** 반영되므로(다른 상태와
+  다름), 다른 위치를 고르고 눌러도 되고 같은 위치로 그냥 재시도해도 된다 — 재인식 없이
+  곧장 `PLACE`로 되돌아간다. RViz2/MoveIt에서 직접 goal을 잡아 대체할 수 없다(놓을
+  위치는 `pick_fsm.yaml`의 관절각 상수라 RViz 화면엔 목표가 안 보인다) — 이 버튼이
+  유일한 복구 경로다
 - **속도**(2026-08-09 추가): `vel_scale`/`acc_scale` 스핀박스(0.01~1.00) + [적용] + [현재값 읽기].
   `task_manager` 의 파라미터를 `set_parameters` 로 직접 바꾼다. 아래 "속도는 왜 토픽이 아닌가" 참고
 - 작업: 시작 / 승인 / 리셋
@@ -1895,6 +1919,11 @@ ros2 topic pub -1 /vla/pick_command std_msgs/String "data: '{\"cmd\":\"reset\"}'
 이 셋은 `LISTENING` 래치를 거치지 않고 **즉시** 서비스를 부른다 — pick 지시(TTL·"FSM 이 아직
 듣고 있나")와 성격이 다르다(사람이 아무 때나 rqt 버튼을 누르는 것과 같다). 그래서
 `pick_fsm` 을 `voice:=false` 로 띄웠어도 이 세 명령은 정상 동작한다.
+
+**`/pick/retry_place`(rqt 패널의 '놓기 재시도', 2026-08-11 신설)는 이 채널에 없다.** `cmd`
+스키마에 안 붙어 있다 — 놓기 실패는 물체를 문 채인 민감한 순간이라 첫 버전은 의도적으로
+원격에서 못 건드리게 막아뒀다. VLA 쪽이 이 재시도까지 원격에서 하고 싶으면 `md/vla-bridge-
+contract.md` §10/§11 에 스키마 확장을 명시적으로 요청해야 한다(자동 추가 안 함).
 
 ### 🚨🚨 `approve`(승인 버튼)는 명령어 자체가 없다
 

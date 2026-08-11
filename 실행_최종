@@ -1,0 +1,73 @@
+rdm
+sob
+rdme
+cdco
+si
+
+br
+reals1280
+
+
+
+
+cd ~/cobot2_ws/isaac_ros-dev/src/isaac_ros_common/scripts
+./run_dev.sh -a "-v $HOME/cobot2_ws:/workspaces/cobot2_ws"
+
+bash /workspaces/cobot2_ws/scripts/container_setup.sh
+
+docker exec -i -t -u admin
+
+source /opt/ros/humble/setup.bash
+source /workspaces/isaac_ros-dev/install/setup.bash
+source /workspaces/cobot2_ws/install_container/setup.bash
+export ROS_DOMAIN_ID=93
+export FASTRTPS_DEFAULT_PROFILES_FILE=/workspaces/cobot2_ws/fastdds_udp_only.xml   # ← 이것도 필수
+
+
+
+ros2 run isaac_ros_cumotion robot_segmenter_node --ros-args \
+  --params-file /workspaces/cobot2_ws/config/cumotion_segmenter.yaml
+
+ros2 run nvblox_ros nvblox_node --ros-args \
+  --params-file /workspaces/cobot2_ws/config/nvblox_realtime.yaml \
+  -r camera_0/depth/image:=/cumotion/camera_1/world_depth \
+  -r camera_0/depth/camera_info:=/camera/camera/aligned_depth_to_color/camera_info
+
+cd /workspaces/isaac_ros-dev && ros2 run isaac_ros_cumotion cumotion_planner_node --ros-args \
+  --params-file /workspaces/cobot2_ws/config/cumotion_planner.yaml
+
+# [터미널 3C] move_group + RViz — ★ 컨테이너 안에서 띄운다. 호스트 터미널 3은 꺼져 있어야 한다
+#   3절 터미널 3과 같은 런치다. 실행 위치(컨테이너)와 cumotion:=true 만 다르다
+ros2 launch m0609_rg2_moveit moveit.launch.py standalone:=false octomap:=true cumotion:=true
+
+
+
+
+scripts/graspx_container.sh run_bridge:=false device:=0 publish_overlay:=true
+
+ros2 launch graspgenx_perception graspx.launch.py run_yolo:=false run_bridge:=true
+
+ros2 launch pick_fsm pick_fsm.launch.py
+
+ros2 launch voice_processing vla_command.launch.py auto_start:=true
+///
+
+vla터미널
+DOOSAN_SETUP=~/cobot2_ws/install/setup.bash ./scripts/build.sh  #코드를 고쳤을 때만
+cd M0609_VLA_system
+source scripts/env.sh
+
+ros2 launch vla_system vla_system.launch.py \
+  enable_realsense:=false \
+  enable_robot:=false \
+  enable_pick_bridge:=true
+  
+  ros2 run vla_system vla_gui
+  
+  
+  
+ros2 service call /dsr01/motion/move_line dsr_msgs2/srv/MoveLine "{pos: [-47, 612, 174, 91, 158, 176], vel: [30.0, 20.0], acc: [30.0, 40.0], time: 0.0, radius: 0.0, ref: 0, mode: 0, blend_type: 0, sync_type: 0}"
+
+
+
+  

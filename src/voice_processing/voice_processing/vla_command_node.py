@@ -107,7 +107,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Int8, String
 from std_srvs.srv import Trigger
 
 #: 지시 JSON 과 결과 JSON 은 유실되면 안 된다 — 영상과 달리 초당 한 건도 안 되는 트래픽이다.
@@ -142,6 +142,16 @@ ABANDON_STATES = frozenset({'IDLE', 'ABORT', 'SAFE_STOP'})
 #: FSM 이 지시 없이 인식으로 넘어간 상태. 여기 왔는데 우리 지시가 안 팔렸으면 FSM 은
 #: **다른 타겟으로** 돌고 있다 (`pick_fsm` 을 `voice:=false` 로 띄운 경우가 대표적이다).
 BYPASS_STATE = 'PERCEIVE'
+
+#: FSM 이 사람 승인을 기다리는 상태. `/vla/pick_status` 의 `waiting_approval` 로 내보낸다 —
+#: contract §4 가 열어둔 "LLM 이 승인 대기를 알면 좋다"에 답한다. 승인 자체는 여전히 사람
+#: 몫이라 자동화 경로는 만들지 않는다(§0-B) — 이건 표시용 신호일 뿐이다.
+WAIT_APPROVAL_STATE = 'WAIT_APPROVAL'
+
+#: 로봇이 안전정지류라 명령을 못 받는 상태 코드. `pick_fsm.robot_safety_node.UNSAFE_STATES`
+#: 가 정본 — 패키지 경계를 넘는 import 는 안 하므로(`PLACE_VALUES` 와 같은 이유) 값만 복제한다.
+#: 저쪽이 바뀌면 손으로 맞춘다.
+UNSAFE_STATE_CODES = frozenset({3, 5, 6, 9, 10})
 
 #: 우리가 받아들이는 `cmd` 값. `pick_and_place` 는 같은 뜻으로 받는다 —
 #: 이 FSM 의 pick 사이클은 어차피 `place_joints_deg` 에 놓는 것으로 끝난다.
@@ -311,6 +321,13 @@ class VlaCommandNode(Node):
         self.declare_parameter('result_topic', '/vla/pick_result')
         self.declare_parameter('keyword_service', '/get_keyword')
         self.declare_parameter('state_topic', '/pick/state')
+        # rqt 패널이 보여주는 상태를 그대로 미러링하는 VLA-facing 토픽. 아래 4개는 여기서
+        # 읽어들이는 pick_fsm 내부 토픽이다(robot_safety_node / task_manager 가 발행).
+        self.declare_parameter('status_topic', '/vla/pick_status')
+        self.declare_parameter('robot_state_code_topic', '/pick/robot_state_code')
+        self.declare_parameter('robot_state_text_topic', '/pick/robot_state_text')
+        self.declare_parameter('target_active_topic', '/pick/target_active')
+        self.declare_parameter('place_active_topic', '/pick/place_location_active')
         self.declare_parameter('start_service', '/pick/start')
         self.declare_parameter('abort_service', '/pick/abort')
         self.declare_parameter('reset_service', '/pick/reset')
@@ -363,6 +380,12 @@ class VlaCommandNode(Node):
         self._listening_since = None    # LISTENING 진입 시각[monotonic]
         self._saw_release = False       # 이번 사이클에서 RELEASE 를 지나왔는지
         self._closing = threading.Event()
+        # rqt 미러링용 최신값. 표시 전용이라 락으로 감싸지 않는다 — 각 값은 단일 콜백만
+        # 쓰고, `_publish_status()` 는 살짝 옛 값을 읽어도 무해하다(다음 발행이 곧 맞춘다).
+        self._robot_text = ''           # 마지막 `/pick/robot_state_text`
+        self._robot_code = None         # 마지막 `/pick/robot_state_code`
+        self._active_target = ''        # `/pick/target_active` — FSM 이 지금 쓰는 타겟
+        self._active_place = ''         # `/pick/place_location_active` — 지금 쓰는 위치
 
         self.result_pub = self.create_publisher(
             String, str(self.get_parameter('result_topic').value), COMMAND_QOS)
@@ -373,12 +396,37 @@ class VlaCommandNode(Node):
         # (= PLACE_QOS 와 값이 같다)다.
         self.pixel_pub = self.create_publisher(
             String, str(self.get_parameter('target_pixel_topic').value), PLACE_QOS)
+        # rqt 미러링 채널. result 와 같은 COMMAND_QOS(RELIABLE/VOLATILE) — VOLATILE 이라
+        # 늦게 붙은 구독자는 마지막 값을 못 받지만, 아래 1 Hz 하트비트가 1 s 안에 현재 상태를
+        # 다시 준다(+ keepalive 로 VLA 가 "cobot2_ws 응답 없음"을 staleness 로 감지). place 처럼
+        # TRANSIENT_LOCAL 로 latch 하지 않는 이유: contract 가 핫스팟 링크에서 그 조합의
+        # 블로킹 위험을 이미 지적했고, result 채널과 같은 프로파일로 맞춰 두는 게 안전하다.
+        self.status_pub = self.create_publisher(
+            String, str(self.get_parameter('status_topic').value), COMMAND_QOS)
         self.create_subscription(
             String, str(self.get_parameter('command_topic').value),
             self._on_command, COMMAND_QOS, callback_group=cb)
         self.create_subscription(
             String, str(self.get_parameter('state_topic').value),
             self._on_state, COMMAND_QOS, callback_group=cb)
+        # 로봇 상태는 text/code 둘 다 받는다: text 는 표시용 이름(robot_safety_node 의 name
+        # 테이블을 import 하지 않으려고 — 패키지 경계), code 는 `unsafe` 계산용.
+        self.create_subscription(
+            Int8, str(self.get_parameter('robot_state_code_topic').value),
+            self._on_robot_code, COMMAND_QOS, callback_group=cb)
+        self.create_subscription(
+            String, str(self.get_parameter('robot_state_text_topic').value),
+            self._on_robot_text, COMMAND_QOS, callback_group=cb)
+        # target_active/place_active 는 task_manager 가 TARGET_QOS(=PLACE_QOS, TRANSIENT_LOCAL)
+        # 로 발행한다 — 구독자도 그 durability 라야 매칭된다(VOLATILE 이면 아예 안 붙는다).
+        self.create_subscription(
+            String, str(self.get_parameter('target_active_topic').value),
+            self._on_target_active, PLACE_QOS, callback_group=cb)
+        self.create_subscription(
+            String, str(self.get_parameter('place_active_topic').value),
+            self._on_place_active, PLACE_QOS, callback_group=cb)
+        # VOLATILE 보정 + keepalive. 상태가 안 바뀌어도 1 s 마다 현재 스냅샷을 내보낸다.
+        self.create_timer(1.0, self._publish_status, callback_group=cb)
         self.create_service(
             Trigger, str(self.get_parameter('keyword_service').value),
             self._srv_keyword, callback_group=cb)
@@ -622,6 +670,48 @@ class VlaCommandNode(Node):
             else:
                 self.get_logger().warn(line)
             self._publish_result(cmd, accepted, reason, result)
+
+        # 상태가 바뀌었으니 rqt 미러도 바로 맞춘다(하트비트를 기다리지 않는다).
+        self._publish_status()
+
+    # ── rqt 미러링 ───────────────────────────────────────────
+    def _on_robot_code(self, msg):
+        self._robot_code = int(msg.data)
+        self._publish_status()
+
+    def _on_robot_text(self, msg):
+        self._robot_text = msg.data
+        self._publish_status()
+
+    def _on_target_active(self, msg):
+        self._active_target = msg.data
+        self._publish_status()
+
+    def _on_place_active(self, msg):
+        self._active_place = msg.data
+        self._publish_status()
+
+    def _publish_status(self):
+        """rqt 패널이 보여주는 상태를 `/vla/pick_status` 한 토픽으로 내보낸다.
+
+        on-change(각 구독 콜백·`_on_state`) + 1 Hz 하트비트로 발행한다. VLA UI 의 staleness
+        판정은 `stamp_ns` 차이가 아니라 **"N 초간 수신 없음"** 으로 해야 한다 — 두 PC 시계
+        동기화를 가정하지 않는다(result 채널과 같은 원칙). `request_id` 는 지금 latch 된
+        명령의 것이라 VLA 가 자기가 보낸 명령과 대조할 수 있다(없으면 빈 문자열).
+        """
+        active = self._active           # 참조 읽기는 원자적 — 살짝 옛 값이어도 표시용이라 무해
+        payload = {
+            'fsm': self._state,
+            'robot': self._robot_text,
+            'robot_code': self._robot_code,
+            'target': self._active_target,
+            'place': self._active_place,
+            'request_id': active.get('request_id', '') if active else '',
+            'waiting_approval': self._state == WAIT_APPROVAL_STATE,
+            'unsafe': self._robot_code in UNSAFE_STATE_CODES,
+            'stamp_ns': time.time_ns(),
+        }
+        self.status_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
 
     # ────────────────────────────────────────────────────────
     def _srv_keyword(self, _req, res):

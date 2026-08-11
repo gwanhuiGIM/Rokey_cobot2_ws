@@ -31,9 +31,12 @@ owns:    그리퍼 SRDF 자기충돌 4쌍 누락 판별 실험 절차
    ```
 4. **재확인 — 여기서 막히면 3단계 이전으로 못 감**:
    ```bash
-   ros2 topic echo /joint_states --once | grep -A1 rg2_finger_joint   # 기대: ~0 rad (열림)
+   ros2 topic echo /joint_states --once | grep -A1 rg2_finger_joint
+   # 기대: 하한(-0.558505) 근처, 실측 -0.4793 rad (2026-08-11 확인).
+   # 🔴 "~0 rad"가 아니다 — 조인트 하한(m0609_with_rg2.urdf:460)이 -0.558505이고
+   #    닫힘(0.757)의 반대쪽 극단이 열림이다. 이전 기대값(~0)은 실기 확인 없이 적힌 오기.
    ```
-   그대로 0.757이면 Modbus 연결부터 고친다. 이 상태로 아래를 진행해도 무효.
+   0.757 근처(닫힘)에 그대로면 Modbus 연결부터 고친다. 이 상태로 아래를 진행해도 무효.
 5. T7(move_group) 재시작 — 큐가 안 비워지므로 이전 실험 잔재 제거.
 6. 원인을 재현했던 것과 동일한 명령 실행(**`goal_setter_replan.py`**, `plan_only=False`라야
    재검증이 실제로 걸린다 — `reactive_replan.py`는 `plan_only=True`라 이 재검증을 안 거친다):
