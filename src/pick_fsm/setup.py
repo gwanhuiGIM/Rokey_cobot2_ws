@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'task_manager = pick_fsm.task_manager:main',
             'robot_safety_node = pick_fsm.robot_safety_node:main',
+            'planned_tcp_path_node = pick_fsm.planned_tcp_path_node:main',
         ],
     },
 )

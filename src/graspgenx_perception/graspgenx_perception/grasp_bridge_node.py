@@ -40,7 +40,7 @@ from std_srvs.srv import Trigger
 
 from graspgenx_perception.capture_graspgenx_scene import (
     LABEL_OBJ_BASE, SceneCapture, best_labels, default_out_dir, filter_labels_by_class,
-    segment, write_scene,
+    pixel_to_base, segment, select_by_point, workspace_mask, write_scene,
 )
 
 try:
@@ -92,6 +92,24 @@ EXTRA_DEFAULTS = {
     # `ros2 param set` 으로 런타임 변경이 먹는다. extra() 가 compute() 마다 다시 읽는다
     # (yolo_seg_node 의 classes 와 다른 점이다. 그쪽은 __init__ 에서 한 번만 읽는다).
     'target_classes': '',
+    # ── 개체 선정(select_by_point) — 2026-08-11 구현 ────────
+    # 같은 class 후보가 2개 이상일 때 "어느 개체"를 고를 좌표. `task_manager`가 매
+    # PERCEIVE 마다 밀어 넣는다(target_classes 와 같은 자리) — VLA/클릭이 없는 보통의
+    # pick 은 nan 이 그대로 오므로(= "지정 없음") 기존 동작(점수 최고)과 동일하다.
+    # nan 을 "off" 센티널로 쓰는 이유는 이 파일의 `table_z`/`class_dims` 관례와 같다.
+    # 설계 출처: md/plans/2026-08-08-vla-integration.md §5.
+    'pixel_x': float('nan'), 'pixel_y': float('nan'),
+    # `pixel_x/y` 가 어느 해상도 기준인지. compute() 는 이 값이 **지금 depth 프레임의
+    # 실제 해상도**와 다르면 스케일링을 추측하지 않고 거부한다(vla-bridge-contract.md §2).
+    'pixel_w': float('nan'), 'pixel_h': float('nan'),
+    # 지정점에서 이 반경[m] 안의 물체만 후보로 본다. VLA `system.yaml`의
+    # `match_tolerance_m`(0.06)과 값을 맞췄다 — 두 시스템이 다른 허용오차를 쓰면
+    # "VLA 는 지목했는데 우리가 못 찾는다"가 난다. UNVERIFIED: 실기 튜닝값 아님, 초안값.
+    'match_tolerance_m': 0.06,
+    # true 면 2등 후보가 이 마진[m] 안으로 붙어 있을 때 **선택을 거부한다**(모호함 자체를
+    # 신뢰하지 않는다). false 면 거리만으로 1등을 그대로 쓴다. UNVERIFIED: 초안값.
+    'ambiguity_margin_m': 0.02,
+    'refuse_ambiguous_match': True,
 }
 
 
@@ -401,6 +419,35 @@ class GraspBridge(SceneCapture):
         if seg is None:
             return False, diag
         self.get_logger().info(diag)
+
+        # 2-b) 개체 선정(select_by_point). class 필터 뒤·워커 호출 전 — 여기서 걸러야
+        # GraspGenX 연산 자체가 후보 하나로 줄어든다(진짜 병목은 워커 수십 초).
+        # `pixel_x/y`가 nan(= 지정 없음)이면 그냥 지나간다 — 기존 "점수 최고" 동작 그대로.
+        if np.isfinite(p['pixel_x']) and np.isfinite(p['pixel_y']):
+            if not (np.isfinite(p['pixel_w']) and np.isfinite(p['pixel_h'])):
+                return False, 'pixel_x/y 는 있는데 pixel_w/h(기준 해상도)가 없다'
+            cur_w, cur_h = int(depth.shape[1]), int(depth.shape[0])
+            if (int(p['pixel_w']), int(p['pixel_h'])) != (cur_w, cur_h):
+                # 스케일링을 추측하지 않는다(vla-bridge-contract.md §2) — 다른 해상도로
+                # 찍은 좌표를 그대로 쓰면 조용히 엉뚱한 물체를 가리킨다.
+                return False, (f"pixel_wh({int(p['pixel_w'])}x{int(p['pixel_h'])}) != "
+                               f'지금 depth 해상도({cur_w}x{cur_h})')
+            u, v = int(round(p['pixel_x'])), int(round(p['pixel_y']))
+            if not (0 <= u < cur_w and 0 <= v < cur_h):
+                return False, f'pixel ({u},{v}) 가 해상도 {cur_w}x{cur_h} 밖이다'
+            pt = pixel_to_base(depth, self.K, T_base_cam, u, v)
+            if pt is None:
+                return False, f'pixel ({u},{v}) 주변에 유효 depth 가 없다(구멍)'
+            tx, ty = pt
+            _, X, Y, _ = workspace_mask(depth, self.K, T_base_cam, p)
+            margin = p['ambiguity_margin_m'] if p['refuse_ambiguous_match'] else float('-inf')
+            seg2, label_map2, sel_diag = select_by_point(
+                seg, label_map, X, Y, tx, ty, p['match_tolerance_m'], margin)
+            self.get_logger().info(f'개체 선정: pixel=({u},{v}) -> base=({tx:+.3f},{ty:+.3f}) '
+                                   f'— {sel_diag}')
+            if seg2 is None:
+                return False, f'개체 선정 실패: {sel_diag}'
+            seg, label_map = seg2, label_map2
 
         # 3) 워커 호출. 씬은 항상 영구 저장한다 — GraspGenX가 뭘 보고 판단했는지(rgb/seg/meta)를
         #    호출이 끝난 뒤에도 열어볼 수 있어야 오검출을 진단할 수 있다(2026-08-07, 임시

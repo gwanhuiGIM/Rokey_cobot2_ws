@@ -1,5 +1,5 @@
 <!-- meta
-updated: 2026-08-09
+updated: 2026-08-10
 status:  live
 owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 -->
@@ -8,7 +8,7 @@ owns:    지금 상태 · 다음 할 일 · 열려 있는 이슈
 
 > 현재 상태로 덮어쓴다. 로그처럼 쌓지 않는다.
 
-**최종 갱신:** 2026-08-09
+**최종 갱신:** 2026-08-10
 
 ## 🟢 지금 어디까지 왔나 (2026-08-05) — GraspGenX 실기 파이프라인 관통
 
@@ -408,6 +408,24 @@ alias reals; alias br; alias realsense
      부풀려져 6쌍이 겹쳤으므로 실효 마진은 더 클 수 있다).
      **이 측정이 그 계산의 입력이다.** 근거·유도는 [[ws/cobot2/2026-08-07-nvblox-curobo-digest]] §9-1.
 4. **OMPL 플래너 성공률·계획시간 로그** — 스프린트 Day3 P1. cuRobo 비교의 기준선.
+5. **`planned_tcp_path_node` 실기 검증 (2026-08-10 추가)** — execute가 따라갈 TCP 경로를
+   RViz에서 라인으로 보고 싶다는 요청으로 만듦. `src/pick_fsm/pick_fsm/planned_tcp_path_node.py`
+   (신규), `/move_group/display_planned_path`(DisplayTrajectory) 구독 → 각 waypoint를
+   `/compute_fk`로 풀어 `/pick/planned_tcp_path`(Marker LINE_STRIP) 발행. `moveit_bridge.py`/
+   `task_manager.py`는 안 건드림. `colcon build --packages-select pick_fsm` PASS(2026-08-10,
+   `rokey`), **실기 미검증**.
+   - ⚠️ **가장 먼저 확인할 것**: `task_manager`가 `move_to_joints_async(plan_only=False)`로
+     이동 명령을 보낼 때(현재 유일한 호출 방식) `/move_group/display_planned_path`가 실제로
+     퍼블리시되는지. `ros2 topic hz /move_group/display_planned_path`를 이동 중에 같이 띄워서
+     히트 찍히는지 확인 — move_group 소스 기반 추정이라 이 ws에서 실기로 검증된 적 없음.
+     안 찍히면 이 노드는 빈 토픽만 구독하는 셈이라 접근 자체를 바꿔야 함(예: `moveit_bridge.py`를
+     2단계 plan()/execute()로 바꿔 결과를 직접 받는 방식 — 단 이건 현재의 단일 액션 실행 흐름을
+     바꾸는 것이라 실기 안전 검토 필요).
+   - 확인되면: `ros2 run pick_fsm planned_tcp_path_node` 실행 → RViz `Marker` 디스플레이,
+     Topic `/pick/planned_tcp_path` 추가해서 라인이 뜨는지, 라인 위 지점을 물리적으로 막았을 때
+     replan(`opt.replan=true`, `moveit_bridge.py:222`)이 걸려 라인이 갱신되는지까지 시연으로 확인.
+   - 실행 명령 상세는 [planned_tcp_path_node.py](../src/pick_fsm/pick_fsm/planned_tcp_path_node.py)
+     docstring 참고.
 
 **상시 실행** — ⚠️ **MoveIt octomap 경로에는 더 이상 필요 없다(2026-08-02).**
 `sensors_3d.yaml`이 RealSense가 직접 발행하는 `/camera/camera/depth/color/points`를 쓰므로

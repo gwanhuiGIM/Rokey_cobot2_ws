@@ -159,6 +159,15 @@ class ReactiveReplan(Node):
         # 있어 항상 크게 어긋났다(폐기 시 plan_dt 평균 0.073s vs 성공 시 0.071s — 통계적
         # 차이 없음, plan() 지연이 원인이 아니라는 뜻). 고정값 대신 실측 plan() 소요시간의
         # 이동평균(EMA)으로 예측 창을 스스로 맞춘다. 최초 1회는 self.lookahead_s로 시작.
+        #
+        # ⚠️ cross-review 지적(2026-08-11): 위 진단과 검증은 전부 pipeline_id='ompl'
+        # (가상환경)에서 했다. 이 노드의 기본 파이프라인은 'isaac_ros_cumotion'(116행)이고,
+        # cuMotion 계획시간(~0.2s+)은 OMPL(~0.07s)보다 느리고 GPU/ESDF 재조회 스파이크로
+        # 변동폭도 클 수 있다 — **cuMotion 조건에서 EMA가 실제로 잘 수렴하는지는 미검증.**
+        # 또한 EMA가 과거 스파이크로 부풀어 있으면 max_start_jump 폐기가 잦아지는데, 이건
+        # 관절 점프 관점에서는 안전이지만 "낡은 궤적을 계속 따라간다"는 뜻이라 회피
+        # 반응성 관점에서는 오히려 나쁜 쪽으로 작용할 수 있다 — 무조건 안전 쪽 편향이
+        # 아니라 트레이드오프다. cuMotion 파이프라인 재검증 전엔 프로덕션 취급 금지.
         self._plan_dt_ema: Optional[float] = None
 
     # ── 스핀 (action future 를 폴링으로 기다리기 위해 백그라운드 executor 필요) ──
@@ -538,8 +547,8 @@ class ReactiveReplan(Node):
                     exec_t0 = time.time()
                     traj_dur = self._duration(new_traj) + self.handover_s
                     self.stat_swaps += 1
-                    self.get_logger().info(f'교체 성공 plan_dt={plan_dt:.3f}s')  # 2026-08-11 진단
-                    self.get_logger().info(f'교체 #{self.stat_swaps}')
+                    self.get_logger().info(
+                        f'교체 #{self.stat_swaps} (plan_dt={plan_dt:.3f}s)')  # 2026-08-11 진단
 
         except KeyboardInterrupt:
             self.get_logger().warn('Ctrl+C — 감속 정지')

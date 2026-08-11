@@ -16,6 +16,8 @@
   <exec_depend>rcl_interfaces</exec_depend>   <!-- rqt_panel 이 task_manager 속도 파라미터를 set/get -->
 
   <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>   <!-- planned_tcp_path_node: 계획 TCP 경로 라인 시각화 -->
+
   <exec_depend>pick_fsm_msgs</exec_depend>
   <exec_depend>onrobot_rg_msgs</exec_depend>
   <!-- robot_safety_node 가 /system/get_robot_state 등 Doosan 안전 서비스를 부른다 -->

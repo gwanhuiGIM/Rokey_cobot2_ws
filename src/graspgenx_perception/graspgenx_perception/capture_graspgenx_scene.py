@@ -342,6 +342,66 @@ def to_base(depth, K, T_base_cam):
     return xyz_cam @ T_base_cam[:3, :3].T + T_base_cam[:3, 3]
 
 
+def pixel_to_base(depth, K, T_base_cam, u, v, half=2):
+    """단일 픽셀 (u,v) -> base XY (z 는 버린다). 유효 depth 가 없으면 None.
+
+    `select_by_point()`가 XY 평면 거리로만 매칭하므로 z 는 필요 없다. 클릭/VLA 픽셀
+    바로 그 자리의 depth 가 구멍(0)일 수 있어 `(2*half+1)^2` 이웃의 median 을 쓴다
+    (설계 출처: md/plans/2026-08-08-vla-integration.md §5 "5×5 median"). `to_base()`와
+    같은 광학 규약(x 오른쪽, y 아래, z 전방) — 둘을 따로 유지하면 한쪽만 고치는 사고가 난다.
+    """
+    H, W = depth.shape
+    v0, v1 = max(0, v - half), min(H, v + half + 1)
+    u0, u1 = max(0, u - half), min(W, u + half + 1)
+    valid = depth[v0:v1, u0:u1]
+    valid = valid[valid > 0]
+    if valid.size == 0:
+        return None
+    d = float(np.median(valid))
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    xyz_cam = np.array([(u - cx) * d / fx, (v - cy) * d / fy, d])
+    xyz_base = xyz_cam @ T_base_cam[:3, :3].T + T_base_cam[:3, 3]
+    return float(xyz_base[0]), float(xyz_base[1])
+
+
+def select_by_point(seg, label_map, X, Y, tx, ty, radius, margin):
+    """지정 base XY `(tx, ty)` 에 가장 가까운 obj 하나만 남긴다 -> (seg, label_map, 진단).
+
+    설계 출처: md/plans/2026-08-08-vla-integration.md §5(`select_by_point` 초안).
+    `obj_N` 대신 base XY 를 선택 키로 쓰는 이유: 라벨 번호는 프레임마다 바뀌어
+    VLA(다른 프로세스·다른 프레임 촬영 시점)와 대조가 안 되지만 좌표는 프레임 독립이다.
+
+    각 후보의 위치는 마스크 픽셀의 base X/Y **중앙값**(centroid 근사)이다. `radius` 안에
+    후보가 없으면 실패(거부) — 틀린 물체를 자신 있게 집는 것보다 안전하다. 2등과의 거리차가
+    `margin` 미만이면 모호로 보고 **역시 거부한다**(`refuse_ambiguous_match`) — 호출자가
+    이 검사를 끄려면 `margin=float('-inf')`를 넘긴다.
+
+    `label_map` 의 `obj_` 로 시작하지 않는 항목(`ground`/`table` 등)은 지우지 않는다 —
+    GraspGenX 점군에는 라벨과 무관하게 유효 depth 가 전부 들어가므로, 선택 안 된 물체의
+    점을 지워도 충돌 판정용 점군 자체는 그대로 남아야 한다(seg 라벨만 0 으로 되돌린다).
+    """
+    cand = []
+    for name, v in label_map.items():
+        if not name.startswith('obj_'):
+            continue
+        m = seg == v
+        if not m.any():
+            continue
+        cx, cy = float(np.median(X[m])), float(np.median(Y[m]))
+        cand.append((float(np.hypot(cx - tx, cy - ty)), name, v))
+    cand.sort(key=lambda t: t[0])
+    if not cand or cand[0][0] > radius:
+        return None, None, f'({tx:+.3f},{ty:+.3f}) 반경 {radius:.3f}m 안에 물체 없음'
+    if len(cand) > 1 and cand[1][0] - cand[0][0] < margin:
+        return None, None, (f'모호: {cand[0][1]}({cand[0][0]:.3f}m) vs '
+                            f'{cand[1][1]}({cand[1][0]:.3f}m) — 안 집는 게 낫다')
+    out = seg.copy()
+    for _, _, v in cand[1:]:
+        out[out == v] = 0
+    keep = {k: v for k, v in label_map.items() if not k.startswith('obj_') or v == cand[0][2]}
+    return out, keep, f'{cand[0][1]} 선택 (지정점에서 {cand[0][0]:.3f}m)'
+
+
 def workspace_mask(depth, K, T_base_cam, p):
     """base 프레임 작업공간 박스 안의 유효 depth 픽셀 마스크. 기하/yolo 경로가 공유한다."""
     xyz = to_base(depth, K, T_base_cam)

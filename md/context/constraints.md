@@ -1552,6 +1552,26 @@ nvblox 가 color 옵션이 꺼진 상태라 리매핑만 받고 구독은 안 �
 클래스 목록**을 같이 찍는다. 그 목록에 타겟이 없으면 오타가 아니라 `detect` 문제라고
 명시한다 — 이 둘은 눈으로 구분이 안 되고, 실제로 본 목록이 있어야만 갈린다.
 
+## 가상환경(virtual DRCF) 프로세스 정리 — `kill -9`로는 안 죽는 것들이 있다, 2026-08-11
+
+`bringup.launch.py mode:=virtual`을 `ros2 launch` **런치 프로세스**만 `kill -9`하면
+자식 노드(`ros2_control_node`, `robot_state_publisher`, `static_transform_publisher`,
+`joint_state_publisher`, `gripper_virtual_node.py`)가 **고아 프로세스로 계속 산다.**
+2026-08-10 테스트 세션에서 이렇게 남은 프로세스가 다음날(2026-08-11)까지 하루 넘게
+`ROS_DOMAIN_ID=93`를 붙잡고 있었고, 새로 띄운 두 번째 세션의 `move_group`이 이 좀비들과
+같은 노드 이름·액션 서버로 충돌해 `Failed to send goal response ... timeout` →
+`계획 goal 전송 타임아웃`으로 **최초 계획부터 실패**했다(원인 규명에 별도 세션 소요).
+
+- **증상**: `ros2 node list`에 `/dsr01/controller_manager`, `/move_group` 등이
+  **중복**으로 뜬다(`WARNING: ... nodes ... share an exact name`). `ros2 daemon stop/start`로는
+  안 지워진다(daemon 캐시가 아니라 실제 살아있는 DDS participant라서).
+- **확인 방법**: `ps aux | grep -E "ros2_control_node|robot_state_publisher|static_transform_publisher|joint_state_publisher|gripper_virtual_node"` — 시작 시각이 오늘이 아니면 좀비다.
+- **정리**: 런치 트리 전체를 PID로 찾아 개별 `kill -9`하거나(`pkill -9 -f`가 한 줄이라도 매칭
+  실패하면 스크립트가 조기 종료될 수 있어 각 줄에 `|| true`를 붙일 것), `docker rm -f dsr01_emulator`도
+  같이 정리한다. **다음 가상환경 테스트 전엔 항상 `ros2 node list`가 비어 있는지 먼저 확인**할 것 —
+  실기 테스트도 같은 `ROS_DOMAIN_ID=93`을 쓰므로 이 좀비가 실기 세션과도 충돌할 수 있다(미검증,
+  가능성만).
+
 ## RealSense depth 필터 (`camera.launch.py`) — 시도 후 롤백, 2026-08-09
 
 `realsense2_camera_node`에 드라이버 단 `spatial_filter`/`hole_filling_filter`/

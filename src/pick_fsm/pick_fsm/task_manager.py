@@ -95,6 +95,13 @@ def str_param(name: str, value: str) -> Parameter:
                                           string_value=str(value)))
 
 
+def float_param(name: str, value: float) -> Parameter:
+    """rcl_interfaces DOUBLE 파라미터 하나. `select_by_point` 픽셀 좌표 푸시에 쓴다."""
+    return Parameter(name=name,
+                     value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE,
+                                          double_value=float(value)))
+
+
 #: 파라미터 기본값 = 타입의 정본. `config/pick_fsm.yaml` 의 값은 여기 적힌 타입과
 #: 같아야 한다 (float 는 `0` 이 아니라 `0.0`). test_pick_fsm.py 가 이 대조를 자동화한다.
 #: ⚠️ 런타임 값의 정본은 `config/pick_fsm.yaml` 이다. 아래 기본값은 yaml 없이 뜰 때만
