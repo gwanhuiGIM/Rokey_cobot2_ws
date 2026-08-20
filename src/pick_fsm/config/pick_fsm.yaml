@@ -76,7 +76,7 @@ task_manager:
     place_discard_joints_deg: [37.0, 42.0, 47.0, 180.0, -92.0, 40.0]
     place_location: basket   # basket(장바구니) | table(작업테이블 지정 자리) | discard(테이블 밖 폐기)
                               # 런타임엔 /pick/place_location(rqt 패널)이 이 값을 이긴다
-
+  
     # ── 씬 ───────────────────────────────────────────────
     object_id: pick_target
     object_radius_m: 0.04       # UNVERIFIED: 대상 근사 구 반지름. 사과 기준 대충
