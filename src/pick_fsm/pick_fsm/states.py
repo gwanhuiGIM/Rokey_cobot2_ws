@@ -26,7 +26,6 @@ class State(Enum):
     WAIT_APPROVAL = auto()   # ✋ 사람이 /pick/approve 를 부를 때까지 정지
     STOW = auto()            # APPROACH 이동 전 그리퍼를 닫는다 — 이동 중 폭을 줄여 주변과의 충돌을 피한다
     APPROACH = auto()        # pre-grasp 로 이동 (실행 구간, 그리퍼는 닫힌 채)
-    REGRASP = auto()         # (스캐폴드) pre-grasp 도착 후 eye-in-hand 재-graspgenx + 승인
     OPEN_GRIPPER = auto()    # pre-grasp 도착 후, 하강 전에 그리퍼를 연다
     DESCEND = auto()         # grasp pose 로 하강
     CLOSE = auto()           # 그리퍼 닫기
@@ -55,10 +54,7 @@ TRANSITIONS: dict[State, set[State]] = {
     State.NEXT_CANDIDATE: {State.PLAN, State.SPEAK_FAIL, State.ABORT},
     State.WAIT_APPROVAL:  {State.STOW, State.ABORT},
     State.STOW:           {State.APPROACH, State.ABORT},
-    # APPROACH -> REGRASP: regrasp_enabled=true 면 pre-grasp 도착 후 eye-in-hand 재파지
-    # 인식 + 승인을 거친다(스캐폴드, 2026-08-11). false 면 지금처럼 곧장 OPEN_GRIPPER.
-    State.APPROACH:       {State.OPEN_GRIPPER, State.REGRASP, State.NEXT_CANDIDATE, State.ABORT},
-    State.REGRASP:        {State.OPEN_GRIPPER, State.ABORT},
+    State.APPROACH:       {State.OPEN_GRIPPER, State.NEXT_CANDIDATE, State.ABORT},
     State.OPEN_GRIPPER:   {State.DESCEND, State.ABORT},
     State.DESCEND:        {State.CLOSE, State.NEXT_CANDIDATE, State.ABORT},
     State.CLOSE:          {State.VERIFY, State.ABORT},
