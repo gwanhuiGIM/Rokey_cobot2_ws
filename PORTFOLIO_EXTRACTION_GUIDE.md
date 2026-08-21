@@ -1,1 +1,0 @@
-/media/kimkh/새 볼륨/Ubuntu/Downloads/Rokey_2602_2608/PORTFOLIO_EXTRACTION_GUIDE.md

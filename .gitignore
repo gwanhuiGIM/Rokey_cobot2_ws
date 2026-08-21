@@ -84,7 +84,16 @@ isaac_ros-dev_export/
 # GPU 벤치 측정치는 머신 종속 — 커밋하지 않는다 (corecode/bench.py)
 corecode/bench_*.json
 
-# AI 에이전트 지침/설정 — 사용자 레벨(~/.claude, ~/.codex)이 소스고 ws 사본은 로컬 산출물.
-# 커밋 대상 아님 (2026-08-21 .claude/.codex 전체가 실수로 커밋된 것 확인 후 추가)
+# AI 에이전트 지침/설정 — 개인 로컬 설정이라 커밋하면 팀원 에이전트(각자 .claude/.codex)에
+# 충돌·간섭을 줄 수 있다. 사용자 레벨(~/.claude, ~/.codex)이 소스고 ws 사본은 로컬 산출물.
+# (2026-08-21 .claude/.codex 전체가 실수로 커밋된 것 확인 후 추가)
 .claude/
 .codex/
+/CLAUDE.md
+/AGENTS.md
+
+# 포트폴리오 문서화 작업 산출물 — 개인 작업 산출물이라 팀 리포에는 로컬 전용으로 둔다
+/PORTFOLIO_EXTRACTION_GUIDE.md
+/PORTFOLIO_MAP.md
+/PORTFOLIO_SOURCE.md
+/SKILL_INVENTORY.md
