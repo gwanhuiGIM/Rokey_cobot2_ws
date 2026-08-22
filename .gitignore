@@ -89,6 +89,8 @@ corecode/bench_*.json
 # (2026-08-21 .claude/.codex 전체가 실수로 커밋된 것 확인 후 추가)
 .claude/
 .codex/
+.obsidian
+.vscode
 /CLAUDE.md
 /AGENTS.md
 
